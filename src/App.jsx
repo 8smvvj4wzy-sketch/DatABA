@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid } from 'recharts';
 import {
-  Plus, X, Play, Pause, Square, Check, ChevronRight, Hash,
+  Plus, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
   Timer as TimerIcon, ListChecks, LayoutGrid, CheckCircle2, RotateCcw, Save,
   Mail, Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
@@ -89,6 +89,7 @@ const TYPES = {
   interval: { label: 'Niveau par intervalle', short: 'Intervalle', icon: LayoutGrid, color: '#6B5178' },
   chaining: { label: 'Analyse de tâche', short: 'Chaînage', icon: ListOrdered, color: '#2E8B7A' },
   latency: { label: 'Latence', short: 'Latence', icon: Gauge, color: '#B07A2E' },
+  balance: { label: 'Balance Program', short: 'Balance', icon: Route, color: '#A0567A' },
 };
 
 /* Ce que mesure réellement un relevé par intervalle : à préciser pour que les données soient comparables */
@@ -98,6 +99,16 @@ const INTERVAL_MODES = [
   { k: 'total', label: 'Intervalle total', hint: 'Noté seulement si le comportement dure tout l’intervalle' },
 ];
 const INTERVAL_MODE_SHORT = { momentane: 'momentané', partiel: 'partiel', total: 'total' };
+
+/* Balance Program : chaque étape reçoit une issue, et deux marqueurs
+   indépendants — une demande de l'élève, et le moment du renforcement,
+   qui varie d'une étape à l'autre. */
+const BALANCE_OUTCOMES = [
+  { k: 'reussi', label: 'Réussi', short: 'R', color: '#0F8B6C' },
+  { k: 'guide', label: 'Guidé', short: 'G', color: '#D69A2D' },
+  { k: 'erreur', label: 'Mauvaise réponse', short: 'E', color: '#A8402F' },
+  { k: 'manque', label: 'Étape manquée', short: 'M', color: '#565E54' },
+];
 
 const DEFAULT_CHAIN_STEPS = [
   { id: 'st1', name: 'Étape 1' },
@@ -113,7 +124,7 @@ const DEFAULT_INTERVAL_LEVELS = [
 const LEVEL_COLORS = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
 
 /* Types dont le score est un pourcentage : seuls ceux-là admettent un critère de maîtrise */
-const PERCENT_TYPES = ['trials', 'probe', 'interval', 'chaining'];
+const PERCENT_TYPES = ['trials', 'probe', 'interval', 'chaining', 'balance'];
 /* Types dont la cotation repose sur des niveaux de guidance */
 const USES_GUIDANCE = ['trials', 'chaining', 'probe'];
 const DEFAULT_MASTERY = { threshold: 80, sessions: 3, unit: 'sessions' };
@@ -235,6 +246,7 @@ function emptyEntry(obj) {
   if (obj.type === 'interval') return { marks: {}, segments: [] };
   if (obj.type === 'chaining') return { steps: {} };
   if (obj.type === 'latency') return { latencies: [], running: false, startedAt: null };
+  if (obj.type === 'balance') return { steps: {} };
   return {};
 }
 
@@ -248,6 +260,7 @@ function entryMatches(obj, entry) {
   if (obj.type === 'interval') return !!entry.marks;
   if (obj.type === 'chaining') return !!entry.steps;
   if (obj.type === 'latency') return Array.isArray(entry.latencies);
+  if (obj.type === 'balance') return !!entry.steps;
   return false;
 }
 
@@ -370,6 +383,30 @@ function summarize(obj, entry, guidances) {
       detail: steps.map((s, i) => (entry.steps[s.id] ? `${i + 1}.${s.name}:${entry.steps[s.id]}` : '')).filter(Boolean).join(' | '),
     };
   }
+  if (obj.type === 'balance') {
+    const steps = obj.config.steps || [];
+    const coded = steps.filter((st) => entry.steps[st.id] && entry.steps[st.id].outcome);
+    if (!coded.length) return { result: 'Non coté', detail: '' };
+    const notes = coded.filter((st) => entry.steps[st.id].outcome !== 'manque');
+    const reussis = notes.filter((st) => entry.steps[st.id].outcome === 'reussi').length;
+    const pct = notes.length ? Math.round((reussis / notes.length) * 100) : 0;
+    const manquees = coded.length - notes.length;
+    const demandes = steps.filter((st) => entry.steps[st.id] && entry.steps[st.id].demande);
+    const renforts = steps.map((st, i) => (entry.steps[st.id] && entry.steps[st.id].renforce ? i + 1 : null)).filter(Boolean);
+    const detail = steps
+      .map((st, i) => {
+        const e = entry.steps[st.id];
+        if (!e || !e.outcome) return '';
+        const o = BALANCE_OUTCOMES.find((x) => x.k === e.outcome);
+        return `${i + 1}.${st.name}:${o ? o.short : e.outcome}${e.demande ? '+D' : ''}${e.renforce ? '+R' : ''}`;
+      })
+      .filter(Boolean)
+      .join(' | ');
+    return {
+      result: `${reussis}/${notes.length} réussies (${pct} %)${manquees ? ` · ${manquees} manquée${manquees > 1 ? 's' : ''}` : ''}${demandes.length ? ` · ${demandes.length} demande${demandes.length > 1 ? 's' : ''}` : ''}`,
+      detail: `${detail}${renforts.length ? ` — renforcé aux étapes ${renforts.join(', ')}` : ''}`,
+    };
+  }
   if (obj.type === 'latency') {
     const n = entry.latencies.length;
     if (!n) return { result: 'Non coté', detail: '' };
@@ -410,6 +447,14 @@ function objectiveScore(obj, entry, guidances) {
     const coded = steps.filter((s) => entry.steps[s.id]);
     if (!coded.length) return null;
     return { value: Math.round((coded.filter((s) => isIndependentCode(guidances, entry.steps[s.id])).length / coded.length) * 100), percent: true, unit: '%' };
+  }
+  if (obj.type === 'balance') {
+    const steps = obj.config.steps || [];
+    // Les étapes manquées sont écartées du calcul : elles n'ont pas été présentées
+    const notes = steps.filter((st) => entry.steps[st.id] && entry.steps[st.id].outcome && entry.steps[st.id].outcome !== 'manque');
+    if (!notes.length) return null;
+    const reussis = notes.filter((st) => entry.steps[st.id].outcome === 'reussi').length;
+    return { value: Math.round((reussis / notes.length) * 100), percent: true, unit: '%' };
   }
   if (obj.type === 'latency') {
     if (!entry.latencies.length) return null;
@@ -748,9 +793,10 @@ const TAB_ORDER = ['admin', 'students', 'session', 'suivi', 'export'];
 /* Un balayage ne doit pas voler le geste à une zone qui défile déjà
    horizontalement (grille d'essais, grille d'intervalles), à un champ de
    saisie, ni à un graphique. */
-function ownsHorizontalGesture(target) {
+function ownsHorizontalGesture(target, boundary) {
   let n = target;
   while (n && n !== document.body) {
+    if (boundary && n === boundary) return false; // on s'arrête au conteneur qui gère le geste
     if (n.dataset && n.dataset.noSwipe !== undefined) return true;
     const tag = n.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
@@ -763,53 +809,56 @@ function ownsHorizontalGesture(target) {
   return false;
 }
 
-function useSwipeTabs(ref, tab, setTab) {
-  const [dir, setDir] = useState(0);
-  const gesture = useRef(null);
+/* Balayage horizontal générique.
+   Le contenu suit le doigt de façon amortie et plafonnée : assez pour que le
+   geste soit tangible, sans déplacer toute la page hors de l'écran — ce qui
+   provoquait des blancs de rendu sur iOS. */
+function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true }) {
+  const [offset, setOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const state = useRef(null);
 
   useEffect(() => {
     const el = ref.current;
-    if (!el) return undefined;
+    if (!el || !enabled) return undefined;
 
-    const index = () => TAB_ORDER.indexOf(tab);
+    const MAX = 80;
 
     function start(e) {
-      if (e.touches.length !== 1 || ownsHorizontalGesture(e.target)) {
-        gesture.current = null;
+      if (e.touches.length !== 1 || ownsHorizontalGesture(e.target, el)) {
+        state.current = null;
         return;
       }
       const t = e.touches[0];
-      gesture.current = { x: t.clientX, y: t.clientY, axis: null, time: Date.now() };
+      state.current = { x: t.clientX, y: t.clientY, axis: null, dx: 0, time: Date.now() };
     }
 
     function move(e) {
-      const g = gesture.current;
+      const g = state.current;
       if (!g || e.touches.length !== 1) return;
       const t = e.touches[0];
       const dx = t.clientX - g.x;
       const dy = t.clientY - g.y;
       if (!g.axis) {
-        if (Math.abs(dx) < 14 && Math.abs(dy) < 14) return;
-        g.axis = Math.abs(dx) > Math.abs(dy) + 6 ? 'x' : 'y';
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+        g.axis = Math.abs(dx) > Math.abs(dy) + 4 ? 'x' : 'y';
+        if (g.axis === 'x') setDragging(true);
       }
       if (g.axis !== 'x') return;
-      // Empêche le défilement horizontal parasite pendant un balayage reconnu
       if (e.cancelable) e.preventDefault();
       g.dx = dx;
+      setOffset(Math.sign(dx) * Math.min(Math.abs(dx) * 0.45, MAX));
     }
 
     function end() {
-      const g = gesture.current;
-      gesture.current = null;
+      const g = state.current;
+      state.current = null;
+      setDragging(false);
+      setOffset(0);
       if (!g || g.axis !== 'x') return;
-      const dx = g.dx || 0;
-      const w = el.clientWidth || 1;
-      const speed = Math.abs(dx) / Math.max(1, Date.now() - g.time);
-      if (Math.abs(dx) < Math.max(60, w * 0.18) && speed < 0.5) return;
-      const next = index() + (dx < 0 ? 1 : -1);
-      if (next < 0 || next >= TAB_ORDER.length) return;
-      setDir(dx < 0 ? 1 : -1);
-      setTab(TAB_ORDER[next]);
+      const speed = Math.abs(g.dx) / Math.max(1, Date.now() - g.time);
+      if (Math.abs(g.dx) < 55 && speed < 0.4) return;
+      if (g.dx < 0) { if (onLeft) onLeft(); } else if (onRight) onRight();
     }
 
     el.addEventListener('touchstart', start, { passive: true });
@@ -822,9 +871,9 @@ function useSwipeTabs(ref, tab, setTab) {
       el.removeEventListener('touchend', end);
       el.removeEventListener('touchcancel', end);
     };
-  }, [ref, tab, setTab]);
+  }, [ref, onLeft, onRight, enabled]);
 
-  return dir;
+  return { offset, dragging };
 }
 
 /* ==================== Application ==================== */
@@ -843,8 +892,23 @@ export default function App() {
   const [activeSession, setActiveSession] = useState(null);
   const [crisis, setCrisis] = useState(null);
   const [toast, setToast] = useState(null);
+  const rootRef = useRef(null);
   const contentRef = useRef(null);
-  const dir = useSwipeTabs(contentRef, tab, setTab);
+  const [dir, setDir] = useState(0);
+
+  const goTab = React.useCallback(
+    (delta) => {
+      const i = TAB_ORDER.indexOf(tab);
+      const next = i + delta;
+      if (next < 0 || next >= TAB_ORDER.length) return;
+      setDir(delta);
+      setTab(TAB_ORDER[next]);
+    },
+    [tab]
+  );
+  const onLeft = React.useCallback(() => goTab(1), [goTab]);
+  const onRight = React.useCallback(() => goTab(-1), [goTab]);
+  const { offset, dragging } = useHorizontalSwipe(rootRef, { onLeft, onRight });
 
   /* --- chargement --- */
   useEffect(() => {
@@ -1037,7 +1101,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen" style={{ background: PAPER, color: INK, fontFamily: F_BODY }}>
+    <div ref={rootRef} className="min-h-screen" style={{ background: PAPER, color: INK, fontFamily: F_BODY }}>
       {/* Navigation */}
       <div
         className="sticky top-0 z-20 px-4 pb-2"
@@ -1072,7 +1136,14 @@ export default function App() {
         </div>
       </div>
 
-      <div ref={contentRef} className="max-w-4xl mx-auto px-4 pt-5 pb-28">
+      <div
+        ref={contentRef}
+        className="max-w-4xl mx-auto px-4 pt-5 pb-28"
+        style={{
+          transform: offset ? `translateX(${offset}px)` : 'none',
+          transition: dragging ? 'none' : 'transform .2s ease-out',
+        }}
+      >
         <div
           key={tab}
           style={{
@@ -1417,7 +1488,7 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                                 {meta.short}
                                 {o.type === 'trials' && ` · ${o.config.trialCount} essais`}
                                 {o.type === 'interval' && ` · toutes les ${o.config.intervalMinutes} min · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
-                                {o.type === 'chaining' && ` · ${(o.config.steps || []).length} étapes`}
+                                {(o.type === 'chaining' || o.type === 'balance') && ` · ${(o.config.steps || []).length} étapes`}
                                 {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions} ${o.config.mastery.unit === 'days' ? 'jours' : 'séances'}`}
                                 {objectiveTargets(o).length > 0 && ` · ${(o.masteredTargetIds || []).length}/${objectiveTargets(o).length} cibles acquises`}
                               </div>
@@ -1522,7 +1593,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
       config.levels = levels;
       config.targetLevelId = levels.some((l) => l.id === targetLevelId) ? targetLevelId : levels[0].id;
     }
-    if (type === 'chaining') config.steps = steps;
+    if (type === 'chaining' || type === 'balance') config.steps = steps;
     if (type === 'probe') config.useGuidance = useGuidance;
     if (USES_GUIDANCE.includes(type) && guidanceCodes && guidanceCodes.length) config.guidanceCodes = guidanceCodes;
     if (PERCENT_TYPES.includes(type)) {
@@ -1638,7 +1709,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
         </div>
       )}
 
-      {type === 'chaining' && (
+      {(type === 'chaining' || type === 'balance') && (
         <div>
           <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Étapes de la séquence, dans l'ordre</div>
           <div className="space-y-1.5 mb-2">
@@ -1776,7 +1847,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
       )}
 
       <div className="flex gap-2">
-        <Btn onClick={submit} disabled={!name.trim() || (type === 'interval' && levels.length === 0) || (type === 'chaining' && steps.length === 0)} className="flex-1 text-sm">
+        <Btn onClick={submit} disabled={!name.trim() || (type === 'interval' && levels.length === 0) || ((type === 'chaining' || type === 'balance') && steps.length === 0)} className="flex-1 text-sm">
           {initial ? 'Enregistrer les modifications' : "Ajouter l'objectif"}
         </Btn>
         <Btn variant="ghost" onClick={onCancel} className="text-sm">Annuler</Btn>
@@ -2033,50 +2104,11 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const isEdit = !!session.isEdit;
   const [currentId, setCurrentId] = useState(session.studentIds[0]);
   const [viewMode, setViewMode] = useState('priority');
-  const cotationRef = useRef(null);
-
-  /* Balayage horizontal sur la zone de cotation : bascule entre les deux vues.
-     La zone porte data-no-swipe, donc le balayage de page ne s'y déclenche pas. */
-  useEffect(() => {
-    const el = cotationRef.current;
-    if (!el) return undefined;
-    let g = null;
-    const start = (e) => {
-      if (e.touches.length !== 1 || ownsHorizontalGesture(e.target)) { g = null; return; }
-      g = { x: e.touches[0].clientX, y: e.touches[0].clientY, axis: null };
-    };
-    const move = (e) => {
-      if (!g || e.touches.length !== 1) return;
-      const dx = e.touches[0].clientX - g.x;
-      const dy = e.touches[0].clientY - g.y;
-      if (!g.axis) {
-        if (Math.abs(dx) < 14 && Math.abs(dy) < 14) return;
-        g.axis = Math.abs(dx) > Math.abs(dy) + 6 ? 'x' : 'y';
-      }
-      if (g.axis !== 'x') return;
-      if (e.cancelable) e.preventDefault();
-      g.dx = dx;
-    };
-    const end = () => {
-      if (!g || g.axis !== 'x' || Math.abs(g.dx || 0) < 60) { g = null; return; }
-      setViewMode((g.dx || 0) < 0 ? 'student' : 'priority');
-      g = null;
-    };
-    el.addEventListener('touchstart', start, { passive: true });
-    el.addEventListener('touchmove', move, { passive: false });
-    el.addEventListener('touchend', end, { passive: true });
-    el.addEventListener('touchcancel', end, { passive: true });
-    return () => {
-      el.removeEventListener('touchstart', start);
-      el.removeEventListener('touchmove', move);
-      el.removeEventListener('touchend', end);
-      el.removeEventListener('touchcancel', end);
-    };
-  }, []);
   const [now, setNow] = useState(Date.now());
   const [soundOn, setSoundOn] = useState(true);
   const [wakeOk, setWakeOk] = useState(false);
   const stepsRef = useRef({});
+  const cotationRef = useRef(null);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -2124,6 +2156,13 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     });
     if (fire) alertInterval(soundOn);
   }, [now]);
+
+  /* Balayage dans la zone de cotation : bascule prioritaires / par élève.
+     Le hook s'arrête au conteneur, donc son propre data-no-swipe — qui empêche
+     le changement de page — ne bloque pas ce geste-ci. */
+  const toStudentView = React.useCallback(() => setViewMode('student'), []);
+  const toPriorityView = React.useCallback(() => setViewMode('priority'), []);
+  const cotationSwipe = useHorizontalSwipe(cotationRef, { onLeft: toStudentView, onRight: toPriorityView });
 
   const atelier = ateliers.find((a) => a.id === session.atelierId);
   const intervenant = intervenants.find((i) => i.id === session.intervenantId);
@@ -2279,7 +2318,15 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
         </div>
       </div>
 
-      <div className="flex gap-3" data-no-swipe ref={cotationRef}>
+      <div
+        className="flex gap-3"
+        data-no-swipe
+        ref={cotationRef}
+        style={{
+          transform: cotationSwipe.offset ? `translateX(${cotationSwipe.offset}px)` : 'none',
+          transition: cotationSwipe.dragging ? 'none' : 'transform .2s ease-out',
+        }}
+      >
         {/* Contenu : tous les prioritaires, ou l'élève courant */}
         <div className="flex-1 min-w-0">
           {viewMode === 'priority' ? (
@@ -2441,6 +2488,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
         {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'latency' && <LatencyWidget entry={entry} now={now} onChange={onChange} />}
+        {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} />}
       </div>
     </Card>
   );
@@ -2835,6 +2883,82 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
         <span className="text-xs" style={{ color: INK_SOFT }}>{coded}/{steps.length} étapes cotées</span>
         {coded > 0 && (
           <button onClick={() => onChange({ steps: {} })} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
+            <RotateCcw size={12} /> tout effacer
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BalanceWidget({ obj, entry, onChange }) {
+  const steps = obj.config.steps || [];
+
+  function setStep(stepId, patch) {
+    const cur = entry.steps[stepId] || {};
+    const next = { ...entry.steps, [stepId]: { ...cur, ...patch } };
+    if (!next[stepId].outcome && !next[stepId].demande && !next[stepId].renforce) delete next[stepId];
+    onChange({ steps: next });
+  }
+
+  const coded = steps.filter((st) => entry.steps[st.id] && entry.steps[st.id].outcome).length;
+  const renforts = steps.map((st, i) => (entry.steps[st.id] && entry.steps[st.id].renforce ? i + 1 : null)).filter(Boolean);
+
+  return (
+    <div>
+      <div className="space-y-2">
+        {steps.map((st, i) => {
+          const e = entry.steps[st.id] || {};
+          return (
+            <div key={st.id} className="rounded-xl px-2.5 py-2" style={{ backgroundColor: PAPER }}>
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="text-xs w-5 shrink-0" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
+                <span className="text-sm flex-1 min-w-0 truncate">{st.name}</span>
+              </div>
+              <div className="flex gap-1 mb-1.5">
+                {BALANCE_OUTCOMES.map((o) => {
+                  const on = e.outcome === o.k;
+                  return (
+                    <button
+                      key={o.k}
+                      onClick={() => setStep(st.id, { outcome: on ? null : o.k })}
+                      className="flex-1 rounded-lg py-2 text-xs font-semibold border active:scale-95 transition-transform"
+                      style={{ fontFamily: F_DISPLAY, borderColor: on ? o.color : BORDER, backgroundColor: on ? o.color : 'transparent', color: on ? '#fff' : INK_SOFT }}
+                      title={o.label}
+                    >
+                      {o.short}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setStep(st.id, { demande: !e.demande })}
+                  className="flex-1 rounded-lg py-1.5 text-xs border flex items-center justify-center gap-1"
+                  style={{ borderColor: e.demande ? '#2E6E8E' : BORDER, backgroundColor: e.demande ? '#2E6E8E' : 'transparent', color: e.demande ? '#fff' : INK_SOFT }}
+                >
+                  <MessageSquare size={12} /> Demande
+                </button>
+                <button
+                  onClick={() => setStep(st.id, { renforce: !e.renforce })}
+                  className="flex-1 rounded-lg py-1.5 text-xs border flex items-center justify-center gap-1"
+                  style={{ borderColor: e.renforce ? '#D69A2D' : BORDER, backgroundColor: e.renforce ? '#D69A2D' : 'transparent', color: e.renforce ? '#fff' : INK_SOFT }}
+                >
+                  <Gift size={12} /> Renforcé
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center justify-between mt-2 gap-2">
+        <span className="text-xs" style={{ color: INK_SOFT }}>
+          {coded}/{steps.length} étapes cotées
+          {renforts.length > 0 && <> · renforcé aux étapes <span style={{ fontFamily: F_MONO }}>{renforts.join(', ')}</span></>}
+        </span>
+        {coded > 0 && (
+          <button onClick={() => onChange({ steps: {} })} className="text-xs flex items-center gap-1 shrink-0" style={{ color: INK_SOFT }}>
             <RotateCcw size={12} /> tout effacer
           </button>
         )}
