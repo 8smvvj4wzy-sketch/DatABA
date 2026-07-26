@@ -1235,14 +1235,19 @@ export default function App() {
     const wb = buildWorkbook([s], crises.filter((c) => c.sessionId === s.id), students, ateliers, intervenants, guidances);
     const a = ateliers.find((x) => x.id === s.atelierId);
     const jour = new Date(s.date).toLocaleDateString('fr-FR');
+    const name = `seance-${new Date(s.date).toISOString().slice(0, 10)}.xlsx`;
     shareReport({
       blob: workbookBlob(wb),
-      name: `seance-${new Date(s.date).toISOString().slice(0, 10)}.xlsx`,
-      subject: `Rapport ABA du ${jour}${a ? ` — ${a.name}` : ''}`,
+      name,
+      subject: name,
       body: `Bonjour,\n\nVeuillez trouver le relevé de cotations de la séance du ${jour}${a ? ` (${a.name})` : ''}, ${s.studentIds.length} élève(s).\n\nCordialement,`,
       notify,
     });
+    markSent([s.id]);
   };
+
+  const markSent = (ids, sent = true) =>
+    setSessions((list) => list.map((s) => (ids.includes(s.id) ? { ...s, sentAt: sent ? new Date().toISOString() : null } : s)));
 
   const deleteSession = (id) => {
     setSessions((list) => list.filter((s) => s.id !== id));
@@ -1396,7 +1401,7 @@ export default function App() {
         )}
         {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} onResetTracking={resetTracking} />}
         {tab === 'export' && (
-          <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} />
+          <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} onMarkSent={markSent} />
         )}
         </div>
       </div>
@@ -3483,16 +3488,17 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
 }
 
 /* ==================== Écran 4 : export ==================== */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, notify, onEditCrisis }) {
-  const [mode, setMode] = useState('jour');
-  const [picked, setPicked] = useState([]);
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, notify, onEditCrisis, onMarkSent }) {
+  const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
+  // Valeur d'état initiale seulement : React l'ignore aux rendus suivants,
+  // donc une sélection ajustée à la main n'est jamais écrasée par un
+  // changement ultérieur (nouvelle séance, statut modifié...).
+  const [picked, setPicked] = useState(unsentIds);
 
-  const today = new Date().toDateString();
-  const todaySessions = sessions.filter((s) => new Date(s.date).toDateString() === today);
-  const todayCrises = crises.filter((c) => new Date(c.date).toDateString() === today);
-
-  const chosen = mode === 'global' ? sessions : sessions.filter((s) => picked.includes(s.id));
-  const chosenCrises = mode === 'global' ? crises : todayCrises;
+  const ordered = sessions.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  const chosen = sessions.filter((s) => picked.includes(s.id));
+  const chosenCrises = crises.filter((c) => !c.sessionId || chosen.some((s) => s.id === c.sessionId));
+  const chosenSentCount = chosen.filter((s) => s.sentAt).length;
 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || 'Séance libre';
   const sessionLabel = (sess) => (sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Balance Program' : 'Séance libre');
@@ -3500,88 +3506,111 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
   function makeFile() {
     const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, guidances);
     const blob = workbookBlob(wb);
-    const name = mode === 'global'
-      ? `rapport-global-${new Date().toISOString().slice(0, 10)}.xlsx`
-      : `rapport-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const name = `rapport-${new Date().toISOString().slice(0, 10)}.xlsx`;
     return { blob, name };
   }
 
+  function confirmIfNeeded() {
+    if (chosenSentCount === 0) return true;
+    return window.confirm(
+      `${chosenSentCount} des ${chosen.length} rapport(s) sélectionné(s) ${chosenSentCount > 1 ? 'ont' : 'a'} déjà été envoyé(s).\n\nConfirmer l'envoi quand même ?`
+    );
+  }
+
   function download() {
+    if (!confirmIfNeeded()) return;
     const { blob, name } = makeFile();
     downloadBlob(blob, name);
+    onMarkSent(picked);
     notify('Fichier Excel téléchargé');
   }
 
   async function sendMail() {
+    if (!confirmIfNeeded()) return;
     const { blob, name } = makeFile();
-    const subject = mode === 'global' ? 'Rapport global ABA' : `Rapport ABA du ${new Date().toLocaleDateString('fr-FR')}`;
-    const lines = chosen.map((s) => `- ${new Date(s.date).toLocaleDateString('fr-FR')} ${timeShort(s.date)} · ${atelierName(s.atelierId)} · ${s.studentIds.length} élève(s)`);
+    const subject = name;
+    const lines = chosen.map((s) => `- ${new Date(s.date).toLocaleDateString('fr-FR')} ${timeShort(s.date)} · ${sessionLabel(s)} · ${s.studentIds.length} élève(s)`);
     const body = `Bonjour,\n\nVeuillez trouver le relevé de cotations ABA.\n\n${lines.join('\n')}\n\nCrises consignées : ${chosenCrises.length}\n\nLe fichier Excel détaillé est joint (à ajouter depuis vos téléchargements si la pièce jointe n'apparaît pas).\n\nCordialement,`;
 
     const file = new File([blob], name, { type: blob.type });
+    let shared = false;
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({ files: [file], title: subject, text: body });
-        return;
+        shared = true;
       } catch (e) {
         if (e && e.name === 'AbortError') return;
       }
     }
-    downloadBlob(blob, name);
-    const a = document.createElement('a');
-    a.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    a.target = '_blank';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    notify('Fichier téléchargé — joignez-le au mail');
+    if (!shared) {
+      downloadBlob(blob, name);
+      const a = document.createElement('a');
+      a.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      notify('Fichier téléchargé — joignez-le au mail');
+    }
+    onMarkSent(picked);
   }
 
-  const canExport = mode === 'global' ? sessions.length > 0 : picked.length > 0;
+  const canExport = picked.length > 0;
 
   return (
     <div>
-      <SectionTitle sub="Rapports du jour ou historique complet, à transmettre aux cadres pédagogiques.">Export</SectionTitle>
+      <SectionTitle sub="Sélectionnez les rapports à transmettre aux cadres pédagogiques.">Export</SectionTitle>
 
-      <div className="flex gap-1.5 mb-4">
-        {[{ k: 'jour', l: 'Rapports du jour' }, { k: 'global', l: 'Rapport global' }].map((m) => (
-          <button key={m.k} onClick={() => setMode(m.k)} className="flex-1 rounded-xl py-3 text-sm font-medium border"
-            style={{ fontFamily: F_DISPLAY, borderColor: mode === m.k ? INK : BORDER, backgroundColor: mode === m.k ? INK : 'transparent', color: mode === m.k ? '#fff' : INK_SOFT }}>
-            {m.l}
-          </button>
-        ))}
-      </div>
+      {sessions.length === 0 ? (
+        <Empty>Aucune séance enregistrée pour le moment.</Empty>
+      ) : (
+        <>
+          <div className="flex gap-1.5 mb-3">
+            <button onClick={() => setPicked(unsentIds)} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+              Non-envoyés ({unsentIds.length})
+            </button>
+            <button onClick={() => setPicked(sessions.map((s) => s.id))} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+              Tout sélectionner
+            </button>
+            <button onClick={() => setPicked([])} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+              Aucun
+            </button>
+          </div>
 
-      {mode === 'jour' ? (
-        todaySessions.length === 0 ? (
-          <Empty>Aucune séance enregistrée aujourd'hui.</Empty>
-        ) : (
           <div className="space-y-1.5 mb-4">
-            {todaySessions.map((s) => {
+            {ordered.slice(0, 60).map((s) => {
               const on = picked.includes(s.id);
+              const sent = !!s.sentAt;
               return (
-                <button key={s.id} onClick={() => setPicked((p) => (on ? p.filter((x) => x !== s.id) : [...p, s.id]))}
-                  className="w-full rounded-xl px-3.5 py-3 flex items-center justify-between border text-left"
-                  style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK + '0d' : CARD }}>
-                  <div>
-                    <div className="text-sm font-medium">{sessionLabel(s)}</div>
-                    <div className="text-xs" style={{ color: INK_SOFT }}>{timeShort(s.date)} · {s.studentIds.length} élève{s.studentIds.length !== 1 ? 's' : ''}</div>
-                  </div>
-                  <div className="w-6 h-6 rounded-md border flex items-center justify-center" style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent' }}>
+                <div key={s.id} className="w-full rounded-xl px-3.5 py-3 flex items-center gap-3 border"
+                  style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK + '0d' : sent ? PAPER : CARD }}>
+                  <button className="flex-1 text-left min-w-0" onClick={() => setPicked((p) => (on ? p.filter((x) => x !== s.id) : [...p, s.id]))}>
+                    <div className="text-sm font-medium truncate">{sessionLabel(s)}</div>
+                    <div className="text-xs" style={{ color: INK_SOFT }}>
+                      {new Date(s.date).toLocaleDateString('fr-FR')} {timeShort(s.date)} · {s.studentIds.length} élève{s.studentIds.length !== 1 ? 's' : ''}
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => onMarkSent([s.id], !sent)}
+                    className="shrink-0 rounded-lg px-2 py-1 text-xs flex items-center gap-1 border"
+                    style={{
+                      borderColor: sent ? '#0F8B6C' : BORDER,
+                      backgroundColor: sent ? '#0F8B6C' : 'transparent',
+                      color: sent ? '#fff' : INK_SOFT,
+                    }}
+                    title="Appuyer pour changer le statut manuellement"
+                  >
+                    {sent ? <Check size={12} /> : null} {sent ? 'Envoyé' : 'Non envoyé'}
+                  </button>
+                  <button onClick={() => setPicked((p) => (on ? p.filter((x) => x !== s.id) : [...p, s.id]))}
+                    className="w-6 h-6 rounded-md border flex items-center justify-center shrink-0" style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent' }}>
                     {on && <Check size={14} color="#fff" />}
-                  </div>
-                </button>
+                  </button>
+                </div>
               );
             })}
           </div>
-        )
-      ) : (
-        <Card className="mb-4">
-          <div className="text-sm" style={{ color: INK_SOFT }}>
-            <span style={{ fontFamily: F_MONO, color: INK }}>{sessions.length}</span> séance{sessions.length !== 1 ? 's' : ''} ·{' '}
-            <span style={{ fontFamily: F_MONO, color: INK }}>{crises.length}</span> crise{crises.length !== 1 ? 's' : ''} consignée{crises.length !== 1 ? 's' : ''}
-          </div>
-        </Card>
+        </>
       )}
 
       <div className="flex gap-2">
@@ -3626,6 +3655,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     </div>
   );
 }
+
 
 /* ==================== Module crise ABC ==================== */
 function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, onSave, onDelete }) {
