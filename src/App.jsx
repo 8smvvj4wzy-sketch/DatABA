@@ -599,6 +599,91 @@ function advanceMasteredTargets(students, sessions, guidances) {
 }
 
 /* ==================== Génération Excel ==================== */
+/* --- Mise à plat pour l'analyse Excel ---
+   Une ligne empilant tous les essais dans une seule cellule se filtre mal et
+   ne se met pas en graphique. Ici, chaque essai / étape / intervalle devient
+   sa propre ligne. La colonne "Indépendant" vaut 1 ou 0 : une moyenne dessus
+   donne directement un pourcentage, sans formule à écrire. Les étapes
+   manquées restent hors de cette colonne, comme dans les calculs de l'appli. */
+function buildDetailRows(sessions, students, ateliers, intervenants, guidances) {
+  const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
+  const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
+  const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
+
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Élève', 'Objectif', 'Cible', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé']];
+
+  function base(sess, sid, obj) {
+    return [
+      new Date(sess.date).toLocaleDateString('fr-FR'),
+      timeShort(sess.date),
+      sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Balance Program' : 'Séance libre',
+      intervenantName(sess.intervenantId),
+      studentName(sid),
+      obj.name,
+      obj.activeTargetName || '—',
+    ];
+  }
+
+  sessions.forEach((sess) => {
+    (sess.studentIds || []).forEach((sid) => {
+      const objIds = (sess.selectedObjectives && sess.selectedObjectives[sid]) || [];
+      objIds.forEach((oid) => {
+        const obj = (sess.objectiveSnapshot || {})[oid];
+        if (!obj) return;
+        const entry = ((sess.data || {})[sid] || {})[oid];
+        if (!entry) return;
+        const b = base(sess, sid, obj);
+
+        if (obj.type === 'trials') {
+          (entry.trials || []).forEach((code, i) => {
+            if (!code) return;
+            const g = guidanceByCode(guidances, code);
+            rows.push([...b, 'Essai par essai', i + 1, '', g ? g.label : code, isIndependentCode(guidances, code) ? 1 : 0, '', '']);
+          });
+        }
+
+        if (obj.type === 'chaining') {
+          (obj.config.steps || []).forEach((st, i) => {
+            const code = entry.steps && entry.steps[st.id];
+            if (!code) return;
+            const g = guidanceByCode(guidances, code);
+            rows.push([...b, 'Analyse de tâche', i + 1, st.name, g ? g.label : code, isIndependentCode(guidances, code) ? 1 : 0, '', '']);
+          });
+        }
+
+        if (obj.type === 'balance') {
+          balanceTrials(entry).forEach((tr, ti) => {
+            (obj.config.steps || []).forEach((st, si) => {
+              const e = (tr.steps || {})[st.id];
+              if (!e || !e.outcome) return;
+              const o = BALANCE_OUTCOMES.find((x) => x.k === e.outcome);
+              rows.push([
+                ...b, 'Balance Program', ti + 1, st.name, o ? o.label : e.outcome,
+                e.outcome === 'manque' ? '' : e.outcome === 'reussi' ? 1 : 0,
+                e.demande ? 'Oui' : 'Non', e.renforce ? 'Oui' : 'Non',
+              ]);
+            });
+          });
+        }
+
+        if (obj.type === 'interval') {
+          const levels = obj.config.levels || [];
+          Object.entries(entry.marks || {}).forEach(([n, lid]) => {
+            const lv = levels.find((l) => l.id === lid);
+            if (lv) rows.push([...b, 'Intervalle', Number(n), '', lv.name, '', '', '']);
+          });
+          (entry.segments || []).forEach((seg) => {
+            const lv = levels.find((l) => l.id === seg.levelId);
+            if (lv) rows.push([...b, 'Intervalle (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '']);
+          });
+        }
+      });
+    });
+  });
+
+  return rows;
+}
+
 function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], guidances) {
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
@@ -644,6 +729,12 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Cotations');
+
+  const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, guidances);
+  const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
+  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }];
+  wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
+  if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
   const crisisRows = [['Date', 'Heure', 'Élève', 'Atelier', 'Intervenants présents', 'Durée', 'Antécédent', 'Comportement', 'Conséquence', 'Commentaire']];
   crises.forEach((c) => {
