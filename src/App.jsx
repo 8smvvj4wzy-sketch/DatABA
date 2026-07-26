@@ -6,7 +6,7 @@ import {
   Timer as TimerIcon, ListChecks, LayoutGrid, CheckCircle2, RotateCcw, Save,
   Mail, Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star,
+  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -23,23 +23,49 @@ const F_MONO = "'IBM Plex Mono', ui-monospace, monospace";
 
 function useFonts() {
   useEffect(() => {
-    if (document.getElementById('aba-fonts')) return;
-    const link = document.createElement('link');
-    link.id = 'aba-fonts';
-    link.rel = 'stylesheet';
-    link.href =
-      'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap';
-    document.head.appendChild(link);
+    if (!document.getElementById('aba-fonts')) {
+      const link = document.createElement('link');
+      link.id = 'aba-fonts';
+      link.rel = 'stylesheet';
+      link.href =
+        'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap';
+      document.head.appendChild(link);
+    }
+    if (!document.getElementById('aba-anim')) {
+      const style = document.createElement('style');
+      style.id = 'aba-anim';
+      /* Transition courte et de faible amplitude : beaucoup plus fiable qu'un
+         déplacement de toute la page, qui provoquait des blancs de rendu. */
+      style.textContent = `
+@keyframes abaInFromRight { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+@keyframes abaInFromLeft  { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  @keyframes abaInFromRight { from { opacity: 1; } to { opacity: 1; } }
+  @keyframes abaInFromLeft  { from { opacity: 1; } to { opacity: 1; } }
+}`;
+      document.head.appendChild(style);
+    }
   }, []);
 }
 
 /* ==================== Constantes métier ==================== */
-const GUIDANCE = [
-  { code: 'I', label: 'Indépendant', color: '#0F8B6C' },
-  { code: 'GP', label: 'Guidance partielle', color: '#D69A2D' },
-  { code: 'GT', label: 'Guidance totale', color: '#A8402F' },
+/* Guidances par défaut. La liste est modifiable dans l'écran Administratif :
+   le drapeau "independent" désigne ce qui compte comme réussite autonome
+   dans les pourcentages et les critères de maîtrise. */
+const DEFAULT_GUIDANCE = [
+  { code: 'I', label: 'Indépendant', color: '#0F8B6C', independent: true },
+  { code: 'GP', label: 'Guidance partielle', color: '#D69A2D', independent: false },
+  { code: 'GT', label: 'Guidance totale', color: '#A8402F', independent: false },
 ];
-const GUIDANCE_BY_CODE = Object.fromEntries(GUIDANCE.map((g) => [g.code, g]));
+const GUIDANCE_PALETTE = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
+
+function guidanceByCode(guidances, code) {
+  return (guidances || DEFAULT_GUIDANCE).find((g) => g.code === code) || null;
+}
+function isIndependentCode(guidances, code) {
+  const g = guidanceByCode(guidances, code);
+  return g ? !!g.independent : code === 'I';
+}
 
 const TYPES = {
   trials: { label: 'Essai par essai', short: 'Essais', icon: ListChecks, color: '#7A6A9A' },
@@ -74,7 +100,7 @@ const LEVEL_COLORS = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2
 
 /* Types dont le score est un pourcentage : seuls ceux-là admettent un critère de maîtrise */
 const PERCENT_TYPES = ['trials', 'probe', 'interval', 'chaining'];
-const DEFAULT_MASTERY = { threshold: 80, sessions: 3 };
+const DEFAULT_MASTERY = { threshold: 80, sessions: 3, unit: 'sessions' };
 
 /* ==================== Stockage ====================
    Dans Claude, window.storage est disponible. Une fois l'application hébergée
@@ -279,11 +305,11 @@ function crisisIntervals(session, crises, stepMinutes, studentId) {
 }
 
 /* Résumé texte d'une cotation, utilisé à l'écran et dans l'export */
-function summarize(obj, entry) {
+function summarize(obj, entry, guidances) {
   if (!entryMatches(obj, entry)) return { result: '—', detail: '' };
   if (obj.type === 'trials') {
     const done = entry.trials.filter(Boolean);
-    const indep = done.filter((c) => c === 'I').length;
+    const indep = done.filter((c) => isIndependentCode(guidances, c)).length;
     const pct = done.length ? Math.round((indep / done.length) * 100) : 0;
     return {
       result: done.length ? `${indep}/${done.length} indépendant (${pct} %)` : 'Non coté',
@@ -316,7 +342,7 @@ function summarize(obj, entry) {
     const steps = obj.config.steps || [];
     const coded = steps.filter((s) => entry.steps[s.id]);
     if (!coded.length) return { result: 'Non coté', detail: '' };
-    const indep = coded.filter((s) => entry.steps[s.id] === 'I').length;
+    const indep = coded.filter((s) => isIndependentCode(guidances, entry.steps[s.id])).length;
     const pct = Math.round((indep / coded.length) * 100);
     return {
       result: `${indep}/${coded.length} étapes indépendantes (${pct} %)`,
@@ -336,12 +362,12 @@ function summarize(obj, entry) {
 }
 
 /* Score normalisé d'une cotation, utilisé pour les courbes de progression */
-function objectiveScore(obj, entry) {
+function objectiveScore(obj, entry, guidances) {
   if (!entryMatches(obj, entry)) return null;
   if (obj.type === 'trials') {
     const done = entry.trials.filter(Boolean);
     if (!done.length) return null;
-    return { value: Math.round((done.filter((c) => c === 'I').length / done.length) * 100), percent: true, unit: '%' };
+    return { value: Math.round((done.filter((c) => isIndependentCode(guidances, c)).length / done.length) * 100), percent: true, unit: '%' };
   }
   if (obj.type === 'probe') {
     if (entry.value !== 0 && entry.value !== 1) return null;
@@ -358,7 +384,7 @@ function objectiveScore(obj, entry) {
     const steps = obj.config.steps || [];
     const coded = steps.filter((s) => entry.steps[s.id]);
     if (!coded.length) return null;
-    return { value: Math.round((coded.filter((s) => entry.steps[s.id] === 'I').length / coded.length) * 100), percent: true, unit: '%' };
+    return { value: Math.round((coded.filter((s) => isIndependentCode(guidances, entry.steps[s.id])).length / coded.length) * 100), percent: true, unit: '%' };
   }
   if (obj.type === 'latency') {
     if (!entry.latencies.length) return null;
@@ -373,25 +399,107 @@ function objectiveScore(obj, entry) {
   return null;
 }
 
-/* Objectif acquis si les N dernières séances atteignent toutes le seuil */
+/* Regroupe les points d'une même journée calendaire en un seul point moyenné,
+   pour un critère de maîtrise exprimé en jours plutôt qu'en séances
+   (utile quand plusieurs séances ont lieu le même jour). */
+function toDayPoints(points) {
+  const byDay = new Map();
+  points.forEach((p) => {
+    if (!p.date) return;
+    const day = new Date(p.date).toDateString();
+    if (!byDay.has(day)) byDay.set(day, { sum: 0, n: 0, date: p.date });
+    const e = byDay.get(day);
+    e.sum += p.value;
+    e.n += 1;
+  });
+  return Array.from(byDay.values())
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .map((e) => ({ value: Math.round(e.sum / e.n) }));
+}
+
+/* Objectif acquis si les N dernières séances (ou N derniers jours) atteignent toutes le seuil */
 function masteryStatus(obj, points) {
   if (!PERCENT_TYPES.includes(obj.type)) return null;
-  const m = obj.config.mastery || DEFAULT_MASTERY;
+  const m = { ...DEFAULT_MASTERY, ...(obj.config.mastery || {}) };
+  const unit = m.unit === 'days' ? 'days' : 'sessions';
+  const series = unit === 'days' ? toDayPoints(points) : points;
   let streak = 0;
-  for (let i = points.length - 1; i >= 0; i--) {
-    if (points[i].value >= m.threshold) streak++;
+  for (let i = series.length - 1; i >= 0; i--) {
+    if (series[i].value >= m.threshold) streak++;
     else break;
   }
-  return { mastered: streak >= m.sessions, threshold: m.threshold, needed: m.sessions, streak: Math.min(streak, m.sessions) };
+  return { mastered: streak >= m.sessions, threshold: m.threshold, needed: m.sessions, streak: Math.min(streak, m.sessions), unit };
+}
+
+/* --- Cibles d'un objectif ---
+   Un objectif peut être découpé en cibles successives (ex. « rouge », puis
+   « bleu », puis « vert »). La cotation porte sur la cible courante ; dès que
+   le critère de maîtrise est atteint, on passe automatiquement à la suivante. */
+function objectiveTargets(obj) {
+  return (obj.config && obj.config.targets) || [];
+}
+function currentTarget(obj) {
+  const targets = objectiveTargets(obj);
+  if (!targets.length) return null;
+  const done = obj.masteredTargetIds || [];
+  if (obj.currentTargetId) {
+    const t = targets.find((x) => x.id === obj.currentTargetId);
+    if (t && !done.includes(t.id)) return t;
+  }
+  return targets.find((t) => !done.includes(t.id)) || null;
+}
+
+/* Points de progression d'un objectif, éventuellement limités à une cible */
+function objectivePoints(obj, studentId, sessions, guidances, targetId) {
+  const points = [];
+  sessions.forEach((sess) => {
+    const entry = ((sess.data || {})[studentId] || {})[obj.id];
+    if (!entry) return;
+    if (targetId && entry.targetId && entry.targetId !== targetId) return;
+    if (targetId && !entry.targetId) return;
+    const sc = objectiveScore(obj, entry, guidances);
+    if (!sc) return;
+    points.push({
+      date: sess.date,
+      label: new Date(sess.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }),
+      value: sc.value,
+      unit: sc.unit,
+    });
+  });
+  return points;
+}
+
+/* Après enregistrement d'une séance : marque les cibles atteintes et avance.
+   Renvoie la liste des élèves mise à jour et les cibles franchies. */
+function advanceMasteredTargets(students, sessions, guidances) {
+  const achieved = [];
+  const ordered = sessions.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+  const nextStudents = students.map((st) => ({
+    ...st,
+    objectives: st.objectives.map((obj) => {
+      const targets = objectiveTargets(obj);
+      if (!targets.length || !PERCENT_TYPES.includes(obj.type)) return obj;
+      const cur = currentTarget(obj);
+      if (!cur) return obj;
+      const points = objectivePoints(obj, st.id, ordered, guidances, cur.id);
+      const status = masteryStatus(obj, points);
+      if (!status || !status.mastered) return obj;
+      const done = [...(obj.masteredTargetIds || []), cur.id];
+      const next = targets.find((t) => !done.includes(t.id));
+      achieved.push({ initials: st.initials, objective: obj.name, target: cur.name, next: next ? next.name : null });
+      return { ...obj, masteredTargetIds: done, currentTargetId: next ? next.id : null };
+    }),
+  }));
+  return { students: nextStudents, achieved };
 }
 
 /* ==================== Génération Excel ==================== */
-function buildWorkbook(sessions, crises, students, ateliers, intervenants = []) {
+function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], guidances) {
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Élève', 'Objectif', 'Type de cotation', 'Résultat', 'Score', 'Détail']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Élève', 'Objectif', 'Cible', 'Type de cotation', 'Résultat', 'Score', 'Détail']];
   sessions.forEach((s) => {
     const d = new Date(s.date);
     (s.studentIds || []).forEach((sid) => {
@@ -400,8 +508,8 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = []) 
         const obj = (s.objectiveSnapshot || {})[oid];
         if (!obj) return;
         const entry = ((s.data || {})[sid] || {})[oid];
-        const { result, detail } = summarize(obj, entry);
-        const score = objectiveScore(obj, entry);
+        const { result, detail } = summarize(obj, entry, guidances);
+        const score = objectiveScore(obj, entry, guidances);
         let fullDetail = detail;
         if (obj.type === 'interval') {
           const set = crisisIntervals(s, crises, obj.config.intervalMinutes, sid);
@@ -417,6 +525,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = []) 
           intervenantName(s.intervenantId),
           studentName(sid),
           obj.name,
+          obj.activeTargetName || '—',
           TYPES[obj.type].label,
           result,
           score ? score.value : '',
@@ -428,7 +537,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = []) 
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }];
+  ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Cotations');
 
   const crisisRows = [['Date', 'Heure', 'Élève', 'Atelier', 'Intervenants présents', 'Durée', 'Antécédent', 'Comportement', 'Conséquence', 'Commentaire']];
@@ -485,6 +594,28 @@ function downloadBlob(blob, filename) {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+/* Envoi d'un rapport : partage natif avec pièce jointe si disponible
+   (cas Android), sinon téléchargement + ouverture du mail pré-rempli. */
+async function shareReport({ blob, name, subject, body, notify }) {
+  try {
+    const file = new File([blob], name, { type: blob.type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: subject, text: body });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  }
+  downloadBlob(blob, name);
+  const a = document.createElement('a');
+  a.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  a.target = '_blank';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  if (notify) notify('Fichier téléchargé — joignez-le au mail');
 }
 
 /* ==================== Composants UI de base ==================== */
@@ -608,16 +739,13 @@ function ownsHorizontalGesture(target) {
 }
 
 function useSwipeTabs(ref, tab, setTab) {
-  const [dragX, setDragX] = useState(0);
-  const [animate, setAnimate] = useState(true);
+  const [dir, setDir] = useState(0);
   const gesture = useRef(null);
-  const offset = useRef(0);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return undefined;
 
-    const setX = (v) => { offset.current = v; setDragX(v); };
     const index = () => TAB_ORDER.indexOf(tab);
 
     function start(e) {
@@ -635,51 +763,28 @@ function useSwipeTabs(ref, tab, setTab) {
       const t = e.touches[0];
       const dx = t.clientX - g.x;
       const dy = t.clientY - g.y;
-
-      // On attend d'être sûr de la direction avant de capturer le geste,
-      // pour ne pas gêner le défilement vertical de la page.
       if (!g.axis) {
-        if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
-        g.axis = Math.abs(dx) > Math.abs(dy) + 4 ? 'x' : 'y';
-        if (g.axis === 'x') setAnimate(false);
+        if (Math.abs(dx) < 14 && Math.abs(dy) < 14) return;
+        g.axis = Math.abs(dx) > Math.abs(dy) + 6 ? 'x' : 'y';
       }
       if (g.axis !== 'x') return;
+      // Empêche le défilement horizontal parasite pendant un balayage reconnu
       if (e.cancelable) e.preventDefault();
-
-      const i = index();
-      const atEdge = (i <= 0 && dx > 0) || (i >= TAB_ORDER.length - 1 && dx < 0);
-      setX(atEdge ? dx * 0.22 : dx);
+      g.dx = dx;
     }
 
     function end() {
       const g = gesture.current;
       gesture.current = null;
-      if (!g || g.axis !== 'x') {
-        setAnimate(true);
-        setX(0);
-        return;
-      }
+      if (!g || g.axis !== 'x') return;
+      const dx = g.dx || 0;
       const w = el.clientWidth || 1;
-      const dist = offset.current;
-      const speed = Math.abs(dist) / Math.max(1, Date.now() - g.time);
-      const commit = Math.abs(dist) > w * 0.22 || (Math.abs(dist) > 45 && speed > 0.45);
-      const next = index() + (dist < 0 ? 1 : -1);
-
-      if (commit && next >= 0 && next < TAB_ORDER.length) {
-        // Le nouvel écran est placé du côté d'où vient le doigt, puis ramené à zéro
-        setAnimate(false);
-        setTab(TAB_ORDER[next]);
-        setX(dist < 0 ? w : -w);
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            setAnimate(true);
-            setX(0);
-          })
-        );
-      } else {
-        setAnimate(true);
-        setX(0);
-      }
+      const speed = Math.abs(dx) / Math.max(1, Date.now() - g.time);
+      if (Math.abs(dx) < Math.max(60, w * 0.18) && speed < 0.5) return;
+      const next = index() + (dx < 0 ? 1 : -1);
+      if (next < 0 || next >= TAB_ORDER.length) return;
+      setDir(dx < 0 ? 1 : -1);
+      setTab(TAB_ORDER[next]);
     }
 
     el.addEventListener('touchstart', start, { passive: true });
@@ -694,7 +799,7 @@ function useSwipeTabs(ref, tab, setTab) {
     };
   }, [ref, tab, setTab]);
 
-  return { dragX, animate };
+  return dir;
 }
 
 /* ==================== Application ==================== */
@@ -706,6 +811,7 @@ export default function App() {
   const [students, setStudents] = useState([]);
   const [ateliers, setAteliers] = useState([]);
   const [intervenants, setIntervenants] = useState([]);
+  const [guidances, setGuidances] = useState(DEFAULT_GUIDANCE);
   const [sessions, setSessions] = useState([]);
   const [crises, setCrises] = useState([]);
 
@@ -713,7 +819,7 @@ export default function App() {
   const [crisis, setCrisis] = useState(null);
   const [toast, setToast] = useState(null);
   const contentRef = useRef(null);
-  const { dragX, animate } = useSwipeTabs(contentRef, tab, setTab);
+  const dir = useSwipeTabs(contentRef, tab, setTab);
 
   /* --- chargement --- */
   useEffect(() => {
@@ -725,6 +831,7 @@ export default function App() {
           setStudents(d.students || []);
           setAteliers(d.ateliers || []);
           setIntervenants(d.intervenants || []);
+          if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
         } catch (e) {}
       }
       const sess = await store.get('aba:sessions');
@@ -740,8 +847,8 @@ export default function App() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants }));
-  }, [students, ateliers, intervenants, loaded]);
+    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances }));
+  }, [students, ateliers, intervenants, guidances, loaded]);
   useEffect(() => {
     if (!loaded) return;
     store.set('aba:sessions', JSON.stringify(sessions));
@@ -767,13 +874,17 @@ export default function App() {
   const addAtelier = (name) => setAteliers((a) => [...a, { id: uid(), name }]);
   const removeAtelier = (id) => setAteliers((a) => a.filter((x) => x.id !== id));
   const renameAtelier = (id, name) => setAteliers((a) => a.map((x) => (x.id === id ? { ...x, name } : x)));
+  const setAtelierGroup = (id, studentIds) => setAteliers((a) => a.map((x) => (x.id === id ? { ...x, usualStudentIds: studentIds } : x)));
   const addIntervenant = (name) => setIntervenants((l) => [...l, { id: uid(), name }]);
   const removeIntervenant = (id) => setIntervenants((l) => l.filter((x) => x.id !== id));
   const renameIntervenant = (id, name) => setIntervenants((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
+  const addGuidance = (g) => setGuidances((l) => [...l, g]);
+  const removeGuidance = (code) => setGuidances((l) => (l.length > 1 ? l.filter((x) => x.code !== code) : l));
+  const toggleIndependent = (code) => setGuidances((l) => l.map((x) => (x.code === code ? { ...x, independent: !x.independent } : x)));
 
   /* --- sauvegarde / restauration --- */
   function exportBackup() {
-    const payload = { format: 'aba-backup', version: 1, exportedAt: new Date().toISOString(), students, ateliers, intervenants, sessions, crises };
+    const payload = { format: 'aba-backup', version: 2, exportedAt: new Date().toISOString(), students, ateliers, intervenants, guidances, sessions, crises };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     downloadBlob(blob, `sauvegarde-aba-${new Date().toISOString().slice(0, 10)}.json`);
     notify('Sauvegarde exportée');
@@ -799,6 +910,7 @@ export default function App() {
       setStudents(d.students || []);
       setAteliers(d.ateliers || []);
       setIntervenants(d.intervenants || []);
+      if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
       setSessions(d.sessions || []);
       setCrises(d.crises || []);
       notify('Sauvegarde restaurée');
@@ -821,6 +933,19 @@ export default function App() {
 
   /* --- reprise d'une séance enregistrée pour correction --- */
   const editSession = (s) => setActiveSession({ ...s, isEdit: true });
+  const mailSession = (s) => {
+    const wb = buildWorkbook([s], crises.filter((c) => c.sessionId === s.id), students, ateliers, intervenants, guidances);
+    const a = ateliers.find((x) => x.id === s.atelierId);
+    const jour = new Date(s.date).toLocaleDateString('fr-FR');
+    shareReport({
+      blob: workbookBlob(wb),
+      name: `seance-${new Date(s.date).toISOString().slice(0, 10)}.xlsx`,
+      subject: `Rapport ABA du ${jour}${a ? ` — ${a.name}` : ''}`,
+      body: `Bonjour,\n\nVeuillez trouver le relevé de cotations de la séance du ${jour}${a ? ` (${a.name})` : ''}, ${s.studentIds.length} élève(s).\n\nCordialement,`,
+      notify,
+    });
+  };
+
   const deleteSession = (id) => {
     setSessions((list) => list.filter((s) => s.id !== id));
     notify('Séance supprimée');
@@ -881,7 +1006,10 @@ export default function App() {
   return (
     <div className="min-h-screen" style={{ background: PAPER, color: INK, fontFamily: F_BODY }}>
       {/* Navigation */}
-      <div className="sticky top-0 z-20 px-4 pt-3 pb-2" style={{ background: PAPER, borderBottom: `1px solid ${BORDER}` }}>
+      <div
+        className="sticky top-0 z-20 px-4 pb-2"
+        style={{ background: PAPER, borderBottom: `1px solid ${BORDER}`, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)' }}
+      >
         <div className="max-w-4xl mx-auto flex gap-1">
           {[
             { k: 'admin', label: 'Administratif', icon: Layers },
@@ -911,25 +1039,20 @@ export default function App() {
         </div>
       </div>
 
-      {/* 'clip' plutôt que 'hidden' : masque le débordement pendant le glissement
-          sans casser les éléments collants, comme le rail des élèves en séance. */}
-      <div
-        ref={contentRef}
-        className="max-w-4xl mx-auto px-4 pt-5 pb-28"
-        style={{ overflowX: 'clip' }}
-      >
+      <div ref={contentRef} className="max-w-4xl mx-auto px-4 pt-5 pb-28">
         <div
+          key={tab}
           style={{
-            transform: dragX ? `translate3d(${dragX}px, 0, 0)` : 'none',
-            transition: animate ? 'transform .22s ease-out' : 'none',
+            animation: dir === 0 ? 'none' : `${dir > 0 ? 'abaInFromRight' : 'abaInFromLeft'} .18s ease-out`,
           }}
         >
         {tab === 'admin' && (
           <AdminScreen
-            students={students} ateliers={ateliers} intervenants={intervenants}
+            students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
             addAtelier={addAtelier} removeAtelier={removeAtelier} renameAtelier={renameAtelier}
             addIntervenant={addIntervenant} removeIntervenant={removeIntervenant} renameIntervenant={renameIntervenant}
+            onAddGuidance={addGuidance} onRemoveGuidance={removeGuidance} onToggleIndependent={toggleIndependent}
             onExportBackup={exportBackup} onImportBackup={importBackup}
           />
         )}
@@ -939,32 +1062,45 @@ export default function App() {
         {tab === 'session' && (
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
-            sessions={sessions} crises={crises} onEditSession={editSession} onDeleteSession={deleteSession}
+            sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession}
+            onSetAtelierGroup={setAtelierGroup} onMailSession={mailSession} notify={notify}
             activeSession={activeSession} setActiveSession={setActiveSession}
             onFinish={(session) => {
               const { isEdit, ...rest } = session;
               setActiveSession(null);
-              if (isEdit) {
-                setSessions((list) => list.map((s) => (s.id === rest.id ? rest : s)));
-                notify('Séance corrigée');
-                return;
+              const nextSessions = isEdit
+                ? sessions.map((s) => (s.id === rest.id ? rest : s))
+                : [rest, ...sessions];
+              setSessions(nextSessions);
+
+              // Passage automatique à la cible suivante si le critère est atteint
+              const { students: nextStudents, achieved } = advanceMasteredTargets(students, nextSessions, guidances);
+              if (achieved.length) {
+                setStudents(nextStudents);
+                const a = achieved[0];
+                notify(
+                  achieved.length === 1
+                    ? `${a.initials} — « ${a.target} » acquise${a.next ? `, passage à « ${a.next} »` : ', dernière cible'}`
+                    : `${achieved.length} cibles acquises`
+                );
+              } else {
+                notify(isEdit ? 'Séance corrigée' : 'Séance enregistrée');
               }
-              setSessions((list) => [rest, ...list]);
-              const wb = buildWorkbook([rest], crises.filter((c) => c.sessionId === rest.id), students, ateliers, intervenants);
-              downloadBlob(workbookBlob(wb), `seance-${new Date(rest.date).toISOString().slice(0, 10)}.xlsx`);
-              notify('Séance enregistrée et fichier Excel téléchargé');
             }}
           />
         )}
-        {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} />}
+        {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} />}
         {tab === 'export' && (
-          <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} notify={notify} onEditCrisis={editCrisis} />
+          <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} />
         )}
         </div>
       </div>
 
       {/* Bouton de crise, présent sur tous les écrans */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 px-4 pb-4 pt-6" style={{ background: `linear-gradient(to top, ${PAPER} 55%, transparent)` }}>
+      <div
+        className="fixed bottom-0 left-0 right-0 z-30 px-4 pt-6"
+        style={{ background: `linear-gradient(to top, ${PAPER} 55%, transparent)`, paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)' }}
+      >
         <div className="max-w-4xl mx-auto">
           <button
             onClick={openCrisis}
@@ -994,10 +1130,15 @@ export default function App() {
 }
 
 /* ==================== Écran 1 : administratif ==================== */
-function AdminScreen({ students, ateliers, intervenants, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onExportBackup, onImportBackup }) {
+function AdminScreen({ students, ateliers, intervenants, guidances, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onExportBackup, onImportBackup }) {
   const [initials, setInitials] = useState('');
   const [atelier, setAtelier] = useState('');
   const [intervenant, setIntervenant] = useState('');
+  const [addingGuidance, setAddingGuidance] = useState(false);
+  const [gCode, setGCode] = useState('');
+  const [gLabel, setGLabel] = useState('');
+  const [gColor, setGColor] = useState(GUIDANCE_PALETTE[0]);
+  const [gIndep, setGIndep] = useState(false);
   const fileRef = useRef(null);
 
   return (
@@ -1069,6 +1210,81 @@ function AdminScreen({ students, ateliers, intervenants, addStudent, removeStude
               <EditableRow key={i.id} label={i.name} onRename={(v) => renameIntervenant(i.id, v)} onRemove={() => removeIntervenant(i.id)} />
             ))}
           </div>
+        )}
+      </Card>
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-3">
+          <SlidersHorizontal size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Guidances</span>
+          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{guidances.length}</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Utilisées pour les cotations essai par essai et par analyse de tâche. Les guidances marquées d'une étoile
+          comptent comme réussite autonome dans les pourcentages et les critères de maîtrise.
+        </p>
+        <div className="space-y-1.5 mb-3">
+          {guidances.map((g) => (
+            <div key={g.code} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+              <span className="w-9 h-7 rounded-md flex items-center justify-center text-xs font-semibold text-white shrink-0"
+                style={{ backgroundColor: g.color, fontFamily: F_DISPLAY }}>
+                {g.code}
+              </span>
+              <span className="text-sm flex-1 min-w-0 truncate">{g.label}</span>
+              <button onClick={() => onToggleIndependent(g.code)} title="Compte comme indépendant"
+                style={{ color: g.independent ? '#D69A2D' : INK_SOFT }}>
+                <Star size={15} fill={g.independent ? '#D69A2D' : 'none'} />
+              </button>
+              <button onClick={() => onRemoveGuidance(g.code)} style={{ color: INK_SOFT }} title="Supprimer">
+                <X size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+        {addingGuidance ? (
+          <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: BORDER }}>
+            <div className="flex gap-2">
+              <input
+                value={gCode}
+                onChange={(e) => setGCode(e.target.value.toUpperCase().slice(0, 4))}
+                placeholder="Code"
+                className="w-24 rounded-xl border px-3 py-2.5 text-sm bg-transparent text-center"
+                style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
+              />
+              <Field value={gLabel} onChange={setGLabel} placeholder="Intitulé complet" />
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {GUIDANCE_PALETTE.map((c) => (
+                <button key={c} onClick={() => setGColor(c)} className="w-8 h-8 rounded-lg border-2"
+                  style={{ backgroundColor: c, borderColor: gColor === c ? INK : 'transparent' }} />
+              ))}
+            </div>
+            <button onClick={() => setGIndep((v) => !v)} className="flex items-center gap-1.5 text-xs" style={{ color: gIndep ? '#D69A2D' : INK_SOFT }}>
+              <Star size={14} fill={gIndep ? '#D69A2D' : 'none'} /> Compte comme réussite autonome
+            </button>
+            <div className="flex gap-2">
+              <Btn
+                onClick={() => {
+                  const code = gCode.trim();
+                  if (!code || !gLabel.trim()) return;
+                  onAddGuidance({ code, label: gLabel.trim(), color: gColor, independent: gIndep });
+                  setGCode(''); setGLabel(''); setGIndep(false); setAddingGuidance(false);
+                }}
+                disabled={!gCode.trim() || !gLabel.trim() || guidances.some((x) => x.code === gCode.trim())}
+                className="flex-1 text-sm py-2.5"
+              >
+                Ajouter
+              </Btn>
+              <Btn variant="ghost" onClick={() => setAddingGuidance(false)} className="text-sm py-2.5">Annuler</Btn>
+            </div>
+            {guidances.some((x) => x.code === gCode.trim()) && gCode.trim() && (
+              <div className="text-xs" style={{ color: CRISIS }}>Ce code existe déjà.</div>
+            )}
+          </div>
+        ) : (
+          <Btn variant="ghost" onClick={() => setAddingGuidance(true)} className="w-full text-sm">
+            <Plus size={16} /> Ajouter une guidance
+          </Btn>
         )}
       </Card>
 
@@ -1158,12 +1374,18 @@ function StudentsScreen({ students, addObjective, removeObjective, updateObjecti
                             <Icon size={15} style={{ color: meta.color, marginTop: 2 }} />
                             <div>
                               <div className="text-sm">{o.name}</div>
+                            {currentTarget(o) && (
+                              <div className="text-xs mt-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5" style={{ backgroundColor: CARD, color: INK }}>
+                                <Target size={11} /> cible en cours : {currentTarget(o).name}
+                              </div>
+                            )}
                               <div className="text-xs" style={{ color: INK_SOFT }}>
                                 {meta.short}
                                 {o.type === 'trials' && ` · ${o.config.trialCount} essais`}
                                 {o.type === 'interval' && ` · toutes les ${o.config.intervalMinutes} min · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
                                 {o.type === 'chaining' && ` · ${(o.config.steps || []).length} étapes`}
-                                {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions}`}
+                                {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions} ${o.config.mastery.unit === 'days' ? 'jours' : 'séances'}`}
+                                {objectiveTargets(o).length > 0 && ` · ${(o.masteredTargetIds || []).length}/${objectiveTargets(o).length} cibles acquises`}
                               </div>
                             </div>
                           </div>
@@ -1242,6 +1464,8 @@ function ObjectiveForm({ initial, onSubmit, onCancel }) {
   const [intervalMode, setIntervalMode] = useState(initConfig.intervalMode || 'momentane');
   const [steps, setSteps] = useState(initConfig.steps || DEFAULT_CHAIN_STEPS);
   const [newStep, setNewStep] = useState('');
+  const [targets, setTargets] = useState(initConfig.targets || []);
+  const [newTarget, setNewTarget] = useState('');
   const [levels, setLevels] = useState(initConfig.levels || DEFAULT_INTERVAL_LEVELS);
   const [newLevel, setNewLevel] = useState('');
   const [targetLevelId, setTargetLevelId] = useState(
@@ -1249,6 +1473,7 @@ function ObjectiveForm({ initial, onSubmit, onCancel }) {
   );
   const [threshold, setThreshold] = useState((initConfig.mastery || DEFAULT_MASTERY).threshold);
   const [masterySessions, setMasterySessions] = useState((initConfig.mastery || DEFAULT_MASTERY).sessions);
+  const [masteryUnit, setMasteryUnit] = useState((initConfig.mastery || DEFAULT_MASTERY).unit || 'sessions');
 
   function submit() {
     if (!name.trim()) return;
@@ -1261,8 +1486,19 @@ function ObjectiveForm({ initial, onSubmit, onCancel }) {
       config.targetLevelId = levels.some((l) => l.id === targetLevelId) ? targetLevelId : levels[0].id;
     }
     if (type === 'chaining') config.steps = steps;
-    if (PERCENT_TYPES.includes(type)) config.mastery = { threshold, sessions: masterySessions };
-    onSubmit({ id: init.id || uid(), name: name.trim(), type, config, favorite: !!init.favorite });
+    if (PERCENT_TYPES.includes(type)) {
+      config.mastery = { threshold, sessions: masterySessions, unit: masteryUnit };
+      if (targets.length) config.targets = targets;
+    }
+    onSubmit({
+      id: init.id || uid(),
+      name: name.trim(),
+      type,
+      config,
+      favorite: !!init.favorite,
+      currentTargetId: init.currentTargetId || null,
+      masteredTargetIds: init.masteredTargetIds || [],
+    });
   }
 
   return (
@@ -1387,27 +1623,68 @@ function ObjectiveForm({ initial, onSubmit, onCancel }) {
         <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
           <div className="flex items-center gap-1.5 mb-2">
             <Award size={14} style={{ color: INK_SOFT }} />
-            <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Critère de maîtrise</span>
+            <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Critère d'acquisition</span>
           </div>
-          <div className="text-sm mb-2">
-            Acquis à partir de <span style={{ fontFamily: F_MONO }}>{threshold} %</span> sur{' '}
-            <span style={{ fontFamily: F_MONO }}>{masterySessions}</span> séance{masterySessions > 1 ? 's' : ''} consécutive{masterySessions > 1 ? 's' : ''}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm">À partir de</span>
+            <input
+              type="number" min="1" max="100" value={threshold}
+              onChange={(e) => setThreshold(Math.min(100, Math.max(1, Number(e.target.value) || 0)))}
+              className="w-16 rounded-lg border px-2 py-2 text-sm bg-transparent text-center"
+              style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
+            />
+            <span className="text-sm">% sur</span>
+            <input
+              type="number" min="1" max="60" value={masterySessions}
+              onChange={(e) => setMasterySessions(Math.min(60, Math.max(1, Number(e.target.value) || 0)))}
+              className="w-16 rounded-lg border px-2 py-2 text-sm bg-transparent text-center"
+              style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
+            />
+            <div className="flex gap-1">
+              {[{ k: 'sessions', l: 'séances' }, { k: 'days', l: 'jours' }].map((u) => (
+                <button key={u.k} onClick={() => setMasteryUnit(u.k)} className="rounded-lg px-3 py-2 text-xs border"
+                  style={{ borderColor: masteryUnit === u.k ? INK : BORDER, backgroundColor: masteryUnit === u.k ? INK : 'transparent', color: masteryUnit === u.k ? '#fff' : INK_SOFT }}>
+                  {u.l}
+                </button>
+              ))}
+            </div>
+            <span className="text-sm">consécutifs</span>
           </div>
-          <div className="flex gap-1.5 mb-2">
-            {[60, 70, 80, 90, 100].map((n) => (
-              <button key={n} onClick={() => setThreshold(n)} className="flex-1 rounded-lg py-2 text-xs border"
-                style={{ fontFamily: F_MONO, borderColor: threshold === n ? INK : BORDER, backgroundColor: threshold === n ? INK : 'transparent', color: threshold === n ? '#fff' : INK_SOFT }}>
-                {n}%
-              </button>
-            ))}
+          {masteryUnit === 'days' && (
+            <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
+              Plusieurs séances d'une même journée sont moyennées et comptent pour un seul jour.
+            </p>
+          )}
+        </div>
+      )}
+
+      {PERCENT_TYPES.includes(type) && (
+        <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
+          <div className="flex items-center gap-1.5 mb-1">
+            <Target size={14} style={{ color: INK_SOFT }} />
+            <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Cibles successives</span>
+            <span className="text-xs ml-auto" style={{ color: INK_SOFT }}>facultatif</span>
           </div>
-          <div className="flex gap-1.5">
-            {[1, 2, 3, 4, 5].map((n) => (
-              <button key={n} onClick={() => setMasterySessions(n)} className="flex-1 rounded-lg py-2 text-xs border"
-                style={{ fontFamily: F_MONO, borderColor: masterySessions === n ? INK : BORDER, backgroundColor: masterySessions === n ? INK : 'transparent', color: masterySessions === n ? '#fff' : INK_SOFT }}>
-                {n}
-              </button>
-            ))}
+          <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
+            La cotation porte sur une cible à la fois. Dès qu'elle atteint le critère ci-dessus,
+            l'application passe automatiquement à la suivante.
+          </p>
+          {targets.length > 0 && (
+            <div className="space-y-1.5 mb-2">
+              {targets.map((t, i) => (
+                <div key={t.id} className="flex items-center gap-2 rounded-lg px-2.5 py-2" style={{ backgroundColor: CARD }}>
+                  <span className="text-xs w-5 shrink-0" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
+                  <span className="text-sm flex-1 min-w-0 truncate">{t.name}</span>
+                  <button onClick={() => setTargets((ls) => (i > 0 ? [...ls.slice(0, i - 1), ls[i], ls[i - 1], ...ls.slice(i + 1)] : ls))} style={{ color: INK_SOFT }} title="Monter">↑</button>
+                  <button onClick={() => setTargets((ls) => ls.filter((x) => x.id !== t.id))} style={{ color: INK_SOFT }}><X size={14} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Field value={newTarget} onChange={setNewTarget} placeholder="Nom de la cible (ex. rouge)"
+              onEnter={() => { if (newTarget.trim()) { setTargets((ls) => [...ls, { id: uid(), name: newTarget.trim() }]); setNewTarget(''); } }} />
+            <Btn variant="ghost" onClick={() => { if (newTarget.trim()) { setTargets((ls) => [...ls, { id: uid(), name: newTarget.trim() }]); setNewTarget(''); } }} className="px-4 shrink-0"><Plus size={16} /></Btn>
           </div>
         </div>
       )}
@@ -1423,20 +1700,52 @@ function ObjectiveForm({ initial, onSubmit, onCancel }) {
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, sessions, crises, onEditSession, onDeleteSession, activeSession, setActiveSession, onFinish }) {
+function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onMailSession, onSetAtelierGroup, notify, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
-    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} onFinish={onFinish} />;
+    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} onFinish={onFinish} />;
   }
-  return <SessionSetup students={students} ateliers={ateliers} intervenants={intervenants} sessions={sessions} onEditSession={onEditSession} onDeleteSession={onDeleteSession} onStart={setActiveSession} />;
+  return (
+    <SessionSetup
+      students={students} ateliers={ateliers} intervenants={intervenants} sessions={sessions}
+      onEditSession={onEditSession} onDeleteSession={onDeleteSession} onMailSession={onMailSession}
+      onSetAtelierGroup={onSetAtelierGroup} notify={notify}
+      onStart={setActiveSession}
+    />
+  );
 }
 
-function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onStart }) {
+function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onMailSession, onSetAtelierGroup, notify, onStart }) {
   const [atelierId, setAtelierId] = useState(null);
   const [intervenantId, setIntervenantId] = useState(null);
   const [studentIds, setStudentIds] = useState([]);
   const [selected, setSelected] = useState({});
+  const [autoApplied, setAutoApplied] = useState(false);
+
+  const applyGroup = (ids) => {
+    setStudentIds(ids);
+    setSelected(() => {
+      const next = {};
+      ids.forEach((id) => {
+        const st = students.find((s) => s.id === id);
+        next[id] = st ? st.objectives.map((o) => o.id) : [];
+      });
+      return next;
+    });
+    setAutoApplied(true);
+  };
+
+  const pickAtelier = (id) => {
+    const next = atelierId === id ? null : id;
+    setAtelierId(next);
+    if (next) {
+      const a = ateliers.find((x) => x.id === next);
+      const usual = a && a.usualStudentIds ? a.usualStudentIds.filter((sid) => students.some((s) => s.id === sid)) : [];
+      if (usual.length && (studentIds.length === 0 || autoApplied)) applyGroup(usual);
+    }
+  };
 
   const toggleStudent = (id) => {
+    setAutoApplied(false);
     setStudentIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
     setSelected((sel) => {
       if (sel[id]) { const n = { ...sel }; delete n[id]; return n; }
@@ -1450,6 +1759,12 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       return { ...sel, [sid]: cur.includes(oid) ? cur.filter((x) => x !== oid) : [...cur, oid] };
     });
 
+  const currentAtelier = ateliers.find((a) => a.id === atelierId);
+  const sameAsUsual =
+    currentAtelier && currentAtelier.usualStudentIds &&
+    currentAtelier.usualStudentIds.length === studentIds.length &&
+    currentAtelier.usualStudentIds.every((id) => studentIds.includes(id));
+
   const ready = studentIds.length > 0 && studentIds.every((id) => (selected[id] || []).length > 0);
 
   function start() {
@@ -1461,8 +1776,9 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       data[sid] = {};
       (selected[sid] || []).forEach((oid) => {
         const obj = st.objectives.find((o) => o.id === oid);
-        snapshot[oid] = obj;
-        data[sid][oid] = emptyEntry(obj);
+        const cible = currentTarget(obj);
+        snapshot[oid] = { ...obj, activeTargetName: cible ? cible.name : null };
+        data[sid][oid] = { ...emptyEntry(obj), targetId: cible ? cible.id : null };
       });
     });
     onStart({
@@ -1496,10 +1812,17 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
         <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Atelier <span style={{ opacity: 0.7 }}>— facultatif, appuyez à nouveau pour retirer</span></div>
         <div className="space-y-1.5">
           {ateliers.map((a) => (
-            <button key={a.id} onClick={() => setAtelierId(atelierId === a.id ? null : a.id)} className="w-full rounded-xl px-3 py-3 text-left flex items-center justify-between border"
+            <button key={a.id} onClick={() => pickAtelier(a.id)} className="w-full rounded-xl px-3 py-3 text-left flex items-center justify-between border"
               style={{ borderColor: atelierId === a.id ? INK : BORDER, backgroundColor: atelierId === a.id ? INK : 'transparent', color: atelierId === a.id ? '#fff' : INK }}>
-              {a.name}
-              {atelierId === a.id && <Check size={16} />}
+              <span>
+                {a.name}
+                {a.usualStudentIds && a.usualStudentIds.length > 0 && (
+                  <span className="block text-xs mt-0.5" style={{ opacity: 0.7 }}>
+                    Groupe habituel : {a.usualStudentIds.length} élève{a.usualStudentIds.length !== 1 ? 's' : ''}
+                  </span>
+                )}
+              </span>
+              {atelierId === a.id && <Check size={16} className="shrink-0" />}
             </button>
           ))}
         </div>
@@ -1523,7 +1846,18 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       )}
 
       <Card className="mb-4">
-        <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Élèves présents</div>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs" style={{ color: INK_SOFT }}>Élèves présents</span>
+          {atelierId && studentIds.length > 0 && !sameAsUsual && (
+            <button
+              onClick={() => { onSetAtelierGroup(atelierId, studentIds); notify('Groupe habituel mémorisé pour cet atelier'); }}
+              className="text-xs flex items-center gap-1"
+              style={{ color: INK_SOFT }}
+            >
+              <Star size={12} /> Mémoriser ce groupe
+            </button>
+          )}
+        </div>
         <div className="flex flex-wrap gap-2">
           {students.map((s) => {
             const on = studentIds.includes(s.id);
@@ -1587,6 +1921,13 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                     </div>
                   </button>
                   <button
+                    onClick={() => onMailSession(s)}
+                    style={{ color: INK_SOFT }}
+                    title="Envoyer ce rapport par mail"
+                  >
+                    <Mail size={16} />
+                  </button>
+                  <button
                     onClick={() => { if (window.confirm('Supprimer définitivement cette séance ?')) onDeleteSession(s.id); }}
                     style={{ color: INK_SOFT }}
                   >
@@ -1602,10 +1943,50 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   );
 }
 
-function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, onFinish }) {
+function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, onFinish }) {
   const isEdit = !!session.isEdit;
   const [currentId, setCurrentId] = useState(session.studentIds[0]);
   const [viewMode, setViewMode] = useState('priority');
+  const cotationRef = useRef(null);
+
+  /* Balayage horizontal sur la zone de cotation : bascule entre les deux vues.
+     La zone porte data-no-swipe, donc le balayage de page ne s'y déclenche pas. */
+  useEffect(() => {
+    const el = cotationRef.current;
+    if (!el) return undefined;
+    let g = null;
+    const start = (e) => {
+      if (e.touches.length !== 1 || ownsHorizontalGesture(e.target)) { g = null; return; }
+      g = { x: e.touches[0].clientX, y: e.touches[0].clientY, axis: null };
+    };
+    const move = (e) => {
+      if (!g || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - g.x;
+      const dy = e.touches[0].clientY - g.y;
+      if (!g.axis) {
+        if (Math.abs(dx) < 14 && Math.abs(dy) < 14) return;
+        g.axis = Math.abs(dx) > Math.abs(dy) + 6 ? 'x' : 'y';
+      }
+      if (g.axis !== 'x') return;
+      if (e.cancelable) e.preventDefault();
+      g.dx = dx;
+    };
+    const end = () => {
+      if (!g || g.axis !== 'x' || Math.abs(g.dx || 0) < 60) { g = null; return; }
+      setViewMode((g.dx || 0) < 0 ? 'student' : 'priority');
+      g = null;
+    };
+    el.addEventListener('touchstart', start, { passive: true });
+    el.addEventListener('touchmove', move, { passive: false });
+    el.addEventListener('touchend', end, { passive: true });
+    el.addEventListener('touchcancel', end, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', start);
+      el.removeEventListener('touchmove', move);
+      el.removeEventListener('touchend', end);
+      el.removeEventListener('touchcancel', end);
+    };
+  }, []);
   const [now, setNow] = useState(Date.now());
   const [soundOn, setSoundOn] = useState(true);
   const [wakeOk, setWakeOk] = useState(false);
@@ -1643,7 +2024,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
   /* Alerte au passage d'un intervalle */
   useEffect(() => {
-    if (isEdit) return;
+    if (isEdit || session.pausedAt) return;
     const stepSet = new Set();
     Object.values(session.objectiveSnapshot || {}).forEach((o) => {
       if (o && o.type === 'interval') stepSet.add(o.config.intervalMinutes);
@@ -1664,6 +2045,38 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const objIds = session.selectedObjectives[currentId] || [];
   const hasInterval = Object.values(session.objectiveSnapshot || {}).some((o) => o && o.type === 'interval');
 
+  function togglePause() {
+    setSession((s0) => {
+      if (s0.pausedAt) {
+        return { ...s0, pausedMs: (s0.pausedMs || 0) + (Date.now() - s0.pausedAt), pausedAt: null };
+      }
+      // On arrête les chronomètres en cours pour ne pas compter le temps de pause
+      const stamp = Date.now();
+      const data = {};
+      Object.entries(s0.data || {}).forEach(([sid, objs]) => {
+        data[sid] = {};
+        Object.entries(objs).forEach(([oid, e]) => {
+          data[sid][oid] =
+            e && e.running && e.startedAt
+              ? { ...e, running: false, elapsedMs: (e.elapsedMs || 0) + (stamp - e.startedAt), startedAt: null }
+              : e;
+        });
+      });
+      return { ...s0, data, pausedAt: stamp };
+    });
+  }
+
+  function toggleHidden(sid, oid) {
+    setSession((s0) => {
+      const hidden = { ...(s0.hidden || {}) };
+      const list = hidden[sid] || [];
+      hidden[sid] = list.includes(oid) ? list.filter((x) => x !== oid) : [...list, oid];
+      return { ...s0, hidden };
+    });
+  }
+
+  const hiddenFor = (sid) => (session.hidden && session.hidden[sid]) || [];
+
   function updateEntry(sid, oid, patch) {
     setSession((s) => ({
       ...s,
@@ -1671,7 +2084,11 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     }));
   }
 
-  const elapsed = isEdit ? Math.max(0, (session.endedAt || session.startedAt) - session.startedAt) : now - session.startedAt;
+  const pausedTotal = session.pausedMs || 0;
+  const isPaused = !!session.pausedAt;
+  const elapsed = isEdit
+    ? Math.max(0, (session.endedAt || session.startedAt) - session.startedAt - pausedTotal)
+    : Math.max(0, (isPaused ? session.pausedAt : now) - session.startedAt - pausedTotal);
 
   return (
     <div>
@@ -1698,29 +2115,85 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           {isEdit && (
             <Btn variant="ghost" onClick={() => setSession(null)} className="text-sm py-2.5">Annuler</Btn>
           )}
+          {!isEdit && (
+            <button
+              onClick={togglePause}
+              className="rounded-xl px-3 py-2.5 border"
+              style={{ borderColor: isPaused ? INK : BORDER, backgroundColor: isPaused ? INK : CARD, color: isPaused ? '#fff' : INK_SOFT }}
+              title={isPaused ? 'Reprendre la séance' : 'Mettre en pause'}
+            >
+              {isPaused ? <Play size={17} /> : <Pause size={17} />}
+            </button>
+          )}
+          {!isEdit && (
+            <button
+              onClick={() => {
+                if (window.confirm('Abandonner cette séance ? Toutes les cotations en cours seront perdues.')) setSession(null);
+              }}
+              className="rounded-xl px-3 py-2.5 border"
+              style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
+              title="Abandonner la séance"
+            >
+              <X size={17} />
+            </button>
+          )}
           <Btn variant="outline" onClick={() => onFinish(finalizeSession(session))} className="text-sm py-2.5">
             <Save size={16} /> {isEdit ? 'Valider' : 'Enregistrer'}
           </Btn>
         </div>
       </div>
 
-      <div className="flex gap-1.5 mb-4">
-        {[
-          { k: 'priority', label: 'Prioritaires', icon: Star },
-          { k: 'student', label: 'Par élève', icon: Users },
-        ].map((v) => {
-          const Icon = v.icon;
-          const on = viewMode === v.k;
-          return (
-            <button key={v.k} onClick={() => setViewMode(v.k)} className="flex-1 rounded-xl py-2.5 text-sm font-medium flex items-center justify-center gap-1.5 border"
-              style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
-              <Icon size={15} /> {v.label}
-            </button>
-          );
-        })}
+      {(() => {
+        const nb = Object.values(session.hidden || {}).reduce((a, l) => a + l.length, 0);
+        return nb > 0 ? (
+          <button
+            onClick={() => setSession((s0) => ({ ...s0, hidden: {} }))}
+            className="w-full rounded-xl border px-3 py-2 mb-4 text-xs flex items-center justify-center gap-1.5"
+            style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
+          >
+            <Eye size={13} /> {nb} objectif{nb > 1 ? 's' : ''} masqué{nb > 1 ? 's' : ''} — tout réafficher
+          </button>
+        ) : null;
+      })()}
+
+      {isPaused && (
+        <div className="rounded-xl px-3 py-2.5 mb-4 flex items-center gap-2 text-sm" style={{ backgroundColor: INK, color: '#fff' }}>
+          <PauseCircle size={16} />
+          Séance en pause — le chronomètre et les intervalles sont arrêtés.
+        </div>
+      )}
+
+      {/* Mini-curseur : bascule prioritaires / tous les objectifs.
+          Réagit aussi au balayage sur la zone de cotation. */}
+      <div className="flex justify-center mb-4">
+        <div className="relative flex rounded-full p-1 w-full max-w-xs" style={{ backgroundColor: CARD, border: `1px solid ${BORDER}` }}>
+          <div
+            className="absolute top-1 bottom-1 rounded-full"
+            style={{
+              left: viewMode === 'priority' ? '0.25rem' : 'calc(50% - 0.125rem)',
+              width: 'calc(50% - 0.125rem)',
+              backgroundColor: INK,
+              transition: 'left .2s ease-out',
+            }}
+          />
+          {[
+            { k: 'priority', label: 'Prioritaires', icon: Star },
+            { k: 'student', label: 'Par élève', icon: Users },
+          ].map((v) => {
+            const Icon = v.icon;
+            const on = viewMode === v.k;
+            return (
+              <button key={v.k} onClick={() => setViewMode(v.k)}
+                className="relative flex-1 rounded-full py-2 text-sm font-medium flex items-center justify-center gap-1.5"
+                style={{ fontFamily: F_DISPLAY, color: on ? '#fff' : INK_SOFT, transition: 'color .2s' }}>
+                <Icon size={15} /> {v.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      <div className="flex gap-3">
+      <div className="flex gap-3" data-no-swipe ref={cotationRef}>
         {/* Contenu : tous les prioritaires, ou l'élève courant */}
         <div className="flex-1 min-w-0">
           {viewMode === 'priority' ? (
@@ -1756,7 +2229,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                             obj={session.objectiveSnapshot[oid]}
                             entry={session.data[sid][oid]}
                             now={now} elapsed={elapsed}
-                            session={session} crises={crises} studentId={sid}
+                            session={session} crises={crises} studentId={sid} guidances={guidances}
+                            hidden={hiddenFor(sid).includes(oid)}
+                            onToggleHidden={() => toggleHidden(sid, oid)}
                             onChange={(p) => updateEntry(sid, oid, p)}
                           />
                         ))}
@@ -1781,7 +2256,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       obj={obj}
                       entry={session.data[currentId][oid]}
                       now={now} elapsed={elapsed}
-                      session={session} crises={crises} studentId={currentId}
+                      session={session} crises={crises} studentId={currentId} guidances={guidances}
+                      hidden={hiddenFor(currentId).includes(oid)}
+                      onToggleHidden={() => toggleHidden(currentId, oid)}
                       onChange={(p) => updateEntry(currentId, oid, p)}
                     />
                   );
@@ -1837,36 +2314,68 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   );
 }
 
-function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, onChange }) {
+function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onChange }) {
   if (!obj) return null;
   const crisisSet =
     obj.type === 'interval' ? crisisIntervals(session, crises, obj.config.intervalMinutes, studentId) : null;
+  const meta = TYPES[obj.type];
+  const Icon = meta.icon;
+
+  if (hidden) {
+    return (
+      <button
+        onClick={onToggleHidden}
+        className="w-full rounded-2xl border px-3 py-2.5 flex items-center gap-2 text-left"
+        style={{ borderColor: BORDER, backgroundColor: CARD }}
+      >
+        <Icon size={14} style={{ color: meta.color }} className="shrink-0" />
+        <span className="text-sm flex-1 min-w-0 truncate" style={{ color: INK_SOFT }}>{obj.name}</span>
+        <Eye size={15} style={{ color: INK_SOFT }} />
+      </button>
+    );
+  }
+
   return (
     <Card>
-      <ObjectiveHeader obj={obj} entry={entry} />
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <ObjectiveHeader obj={obj} entry={entry} guidances={guidances} />
+        </div>
+        {onToggleHidden && (
+          <button onClick={onToggleHidden} style={{ color: INK_SOFT }} title="Masquer cet objectif" className="shrink-0">
+            <EyeOff size={15} />
+          </button>
+        )}
+      </div>
       <div className="mt-3">
-        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} onChange={onChange} />}
+        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'probe' && <ProbeWidget entry={entry} onChange={onChange} />}
         {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
         {obj.type === 'timer' && <TimerWidget entry={entry} now={now} onChange={onChange} />}
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
-        {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} onChange={onChange} />}
+        {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'latency' && <LatencyWidget entry={entry} now={now} onChange={onChange} />}
       </div>
     </Card>
   );
 }
 
-function ObjectiveHeader({ obj, entry }) {
+function ObjectiveHeader({ obj, entry, guidances }) {
   const meta = TYPES[obj.type];
   const Icon = meta.icon;
-  const { result } = summarize(obj, entry);
+  const { result } = summarize(obj, entry, guidances);
+  const cible = obj.activeTargetName;
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="flex items-start gap-2 min-w-0">
         <Icon size={16} style={{ color: meta.color, marginTop: 2 }} className="shrink-0" />
         <div className="min-w-0">
           <div className="font-medium leading-snug">{obj.name}</div>
+          {cible && (
+            <div className="text-xs mt-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5" style={{ backgroundColor: PAPER, color: INK }}>
+              <Target size={11} /> {cible}
+            </div>
+          )}
           <div className="text-xs mt-0.5" style={{ color: INK_SOFT }}>{result}</div>
         </div>
       </div>
@@ -1875,7 +2384,8 @@ function ObjectiveHeader({ obj, entry }) {
 }
 
 /* --- Widgets de cotation --- */
-function TrialsWidget({ obj, entry, onChange }) {
+function TrialsWidget({ obj, entry, guidances, onChange }) {
+  const list = guidances && guidances.length ? guidances : DEFAULT_GUIDANCE;
   const trials = entry.trials;
   const cursor = trials.findIndex((t) => t === null);
   const active = cursor === -1 ? trials.length - 1 : cursor;
@@ -1904,7 +2414,7 @@ function TrialsWidget({ obj, entry, onChange }) {
     <div>
       <div className="flex gap-1.5 mb-2.5 overflow-x-auto pb-1">
         {trials.map((t, i) => {
-          const g = t ? GUIDANCE_BY_CODE[t] : null;
+          const g = t ? guidanceByCode(list, t) : null;
           return (
             <div
               key={i}
@@ -1922,13 +2432,13 @@ function TrialsWidget({ obj, entry, onChange }) {
           );
         })}
       </div>
-      <div className="flex gap-1.5">
-        {GUIDANCE.map((g) => (
+      <div className="flex flex-wrap gap-1.5">
+        {list.map((g) => (
           <button
             key={g.code}
             onClick={() => record(g.code)}
             disabled={cursor === -1}
-            className="flex-1 rounded-xl py-3 text-white active:scale-95 transition-transform disabled:opacity-30"
+            className="flex-1 min-w-[72px] rounded-xl py-3 text-white active:scale-95 transition-transform disabled:opacity-30"
             style={{ backgroundColor: g.color }}
           >
             <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
@@ -2177,7 +2687,8 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
   );
 }
 
-function ChainingWidget({ obj, entry, onChange }) {
+function ChainingWidget({ obj, entry, guidances, onChange }) {
+  const list = guidances && guidances.length ? guidances : DEFAULT_GUIDANCE;
   const steps = obj.config.steps || [];
   const coded = steps.filter((s) => entry.steps[s.id]).length;
 
@@ -2198,7 +2709,7 @@ function ChainingWidget({ obj, entry, onChange }) {
               <span className="text-xs w-5 shrink-0" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
               <span className="text-sm flex-1 min-w-0 truncate">{s.name}</span>
               <div className="flex gap-1 shrink-0">
-                {GUIDANCE.map((g) => {
+                {list.map((g) => {
                   const on = current === g.code;
                   return (
                     <button key={g.code} onClick={() => setStep(s.id, g.code)}
@@ -2271,7 +2782,7 @@ function LatencyWidget({ entry, now, onChange }) {
 }
 
 /* ==================== Écran suivi : progression et maîtrise ==================== */
-function SuiviScreen({ students, sessions }) {
+function SuiviScreen({ students, sessions, guidances }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
 
   if (students.length === 0) {
@@ -2307,7 +2818,7 @@ function SuiviScreen({ students, sessions }) {
                 <div className="mt-4 space-y-5">
                   {s.objectives.length === 0 && <Empty>Aucun objectif défini.</Empty>}
                   {s.objectives.map((o) => (
-                    <ObjectiveChart key={o.id} obj={o} studentId={s.id} sessions={ordered} />
+                    <ObjectiveChart key={o.id} obj={o} studentId={s.id} sessions={ordered} guidances={guidances} />
                   ))}
                 </div>
               )}
@@ -2319,22 +2830,16 @@ function SuiviScreen({ students, sessions }) {
   );
 }
 
-function ObjectiveChart({ obj, studentId, sessions }) {
+function ObjectiveChart({ obj, studentId, sessions, guidances }) {
   const meta = TYPES[obj.type];
   const Icon = meta.icon;
 
-  const points = [];
-  sessions.forEach((sess) => {
-    const entry = ((sess.data || {})[studentId] || {})[obj.id];
-    if (!entry) return;
-    const sc = objectiveScore(obj, entry);
-    if (!sc) return;
-    points.push({
-      label: new Date(sess.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }),
-      value: sc.value,
-      unit: sc.unit,
-    });
-  });
+  const targets = objectiveTargets(obj);
+  const cible = currentTarget(obj);
+  const doneTargets = obj.masteredTargetIds || [];
+
+  // Avec des cibles, la courbe et le critère ne portent que sur la cible en cours
+  const points = objectivePoints(obj, studentId, sessions, guidances, cible ? cible.id : null);
 
   const percent = PERCENT_TYPES.includes(obj.type);
   const mastery = points.length ? masteryStatus(obj, points) : null;
@@ -2362,14 +2867,34 @@ function ObjectiveChart({ obj, studentId, sessions }) {
               fontFamily: F_DISPLAY,
             }}
           >
-            {mastery.mastered ? <><Award size={13} /> Acquis</> : `${mastery.streak}/${mastery.needed} à ${mastery.threshold} %`}
+            {mastery.mastered
+              ? <><Award size={13} /> Acquis</>
+              : `${mastery.streak}/${mastery.needed} ${mastery.unit === 'days' ? 'jours' : 'séances'} à ${mastery.threshold} %`}
           </span>
         )}
       </div>
 
+      {targets.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {targets.map((t) => {
+            const done = doneTargets.includes(t.id);
+            const active = cible && cible.id === t.id;
+            return (
+              <span key={t.id} className="text-xs rounded-lg px-2 py-1 flex items-center gap-1"
+                style={{
+                  backgroundColor: done ? '#0F8B6C' : active ? INK : PAPER,
+                  color: done || active ? '#fff' : INK_SOFT,
+                }}>
+                {done && <Check size={11} />} {t.name}
+              </span>
+            );
+          })}
+        </div>
+      )}
+
       {points.length === 0 ? (
         <div className="rounded-xl border border-dashed px-3 py-5 text-center text-xs" style={{ borderColor: BORDER, color: INK_SOFT }}>
-          Pas encore de donnée cotée.
+          Pas encore de donnée cotée{cible ? ` pour « ${cible.name} »` : ''}.
         </div>
       ) : (
         <div style={{ height: 170 }} data-no-swipe>
@@ -2402,7 +2927,7 @@ function ObjectiveChart({ obj, studentId, sessions }) {
 }
 
 /* ==================== Écran 4 : export ==================== */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, notify, onEditCrisis }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, notify, onEditCrisis }) {
   const [mode, setMode] = useState('jour');
   const [picked, setPicked] = useState([]);
 
@@ -2416,7 +2941,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, noti
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || 'Séance libre';
 
   function makeFile() {
-    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants);
+    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, guidances);
     const blob = workbookBlob(wb);
     const name = mode === 'global'
       ? `rapport-global-${new Date().toISOString().slice(0, 10)}.xlsx`
@@ -2565,7 +3090,10 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, on
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto" style={{ backgroundColor: PAPER }}>
-      <div className="sticky top-0 px-4 py-4 text-white" style={{ backgroundColor: CRISIS }}>
+      <div
+        className="sticky top-0 px-4 pb-4 text-white"
+        style={{ backgroundColor: CRISIS, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+      >
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <AlertTriangle size={20} className="shrink-0" />
