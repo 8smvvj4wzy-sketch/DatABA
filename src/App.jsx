@@ -71,6 +71,10 @@ function objectiveGuidances(obj, guidances) {
   const sel = all.filter((g) => codes.includes(g.code));
   return sel.length ? sel : all;
 }
+/* Affiché en bas de l'écran Administratif : permet de vérifier d'un coup d'œil
+   quelle version tourne réellement sur l'appareil après une mise en ligne. */
+const APP_VERSION = 'v5 — balayage document';
+
 const GUIDANCE_PALETTE = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
 
 function guidanceByCode(guidances, code) {
@@ -813,27 +817,29 @@ function ownsHorizontalGesture(target, boundary) {
    Le contenu suit le doigt de façon amortie et plafonnée : assez pour que le
    geste soit tangible, sans déplacer toute la page hors de l'écran — ce qui
    provoquait des blancs de rendu sur iOS. */
-function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true }) {
+function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument = false }) {
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [el, setEl] = useState(null);
   const state = useRef(null);
 
   /* L'élément peut n'apparaître qu'à un rendu ultérieur (écran de chargement
-     affiché en premier, par exemple). On le suit à chaque rendu pour que
-     l'écouteur s'attache dès qu'il existe. React ignore un état identique,
-     donc cela ne provoque pas de boucle. */
+     affiché en premier). On le suit à chaque rendu ; React ignore un état
+     identique, donc pas de boucle. */
   useEffect(() => {
-    setEl(ref.current);
+    setEl(ref && ref.current ? ref.current : null);
   });
 
   useEffect(() => {
-    if (!el || !enabled) return undefined;
+    // Au niveau document, le geste fonctionne partout et ne dépend d'aucun montage
+    const target = onDocument ? document : el;
+    if (!target || !enabled) return undefined;
+    const boundary = onDocument ? null : el;
 
     const MAX = 80;
 
     function start(e) {
-      if (e.touches.length !== 1 || ownsHorizontalGesture(e.target, el)) {
+      if (e.touches.length !== 1 || ownsHorizontalGesture(e.target, boundary)) {
         state.current = null;
         return;
       }
@@ -869,17 +875,17 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true }) {
       if (g.dx < 0) { if (onLeft) onLeft(); } else if (onRight) onRight();
     }
 
-    el.addEventListener('touchstart', start, { passive: true });
-    el.addEventListener('touchmove', move, { passive: false });
-    el.addEventListener('touchend', end, { passive: true });
-    el.addEventListener('touchcancel', end, { passive: true });
+    target.addEventListener('touchstart', start, { passive: true });
+    target.addEventListener('touchmove', move, { passive: false });
+    target.addEventListener('touchend', end, { passive: true });
+    target.addEventListener('touchcancel', end, { passive: true });
     return () => {
-      el.removeEventListener('touchstart', start);
-      el.removeEventListener('touchmove', move);
-      el.removeEventListener('touchend', end);
-      el.removeEventListener('touchcancel', end);
+      target.removeEventListener('touchstart', start);
+      target.removeEventListener('touchmove', move);
+      target.removeEventListener('touchend', end);
+      target.removeEventListener('touchcancel', end);
     };
-  }, [el, onLeft, onRight, enabled]);
+  }, [el, onLeft, onRight, enabled, onDocument]);
 
   return { offset, dragging };
 }
@@ -916,7 +922,7 @@ export default function App() {
   );
   const onLeft = React.useCallback(() => goTab(1), [goTab]);
   const onRight = React.useCallback(() => goTab(-1), [goTab]);
-  const { offset, dragging } = useHorizontalSwipe(rootRef, { onLeft, onRight });
+  const { offset, dragging } = useHorizontalSwipe(null, { onLeft, onRight, onDocument: true });
 
   /* --- chargement --- */
   useEffect(() => {
@@ -1424,6 +1430,8 @@ function AdminScreen({ students, ateliers, intervenants, guidances, addStudent, 
           <Btn variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} className="flex-1 text-sm"><Upload size={16} /> Restaurer</Btn>
         </div>
       </Card>
+
+      <p className="text-center text-xs mt-4" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{APP_VERSION}</p>
     </div>
   );
 }
