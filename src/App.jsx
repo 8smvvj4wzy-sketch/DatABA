@@ -816,10 +816,18 @@ function ownsHorizontalGesture(target, boundary) {
 function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true }) {
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [el, setEl] = useState(null);
   const state = useRef(null);
 
+  /* L'élément peut n'apparaître qu'à un rendu ultérieur (écran de chargement
+     affiché en premier, par exemple). On le suit à chaque rendu pour que
+     l'écouteur s'attache dès qu'il existe. React ignore un état identique,
+     donc cela ne provoque pas de boucle. */
   useEffect(() => {
-    const el = ref.current;
+    setEl(ref.current);
+  });
+
+  useEffect(() => {
     if (!el || !enabled) return undefined;
 
     const MAX = 80;
@@ -871,7 +879,7 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true }) {
       el.removeEventListener('touchend', end);
       el.removeEventListener('touchcancel', end);
     };
-  }, [ref, onLeft, onRight, enabled]);
+  }, [el, onLeft, onRight, enabled]);
 
   return { offset, dragging };
 }
@@ -1094,7 +1102,7 @@ export default function App() {
 
   if (!loaded) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: PAPER, color: INK_SOFT, fontFamily: F_BODY }}>
+      <div ref={rootRef} className="min-h-screen flex items-center justify-center" style={{ background: PAPER, color: INK_SOFT, fontFamily: F_BODY }}>
         Chargement…
       </div>
     );
