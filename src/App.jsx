@@ -246,7 +246,7 @@ function emptyEntry(obj) {
   if (obj.type === 'interval') return { marks: {}, segments: [] };
   if (obj.type === 'chaining') return { steps: {} };
   if (obj.type === 'latency') return { latencies: [], running: false, startedAt: null };
-  if (obj.type === 'balance') return { steps: {} };
+  if (obj.type === 'balance') return { trials: [{ steps: {} }] };
   return {};
 }
 
@@ -260,7 +260,7 @@ function entryMatches(obj, entry) {
   if (obj.type === 'interval') return !!entry.marks;
   if (obj.type === 'chaining') return !!entry.steps;
   if (obj.type === 'latency') return Array.isArray(entry.latencies);
-  if (obj.type === 'balance') return !!entry.steps;
+  if (obj.type === 'balance') return Array.isArray(entry.trials) || !!entry.steps;
   return false;
 }
 
@@ -385,26 +385,27 @@ function summarize(obj, entry, guidances) {
   }
   if (obj.type === 'balance') {
     const steps = obj.config.steps || [];
-    const coded = steps.filter((st) => entry.steps[st.id] && entry.steps[st.id].outcome);
-    if (!coded.length) return { result: 'Non coté', detail: '' };
-    const notes = coded.filter((st) => entry.steps[st.id].outcome !== 'manque');
-    const reussis = notes.filter((st) => entry.steps[st.id].outcome === 'reussi').length;
-    const pct = notes.length ? Math.round((reussis / notes.length) * 100) : 0;
-    const manquees = coded.length - notes.length;
-    const demandes = steps.filter((st) => entry.steps[st.id] && entry.steps[st.id].demande);
-    const renforts = steps.map((st, i) => (entry.steps[st.id] && entry.steps[st.id].renforce ? i + 1 : null)).filter(Boolean);
-    const detail = steps
-      .map((st, i) => {
-        const e = entry.steps[st.id];
-        if (!e || !e.outcome) return '';
-        const o = BALANCE_OUTCOMES.find((x) => x.k === e.outcome);
-        return `${i + 1}.${st.name}:${o ? o.short : e.outcome}${e.demande ? '+D' : ''}${e.renforce ? '+R' : ''}`;
+    const st = balanceStats(obj, entry);
+    if (!st.notes && !st.manque) return { result: 'Non coté', detail: '' };
+    const trials = balanceTrials(entry);
+    const detail = trials
+      .map((tr, ti) => {
+        const inner = steps
+          .map((step, i) => {
+            const e = (tr.steps || {})[step.id];
+            if (!e || !e.outcome) return '';
+            const o = BALANCE_OUTCOMES.find((x) => x.k === e.outcome);
+            return `${i + 1}:${o ? o.short : e.outcome}${e.demande ? '+D' : ''}${e.renforce ? '+R' : ''}`;
+          })
+          .filter(Boolean)
+          .join(' ');
+        return inner ? `E${ti + 1}[${inner}]` : '';
       })
       .filter(Boolean)
       .join(' | ');
     return {
-      result: `${reussis}/${notes.length} réussies (${pct} %)${manquees ? ` · ${manquees} manquée${manquees > 1 ? 's' : ''}` : ''}${demandes.length ? ` · ${demandes.length} demande${demandes.length > 1 ? 's' : ''}` : ''}`,
-      detail: `${detail}${renforts.length ? ` — renforcé aux étapes ${renforts.join(', ')}` : ''}`,
+      result: `${st.cotes} essai${st.cotes > 1 ? 's' : ''} · ${st.reussi}/${st.notes} réussies (${st.pct} %)${st.manque ? ` · ${st.manque} manquée${st.manque > 1 ? 's' : ''}` : ''}${st.demandes ? ` · ${st.demandes} demande${st.demandes > 1 ? 's' : ''}` : ''}`,
+      detail: `${detail}${st.renforts.length ? ` — renforcé : ${st.renforts.join(', ')}` : ''}`,
     };
   }
   if (obj.type === 'latency') {
@@ -449,12 +450,10 @@ function objectiveScore(obj, entry, guidances) {
     return { value: Math.round((coded.filter((s) => isIndependentCode(guidances, entry.steps[s.id])).length / coded.length) * 100), percent: true, unit: '%' };
   }
   if (obj.type === 'balance') {
-    const steps = obj.config.steps || [];
-    // Les étapes manquées sont écartées du calcul : elles n'ont pas été présentées
-    const notes = steps.filter((st) => entry.steps[st.id] && entry.steps[st.id].outcome && entry.steps[st.id].outcome !== 'manque');
-    if (!notes.length) return null;
-    const reussis = notes.filter((st) => entry.steps[st.id].outcome === 'reussi').length;
-    return { value: Math.round((reussis / notes.length) * 100), percent: true, unit: '%' };
+    // Les étapes manquées sont écartées : elles n'ont pas été présentées
+    const st = balanceStats(obj, entry);
+    if (!st.notes) return null;
+    return { value: st.pct, percent: true, unit: '%' };
   }
   if (obj.type === 'latency') {
     if (!entry.latencies.length) return null;
@@ -501,6 +500,41 @@ function masteryStatus(obj, points) {
   return { mastered: streak >= m.sessions, threshold: m.threshold, needed: m.sessions, streak: Math.min(streak, m.sessions), unit };
 }
 
+/* --- Balance Program ---
+   Une séance comporte plusieurs essais. Le dernier élément du tableau est
+   l'essai en cours. Les anciennes cotations à un seul passage sont converties
+   à la volée pour rester lisibles. */
+function balanceTrials(entry) {
+  if (Array.isArray(entry.trials)) return entry.trials;
+  if (entry.steps && Object.keys(entry.steps).length) return [{ steps: entry.steps }];
+  return [{ steps: {} }];
+}
+
+function balanceStats(obj, entry) {
+  const steps = obj.config.steps || [];
+  const trials = balanceTrials(entry);
+  let reussi = 0;
+  let notes = 0;
+  let manque = 0;
+  let demandes = 0;
+  const renforts = [];
+  trials.forEach((tr, ti) => {
+    steps.forEach((st, si) => {
+      const e = (tr.steps || {})[st.id];
+      if (!e) return;
+      if (e.demande) demandes += 1;
+      if (e.renforce) renforts.push(`E${ti + 1}·${si + 1}`);
+      if (!e.outcome) return;
+      if (e.outcome === 'manque') { manque += 1; return; }
+      notes += 1;
+      if (e.outcome === 'reussi') reussi += 1;
+    });
+  });
+  const cotes = trials.filter((tr) => Object.values(tr.steps || {}).some((e) => e && e.outcome)).length;
+  const pct = notes ? Math.round((reussi / notes) * 100) : 0;
+  return { reussi, notes, manque, demandes, renforts, nbTrials: trials.length, cotes, pct };
+}
+
 /* --- Cibles d'un objectif ---
    Un objectif peut être découpé en cibles successives (ex. « rouge », puis
    « bleu », puis « vert »). La cotation porte sur la cible courante ; dès que
@@ -523,6 +557,7 @@ function currentTarget(obj) {
 function objectivePoints(obj, studentId, sessions, guidances, targetId) {
   const points = [];
   sessions.forEach((sess) => {
+    if (obj.trackingResetAt && new Date(sess.date) < new Date(obj.trackingResetAt)) return;
     const entry = ((sess.data || {})[studentId] || {})[obj.id];
     if (!entry) return;
     if (targetId && entry.targetId && entry.targetId !== targetId) return;
@@ -646,6 +681,65 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   const ws3 = XLSX.utils.aoa_to_sheet(noteRows);
   ws3['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 10 }, { wch: 70 }];
   XLSX.utils.book_append_sheet(wb, ws3, 'Notes');
+
+  /* Tableau de bord : une ligne par élève/objectif, une colonne par date.
+     Format matriciel directement exploitable en graphique ou tableau croisé. */
+  const dates = Array.from(new Set(sessions.map((x) => new Date(x.date).toLocaleDateString('fr-FR'))))
+    .sort((a, b) => {
+      const [ja, ma, aa] = a.split('/');
+      const [jb, mb, ab] = b.split('/');
+      return new Date(`${aa}-${ma}-${ja}`) - new Date(`${ab}-${mb}-${jb}`);
+    });
+
+  const byRow = new Map();
+  sessions.forEach((sess) => {
+    const jour = new Date(sess.date).toLocaleDateString('fr-FR');
+    (sess.studentIds || []).forEach((sid) => {
+      const objIds = (sess.selectedObjectives && sess.selectedObjectives[sid]) || [];
+      objIds.forEach((oid) => {
+        const obj = (sess.objectiveSnapshot || {})[oid];
+        if (!obj) return;
+        const entry = ((sess.data || {})[sid] || {})[oid];
+        const score = objectiveScore(obj, entry, guidances);
+        if (!score) return;
+        const key = `${sid}|${oid}|${obj.activeTargetName || ''}`;
+        if (!byRow.has(key)) {
+          byRow.set(key, {
+            eleve: studentName(sid),
+            objectif: obj.name,
+            cible: obj.activeTargetName || '—',
+            unite: score.percent ? '%' : score.unit,
+            valeurs: {},
+          });
+        }
+        const r = byRow.get(key);
+        // Plusieurs séances le même jour : on retient la moyenne
+        const prev = r.valeurs[jour];
+        r.valeurs[jour] = prev === undefined ? score.value : Math.round((prev + score.value) / 2);
+      });
+    });
+  });
+
+  const dashRows = [['Élève', 'Objectif', 'Cible', 'Unité', ...dates, 'Dernier', 'Moyenne', 'Tendance']];
+  Array.from(byRow.values())
+    .sort((a, b) => a.eleve.localeCompare(b.eleve) || a.objectif.localeCompare(b.objectif))
+    .forEach((r) => {
+      const serie = dates.map((d) => (r.valeurs[d] === undefined ? '' : r.valeurs[d]));
+      const chiffres = serie.filter((v) => v !== '');
+      const dernier = chiffres.length ? chiffres[chiffres.length - 1] : '';
+      const moyenne = chiffres.length ? Math.round(chiffres.reduce((a, b) => a + b, 0) / chiffres.length) : '';
+      let tendance = '';
+      if (chiffres.length >= 2) {
+        const delta = chiffres[chiffres.length - 1] - chiffres[0];
+        tendance = delta > 0 ? `+${delta}` : `${delta}`;
+      }
+      dashRows.push([r.eleve, r.objectif, r.cible, r.unite, ...serie, dernier, moyenne, tendance]);
+    });
+
+  const ws4 = XLSX.utils.aoa_to_sheet(dashRows);
+  ws4['!cols'] = [{ wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 7 }, ...dates.map(() => ({ wch: 11 })), { wch: 9 }, { wch: 9 }, { wch: 10 }];
+  ws4['!freeze'] = { xSplit: 4, ySplit: 1 };
+  XLSX.utils.book_append_sheet(wb, ws4, 'Tableau de bord');
 
   return wb;
 }
@@ -1035,6 +1129,12 @@ export default function App() {
     setStudents((s) => s.map((st) => (targetIds.includes(st.id) ? { ...st, objectives: [...st.objectives, { ...objective, id: uid() }] } : st)));
     notify(`Objectif copié vers ${targetIds.length} élève${targetIds.length !== 1 ? 's' : ''}`);
   };
+  const resetTracking = (studentId, objId) =>
+    setStudents((s) => s.map((st) => (st.id === studentId
+      ? { ...st, objectives: st.objectives.map((o) => (o.id === objId
+          ? { ...o, trackingResetAt: new Date().toISOString(), masteredTargetIds: [], currentTargetId: null }
+          : o)) }
+      : st)));
   const toggleFavorite = (studentId, objId) =>
     setStudents((s) => s.map((st) => (st.id === studentId ? { ...st, objectives: st.objectives.map((o) => (o.id === objId ? { ...o, favorite: !o.favorite } : o)) } : st)));
 
@@ -1203,7 +1303,7 @@ export default function App() {
             }}
           />
         )}
-        {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} />}
+        {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} onResetTracking={resetTracking} />}
         {tab === 'export' && (
           <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} />
         )}
@@ -1278,7 +1378,9 @@ function AdminScreen({ students, ateliers, intervenants, guidances, addStudent, 
                 key={s.id}
                 label={s.initials}
                 onRename={(v) => renameStudent(s.id, v)}
-                onRemove={() => removeStudent(s.id)}
+                onRemove={() => {
+                  if (window.confirm(`Supprimer ${s.initials} et ses ${s.objectives.length} objectif(s) ?`)) removeStudent(s.id);
+                }}
               />
             ))}
           </div>
@@ -1510,7 +1612,10 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                             </button>
                             <button onClick={() => { setCopyingObj(copyingObj === o.id ? null : o.id); setCopyTargets([]); }} style={{ color: INK_SOFT }} title="Copier vers d'autres élèves"><Copy size={15} /></button>
                             <button onClick={() => setEditingObj(o.id)} style={{ color: INK_SOFT }} title="Modifier"><Pencil size={15} /></button>
-                            <button onClick={() => removeObjective(s.id, o.id)} style={{ color: INK_SOFT }} title="Supprimer"><Trash2 size={15} /></button>
+                            <button
+                              onClick={() => { if (window.confirm(`Supprimer l'objectif « ${o.name} » ?`)) removeObjective(s.id, o.id); }}
+                              style={{ color: INK_SOFT }} title="Supprimer"
+                            ><Trash2 size={15} /></button>
                           </div>
                         </div>
 
@@ -1723,12 +1828,17 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
         <div>
           <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Étapes de la séquence, dans l'ordre</div>
           <div className="space-y-1.5 mb-2">
-            {steps.map((s, i) => (
-              <div key={s.id} className="flex items-center gap-2 rounded-lg px-2.5 py-2" style={{ backgroundColor: PAPER }}>
+            {steps.map((st, i) => (
+              <div key={st.id} className="flex items-center gap-2 rounded-lg px-2.5 py-2" style={{ backgroundColor: PAPER }}>
                 <span className="text-xs w-5 shrink-0" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
-                <span className="text-sm flex-1">{s.name}</span>
+                <input
+                  value={st.name}
+                  onChange={(e) => setSteps((ls) => ls.map((x) => (x.id === st.id ? { ...x, name: e.target.value } : x)))}
+                  className="text-sm flex-1 min-w-0 bg-transparent border-b"
+                  style={{ borderColor: BORDER, color: INK, fontFamily: F_BODY }}
+                />
                 <button onClick={() => setSteps((ls) => (i > 0 ? [...ls.slice(0, i - 1), ls[i], ls[i - 1], ...ls.slice(i + 1)] : ls))} style={{ color: INK_SOFT }} title="Monter">↑</button>
-                <button onClick={() => setSteps((ls) => ls.filter((x) => x.id !== s.id))} style={{ color: INK_SOFT }}><X size={14} /></button>
+                <button onClick={() => setSteps((ls) => ls.filter((x) => x.id !== st.id))} style={{ color: INK_SOFT }}><X size={14} /></button>
               </div>
             ))}
           </div>
@@ -1887,6 +1997,11 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   const [studentIds, setStudentIds] = useState([]);
   const [selected, setSelected] = useState({});
   const [autoApplied, setAutoApplied] = useState(false);
+  const [mode, setMode] = useState('atelier');
+
+  /* En mode Balance Program, seuls les objectifs de ce type sont proposés :
+     chaque élève a le sien. Il reste disponible dans un atelier classique. */
+  const visibleObjectives = (st) => (mode === 'balance' ? st.objectives.filter((o) => o.type === 'balance') : st.objectives);
 
   const applyGroup = (ids) => {
     setStudentIds(ids);
@@ -1894,7 +2009,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       const next = {};
       ids.forEach((id) => {
         const st = students.find((s) => s.id === id);
-        next[id] = st ? st.objectives.map((o) => o.id) : [];
+        next[id] = st ? visibleObjectives(st).map((o) => o.id) : [];
       });
       return next;
     });
@@ -1917,7 +2032,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
     setSelected((sel) => {
       if (sel[id]) { const n = { ...sel }; delete n[id]; return n; }
       const st = students.find((s) => s.id === id);
-      return { ...sel, [id]: st ? st.objectives.map((o) => o.id) : [] };
+      return { ...sel, [id]: st ? visibleObjectives(st).map((o) => o.id) : [] };
     });
   };
   const toggleObjective = (sid, oid) =>
@@ -1952,7 +2067,8 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       id: uid(),
       date: new Date().toISOString(),
       startedAt: Date.now(),
-      atelierId,
+      mode,
+      atelierId: mode === 'balance' ? null : atelierId,
       intervenantId,
       studentIds,
       selectedObjectives: selected,
@@ -1975,6 +2091,33 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
     <div>
       <SectionTitle sub="Choisissez l'atelier, les élèves présents et les objectifs travaillés.">Nouvelle session</SectionTitle>
 
+      <div className="flex gap-1.5 mb-4">
+        {[
+          { k: 'atelier', label: 'Atelier', icon: Layers },
+          { k: 'balance', label: 'Balance Program', icon: Route },
+        ].map((m) => {
+          const Icon = m.icon;
+          const on = mode === m.k;
+          return (
+            <button
+              key={m.k}
+              onClick={() => { setMode(m.k); setStudentIds([]); setSelected({}); setAutoApplied(false); }}
+              className="flex-1 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-1.5 border"
+              style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}
+            >
+              <Icon size={15} /> {m.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {mode === 'balance' && (
+        <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
+          Sélectionnez les élèves concernés : chacun cotera son propre Balance Program.
+        </p>
+      )}
+
+      {mode === 'atelier' && (
       <Card className="mb-4">
         <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Atelier <span style={{ opacity: 0.7 }}>— facultatif, appuyez à nouveau pour retirer</span></div>
         <div className="space-y-1.5">
@@ -1994,6 +2137,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
           ))}
         </div>
       </Card>
+      )}
 
       {intervenants.length > 0 && (
         <Card className="mb-4">
@@ -2015,7 +2159,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       <Card className="mb-4">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs" style={{ color: INK_SOFT }}>Élèves présents</span>
-          {atelierId && studentIds.length > 0 && !sameAsUsual && (
+          {mode === 'atelier' && atelierId && studentIds.length > 0 && !sameAsUsual && (
             <button
               onClick={() => { onSetAtelierGroup(atelierId, studentIds); notify('Groupe habituel mémorisé pour cet atelier'); }}
               className="text-xs flex items-center gap-1"
@@ -2044,11 +2188,13 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
         return (
           <Card key={sid} className="mb-3">
             <div className="font-semibold mb-2" style={{ fontFamily: F_DISPLAY }}>{st.initials}</div>
-            {st.objectives.length === 0 ? (
-              <div className="text-sm" style={{ color: INK_SOFT }}>Aucun objectif défini pour cet élève.</div>
+            {visibleObjectives(st).length === 0 ? (
+              <div className="text-sm" style={{ color: INK_SOFT }}>
+                {mode === 'balance' ? 'Aucun Balance Program défini pour cet élève.' : 'Aucun objectif défini pour cet élève.'}
+              </div>
             ) : (
               <div className="space-y-1.5">
-                {st.objectives.map((o) => {
+                {visibleObjectives(st).map((o) => {
                   const on = (selected[sid] || []).includes(o.id);
                   const meta = TYPES[o.type];
                   const Icon = meta.icon;
@@ -2082,7 +2228,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
               return (
                 <div key={s.id} className="flex items-center gap-2 rounded-xl border px-3 py-2.5" style={{ borderColor: BORDER, backgroundColor: CARD }}>
                   <button className="flex-1 text-left" onClick={() => onEditSession(s)}>
-                    <div className="text-sm font-medium">{a ? a.name : 'Séance libre'}</div>
+                    <div className="text-sm font-medium">{a ? a.name : s.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</div>
                     <div className="text-xs" style={{ color: INK_SOFT }}>
                       {new Date(s.date).toLocaleDateString('fr-FR')} {timeShort(s.date)} · {s.studentIds.length} élève{s.studentIds.length !== 1 ? 's' : ''}
                     </div>
@@ -2229,7 +2375,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     <div>
       <div className="flex items-start justify-between mb-4 gap-2">
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>{atelier ? atelier.name : 'Séance libre'}</h1>
+          <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>{atelier ? atelier.name : session.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</h1>
           <p className="text-sm" style={{ color: INK_SOFT }}>
             {isEdit ? <>Correction · {new Date(session.date).toLocaleDateString('fr-FR')} {timeShort(session.date)}</> : <span style={{ fontFamily: F_MONO }}>{fmtClock(elapsed)}</span>}
             {intervenant && <> · {intervenant.name}</>}
@@ -2903,22 +3049,72 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
 
 function BalanceWidget({ obj, entry, onChange }) {
   const steps = obj.config.steps || [];
+  const trials = balanceTrials(entry);
+  const [active, setActive] = useState(trials.length - 1);
+  const idx = Math.min(active, trials.length - 1);
+  const trial = trials[idx] || { steps: {} };
 
-  function setStep(stepId, patch) {
-    const cur = entry.steps[stepId] || {};
-    const next = { ...entry.steps, [stepId]: { ...cur, ...patch } };
-    if (!next[stepId].outcome && !next[stepId].demande && !next[stepId].renforce) delete next[stepId];
-    onChange({ steps: next });
+  function writeTrials(next) {
+    onChange({ trials: next, steps: undefined });
   }
 
-  const coded = steps.filter((st) => entry.steps[st.id] && entry.steps[st.id].outcome).length;
-  const renforts = steps.map((st, i) => (entry.steps[st.id] && entry.steps[st.id].renforce ? i + 1 : null)).filter(Boolean);
+  function setStep(stepId, patch) {
+    const cur = (trial.steps || {})[stepId] || {};
+    const merged = { ...cur, ...patch };
+    const nextSteps = { ...(trial.steps || {}), [stepId]: merged };
+    if (!merged.outcome && !merged.demande && !merged.renforce) delete nextSteps[stepId];
+    const next = trials.map((t, i) => (i === idx ? { ...t, steps: nextSteps } : t));
+    writeTrials(next);
+  }
+
+  function validateTrial() {
+    const next = [...trials, { steps: {} }];
+    writeTrials(next);
+    setActive(next.length - 1);
+  }
+
+  function removeTrial() {
+    if (trials.length <= 1) { writeTrials([{ steps: {} }]); setActive(0); return; }
+    const next = trials.filter((_, i) => i !== idx);
+    writeTrials(next);
+    setActive(Math.max(0, idx - 1));
+  }
+
+  const trialCoded = Object.values(trial.steps || {}).some((e) => e && e.outcome);
+  const stats = balanceStats(obj, entry);
+  const renfortsEssai = steps.map((st, i) => ((trial.steps || {})[st.id] || {}).renforce ? i + 1 : null).filter(Boolean);
 
   return (
     <div>
+      {/* Essais de la séance : le dernier est celui en cours */}
+      <div className="flex flex-wrap gap-1 mb-2.5 items-center">
+        {trials.map((t, i) => {
+          const coded = Object.values(t.steps || {}).some((e) => e && e.outcome);
+          const on = i === idx;
+          return (
+            <button
+              key={i}
+              onClick={() => setActive(i)}
+              className="rounded-lg px-2.5 py-1.5 text-xs border"
+              style={{
+                fontFamily: F_MONO,
+                borderColor: on ? TYPES.balance.color : BORDER,
+                backgroundColor: on ? TYPES.balance.color : coded ? PAPER : 'transparent',
+                color: on ? '#fff' : INK_SOFT,
+              }}
+            >
+              E{i + 1}
+            </button>
+          );
+        })}
+        <span className="text-xs ml-auto" style={{ color: INK_SOFT }}>
+          {stats.cotes} coté{stats.cotes > 1 ? 's' : ''} · <span style={{ fontFamily: F_MONO }}>{stats.pct} %</span>
+        </span>
+      </div>
+
       <div className="space-y-2">
         {steps.map((st, i) => {
-          const e = entry.steps[st.id] || {};
+          const e = (trial.steps || {})[st.id] || {};
           return (
             <div key={st.id} className="rounded-xl px-2.5 py-2" style={{ backgroundColor: PAPER }}>
               <div className="flex items-center gap-2 mb-1.5">
@@ -2962,16 +3158,24 @@ function BalanceWidget({ obj, entry, onChange }) {
         })}
       </div>
 
-      <div className="flex items-center justify-between mt-2 gap-2">
-        <span className="text-xs" style={{ color: INK_SOFT }}>
-          {coded}/{steps.length} étapes cotées
-          {renforts.length > 0 && <> · renforcé aux étapes <span style={{ fontFamily: F_MONO }}>{renforts.join(', ')}</span></>}
-        </span>
-        {coded > 0 && (
-          <button onClick={() => onChange({ steps: {} })} className="text-xs flex items-center gap-1 shrink-0" style={{ color: INK_SOFT }}>
-            <RotateCcw size={12} /> tout effacer
-          </button>
-        )}
+      <div className="flex items-center gap-2 mt-2.5">
+        <Btn
+          onClick={validateTrial}
+          disabled={!trialCoded || idx !== trials.length - 1}
+          className="flex-1 text-sm py-2.5"
+          style={{ backgroundColor: TYPES.balance.color }}
+        >
+          <Check size={16} /> Valider l'essai
+        </Btn>
+        <button onClick={removeTrial} className="rounded-xl px-3 py-2.5 border" style={{ borderColor: BORDER, color: INK_SOFT }} title="Supprimer cet essai">
+          <Trash2 size={15} />
+        </button>
+      </div>
+
+      <div className="text-xs mt-1.5" style={{ color: INK_SOFT }}>
+        Essai {idx + 1}
+        {renfortsEssai.length > 0 && <> · renforcé aux étapes <span style={{ fontFamily: F_MONO }}>{renfortsEssai.join(', ')}</span></>}
+        {idx !== trials.length - 1 && ' · essai déjà validé, en cours de correction'}
       </div>
     </div>
   );
@@ -3023,7 +3227,7 @@ function LatencyWidget({ entry, now, onChange }) {
 }
 
 /* ==================== Écran suivi : progression et maîtrise ==================== */
-function SuiviScreen({ students, sessions, guidances }) {
+function SuiviScreen({ students, sessions, guidances, onResetTracking }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
 
   if (students.length === 0) {
@@ -3059,7 +3263,7 @@ function SuiviScreen({ students, sessions, guidances }) {
                 <div className="mt-4 space-y-5">
                   {s.objectives.length === 0 && <Empty>Aucun objectif défini.</Empty>}
                   {s.objectives.map((o) => (
-                    <ObjectiveChart key={o.id} obj={o} studentId={s.id} sessions={ordered} guidances={guidances} />
+                    <ObjectiveChart key={o.id} obj={o} studentId={s.id} sessions={ordered} guidances={guidances} onReset={() => onResetTracking(s.id, o.id)} />
                   ))}
                 </div>
               )}
@@ -3071,7 +3275,7 @@ function SuiviScreen({ students, sessions, guidances }) {
   );
 }
 
-function ObjectiveChart({ obj, studentId, sessions, guidances }) {
+function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
   const meta = TYPES[obj.type];
   const Icon = meta.icon;
 
@@ -3163,6 +3367,26 @@ function ObjectiveChart({ obj, studentId, sessions, guidances }) {
           </ResponsiveContainer>
         </div>
       )}
+      {onReset && (points.length > 0 || obj.trackingResetAt) && (
+        <div className="flex items-center justify-between mt-1.5">
+          {obj.trackingResetAt ? (
+            <span className="text-xs" style={{ color: INK_SOFT }}>
+              Suivi repris le {new Date(obj.trackingResetAt).toLocaleDateString('fr-FR')}
+            </span>
+          ) : (
+            <span />
+          )}
+          <button
+            onClick={() => {
+              if (window.confirm(`Réinitialiser le suivi de « ${obj.name} » ?\n\nLa courbe et le critère repartent de zéro. Les séances déjà enregistrées ne sont pas supprimées et restent dans les exports.`)) onReset();
+            }}
+            className="text-xs flex items-center gap-1"
+            style={{ color: INK_SOFT }}
+          >
+            <RotateCcw size={12} /> Réinitialiser le suivi
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -3180,6 +3404,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
   const chosenCrises = mode === 'global' ? crises : todayCrises;
 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || 'Séance libre';
+  const sessionLabel = (sess) => (sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Balance Program' : 'Séance libre');
 
   function makeFile() {
     const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, guidances);
@@ -3248,7 +3473,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                   className="w-full rounded-xl px-3.5 py-3 flex items-center justify-between border text-left"
                   style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK + '0d' : CARD }}>
                   <div>
-                    <div className="text-sm font-medium">{atelierName(s.atelierId)}</div>
+                    <div className="text-sm font-medium">{sessionLabel(s)}</div>
                     <div className="text-xs" style={{ color: INK_SOFT }}>{timeShort(s.date)} · {s.studentIds.length} élève{s.studentIds.length !== 1 ? 's' : ''}</div>
                   </div>
                   <div className="w-6 h-6 rounded-md border flex items-center justify-center" style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent' }}>
