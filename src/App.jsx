@@ -71,10 +71,6 @@ function objectiveGuidances(obj, guidances) {
   const sel = all.filter((g) => codes.includes(g.code));
   return sel.length ? sel : all;
 }
-/* Affiché en bas de l'écran Administratif : permet de vérifier d'un coup d'œil
-   quelle version tourne réellement sur l'appareil après une mise en ligne. */
-const APP_VERSION = 'v5 — balayage document';
-
 const GUIDANCE_PALETTE = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
 
 function guidanceByCode(guidances, code) {
@@ -1430,8 +1426,6 @@ function AdminScreen({ students, ateliers, intervenants, guidances, addStudent, 
           <Btn variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} className="flex-1 text-sm"><Upload size={16} /> Restaurer</Btn>
         </div>
       </Card>
-
-      <p className="text-center text-xs mt-4" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{APP_VERSION}</p>
     </div>
   );
 }
