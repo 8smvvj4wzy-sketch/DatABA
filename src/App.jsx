@@ -4,9 +4,9 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceL
 import {
   Plus, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
   Timer as TimerIcon, ListChecks, LayoutGrid, CheckCircle2, RotateCcw, Save,
-  Mail, Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
+  Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle,
+  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -87,7 +87,7 @@ const TYPES = {
   occurrence: { label: 'Par occurrence', short: 'Occurrence', icon: Hash, color: '#0F8B6C' },
   timer: { label: 'Timer (durée)', short: 'Timer', icon: TimerIcon, color: '#C36A2E' },
   interval: { label: 'Niveau par intervalle', short: 'Intervalle', icon: LayoutGrid, color: '#6B5178' },
-  chaining: { label: 'Analyse de tâche', short: 'Chaînage', icon: ListOrdered, color: '#2E8B7A' },
+  chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: '#2E8B7A' },
   latency: { label: 'Latence', short: 'Latence', icon: Gauge, color: '#B07A2E' },
   balance: { label: 'Balance Program', short: 'Balance', icon: Route, color: '#A0567A' },
 };
@@ -129,6 +129,173 @@ const PERCENT_TYPES = ['trials', 'probe', 'interval', 'chaining', 'balance'];
 const USES_GUIDANCE = ['trials', 'chaining', 'probe'];
 const DEFAULT_MASTERY = { threshold: 80, sessions: 3, unit: 'sessions' };
 
+/* ==================== Sécurité : code PIN et sauvegarde chiffrée ====================
+   Tout se fait avec l'API Web Crypto du navigateur, sans aucun serveur.
+   Le PIN n'est jamais stocké en clair : seul son empreinte (dérivée par PBKDF2)
+   est conservée, avec un sel propre à cette installation. La sauvegarde est
+   chiffrée avec un mot de passe distinct du PIN, saisi à chaque export/import. */
+
+function toB64(buf) {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  return btoa(binary);
+}
+function fromB64(b64) {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+async function deriveAesKey(passphrase, salt) {
+  const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+async function encryptJSON(obj, passphrase) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveAesKey(passphrase, salt);
+  const data = new TextEncoder().encode(JSON.stringify(obj));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+  return { format: 'aba-backup-encrypted', version: 1, salt: toB64(salt), iv: toB64(iv), data: toB64(ciphertext) };
+}
+
+async function decryptJSON(envelope, passphrase) {
+  const key = await deriveAesKey(passphrase, fromB64(envelope.salt));
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(envelope.iv) }, key, fromB64(envelope.data));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+async function hashPin(pin, saltB64) {
+  const salt = fromB64(saltB64);
+  const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' }, keyMaterial, 256);
+  return toB64(bits);
+}
+function newSalt() {
+  return toB64(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+/* ==================== Écran de verrouillage ==================== */
+function PinPad({ title, subtitle, onSubmit, error, digits = 4, submitLabel }) {
+  const [value, setValue] = useState('');
+  function press(d) {
+    if (value.length >= digits) return;
+    const next = value + d;
+    setValue(next);
+    if (next.length === digits && !submitLabel) onSubmit(next);
+  }
+  function backspace() {
+    setValue((v) => v.slice(0, -1));
+  }
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{ background: PAPER, fontFamily: F_BODY }}>
+      <div className="w-full max-w-xs">
+        <h1 className="text-xl font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY, color: INK }}>{title}</h1>
+        {subtitle && <p className="text-sm text-center mb-5" style={{ color: INK_SOFT }}>{subtitle}</p>}
+        <div className="flex justify-center gap-3 mb-6">
+          {Array.from({ length: digits }, (_, i) => (
+            <div key={i} className="w-4 h-4 rounded-full border-2" style={{ borderColor: INK, backgroundColor: i < value.length ? INK : 'transparent' }} />
+          ))}
+        </div>
+        {error && <p className="text-sm text-center mb-4" style={{ color: CRISIS }}>{error}</p>}
+        <div className="grid grid-cols-3 gap-3">
+          {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((d, i) =>
+            d === '' ? <div key={i} /> : (
+              <button
+                key={i}
+                onClick={() => (d === '⌫' ? backspace() : press(d))}
+                className="rounded-2xl py-4 text-xl font-medium active:scale-95 transition-transform"
+                style={{ backgroundColor: CARD, color: INK, fontFamily: F_DISPLAY, border: `1px solid ${BORDER}` }}
+              >
+                {d}
+              </button>
+            )
+          )}
+        </div>
+        {submitLabel && (
+          <Btn onClick={() => onSubmit(value)} disabled={value.length !== digits} className="w-full mt-5">{submitLabel}</Btn>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LockScreen({ security, onUnlock, onSetup }) {
+  const [step, setStep] = useState(security.pinHash ? 'enter' : 'create1');
+  const [firstPin, setFirstPin] = useState('');
+  const [error, setError] = useState('');
+  const [showReset, setShowReset] = useState(false);
+
+  async function handleEnter(pin) {
+    const hash = await hashPin(pin, security.pinSalt);
+    if (hash === security.pinHash) {
+      onUnlock();
+    } else {
+      setError('Code incorrect');
+      setTimeout(() => setError(''), 1200);
+    }
+  }
+
+  async function handleCreate1(pin) {
+    setFirstPin(pin);
+    setStep('create2');
+  }
+  async function handleCreate2(pin) {
+    if (pin !== firstPin) {
+      setError('Les deux codes ne correspondent pas');
+      setStep('create1');
+      setFirstPin('');
+      setTimeout(() => setError(''), 1500);
+      return;
+    }
+    const salt = newSalt();
+    const hash = await hashPin(pin, salt);
+    await onSetup(hash, salt);
+  }
+
+  if (step === 'enter') {
+    return (
+      <div>
+        <PinPad title="Code verrouillé" subtitle="Saisissez votre code à 4 chiffres" onSubmit={handleEnter} error={error} />
+        <div className="fixed bottom-8 left-0 right-0 text-center">
+          <button onClick={() => setShowReset(true)} className="text-xs underline" style={{ color: INK_SOFT }}>Code oublié ?</button>
+        </div>
+        {showReset && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+            <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
+              <h2 className="font-semibold mb-2" style={{ fontFamily: F_DISPLAY }}>Réinitialiser le code</h2>
+              <p className="text-sm mb-4" style={{ color: INK_SOFT }}>
+                Sans le code, la seule solution est d'effacer toutes les données de cette tablette pour repartir à zéro.
+                Si vous avez une sauvegarde chiffrée, vous pourrez la restaurer ensuite avec son mot de passe.
+              </p>
+              <div className="flex gap-2">
+                <Btn
+                  onClick={async () => { await store.clearAll(); window.location.reload(); }}
+                  className="flex-1 text-sm"
+                  style={{ backgroundColor: CRISIS }}
+                >
+                  Effacer et recommencer
+                </Btn>
+                <Btn variant="ghost" onClick={() => setShowReset(false)} className="text-sm">Annuler</Btn>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <PinPad
+      title={step === 'create1' ? 'Créer un code' : 'Confirmez le code'}
+      subtitle={step === 'create1' ? 'Choisissez un code à 4 chiffres pour protéger l\'application' : 'Ressaisissez le même code'}
+      onSubmit={step === 'create1' ? handleCreate1 : handleCreate2}
+      error={error}
+    />
+  );
+}
+
 /* ==================== Stockage ====================
    Dans Claude, window.storage est disponible. Une fois l'application hébergée
    ailleurs (PWA, APK, iOS), il n'existe plus : on bascule sur localStorage.
@@ -160,6 +327,23 @@ const store = {
     }
     try {
       window.localStorage.setItem(key, value);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+  async clearAll() {
+    if (typeof window !== 'undefined' && window.storage) {
+      try {
+        const list = await window.storage.list('', false);
+        if (list && list.keys) await Promise.all(list.keys.map((k) => window.storage.delete(k, false)));
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+    try {
+      window.localStorage.clear();
       return true;
     } catch (e) {
       return false;
@@ -197,11 +381,20 @@ function beep() {
   } catch (e) {}
 }
 
-function alertInterval(soundOn) {
+/* Vibration : non supportée par Safari sur iPhone/iPad, où seul le son
+   fonctionnera. Sur Android, le motif court-pause-court est bien distinct
+   d'une notification ordinaire. */
+function vibrateSupported() {
+  return typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
+}
+
+function alertInterval({ soundOn, vibrateOn }) {
   if (soundOn) beep();
-  try {
-    if (navigator.vibrate) navigator.vibrate([130, 70, 130]);
-  } catch (e) {}
+  if (vibrateOn && vibrateSupported()) {
+    try {
+      navigator.vibrate([200, 100, 200, 100, 300]);
+    } catch (e) {}
+  }
 }
 
 /* ==================== Utilitaires ==================== */
@@ -239,7 +432,7 @@ function fromLocalInput(value) {
 }
 
 function emptyEntry(obj) {
-  if (obj.type === 'trials') return { trials: Array(obj.config.trialCount).fill(null) };
+  if (obj.type === 'trials') return { trials: obj.config.trialCount ? Array(obj.config.trialCount).fill(null) : [] };
   if (obj.type === 'probe') return { value: null, guidance: null };
   if (obj.type === 'occurrence') return { count: 0 };
   if (obj.type === 'timer') return { elapsedMs: 0, running: false, startedAt: null };
@@ -647,7 +840,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances) 
             const code = entry.steps && entry.steps[st.id];
             if (!code) return;
             const g = guidanceByCode(guidances, code);
-            rows.push([...b, 'Analyse de tâche', i + 1, st.name, g ? g.label : code, isIndependentCode(guidances, code) ? 1 : 0, '', '']);
+            rows.push([...b, 'Chaînage', i + 1, st.name, g ? g.label : code, isIndependentCode(guidances, code) ? 1 : 0, '', '']);
           });
         }
 
@@ -851,26 +1044,23 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
-/* Envoi d'un rapport : partage natif avec pièce jointe si disponible
-   (cas Android), sinon téléchargement + ouverture du mail pré-rempli. */
-async function shareReport({ blob, name, subject, body, notify }) {
+/* Partage d'un rapport : passe par le partage natif de l'appareil, qui propose
+   « Enregistrer dans Fichiers » vers un dossier OneDrive/SharePoint synchronisé
+   si configuré sur la tablette. Plus de repli par mail : si le partage natif
+   n'est pas disponible, le fichier est simplement téléchargé, à déposer
+   manuellement dans le dossier voulu. */
+async function shareReport({ blob, name, title, notify }) {
   try {
     const file = new File([blob], name, { type: blob.type });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: subject, text: body });
+      await navigator.share({ files: [file], title });
       return;
     }
   } catch (e) {
     if (e && e.name === 'AbortError') return;
   }
   downloadBlob(blob, name);
-  const a = document.createElement('a');
-  a.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  a.target = '_blank';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  if (notify) notify('Fichier téléchargé — joignez-le au mail');
+  if (notify) notify('Fichier téléchargé — à déposer dans le dossier SharePoint');
 }
 
 /* ==================== Composants UI de base ==================== */
@@ -1071,11 +1261,70 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
   return { offset, dragging };
 }
 
+/* Modal de mot de passe pour la sauvegarde chiffrée. Un seul composant pour
+   les deux usages : "export" demande une saisie en double pour éviter une
+   faute de frappe qui rendrait le fichier illisible ; "import" ne demande
+   qu'une saisie, avec un message d'erreur si elle ne convient pas. */
+function PassphraseModal({ mode, error, onSubmit, onClose }) {
+  const [p1, setP1] = useState('');
+  const [p2, setP2] = useState('');
+  const ready = mode === 'export' ? p1.length >= 4 && p1 === p2 : p1.length > 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
+        <div className="flex justify-end mb-1">
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        <h2 className="text-lg font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY }}>
+          {mode === 'export' ? 'Protéger la sauvegarde' : 'Mot de passe de la sauvegarde'}
+        </h2>
+        <p className="text-sm text-center mb-4" style={{ color: INK_SOFT }}>
+          {mode === 'export'
+            ? 'Ce mot de passe sera nécessaire pour restaurer cette sauvegarde. Conservez-le en lieu sûr : il ne peut pas être récupéré.'
+            : 'Saisissez le mot de passe défini lors de l\'export de ce fichier.'}
+        </p>
+        {error && <p className="text-sm text-center mb-3" style={{ color: CRISIS }}>{error}</p>}
+        <input
+          type="password"
+          value={p1}
+          onChange={(e) => setP1(e.target.value)}
+          placeholder="Mot de passe"
+          autoFocus
+          className="w-full rounded-xl border px-3 py-2.5 text-base bg-transparent mb-2"
+          style={{ borderColor: BORDER, color: INK }}
+        />
+        {mode === 'export' && (
+          <input
+            type="password"
+            value={p2}
+            onChange={(e) => setP2(e.target.value)}
+            placeholder="Confirmer le mot de passe"
+            className="w-full rounded-xl border px-3 py-2.5 text-base bg-transparent mb-2"
+            style={{ borderColor: BORDER, color: INK }}
+          />
+        )}
+        {mode === 'export' && p1.length > 0 && p1.length < 4 && (
+          <p className="text-xs mb-2" style={{ color: INK_SOFT }}>Au moins 4 caractères.</p>
+        )}
+        {mode === 'export' && p2.length > 0 && p1 !== p2 && (
+          <p className="text-xs mb-2" style={{ color: CRISIS }}>Les deux saisies ne correspondent pas.</p>
+        )}
+        <Btn onClick={() => onSubmit(p1)} disabled={!ready} className="w-full mt-2">
+          {mode === 'export' ? 'Chiffrer et télécharger' : 'Déchiffrer'}
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
 /* ==================== Application ==================== */
 export default function App() {
   useFonts();
   const [tab, setTab] = useState('admin');
   const [loaded, setLoaded] = useState(false);
+  const [security, setSecurity] = useState({ pinHash: null, pinSalt: null });
+  const [locked, setLocked] = useState(true);
 
   const [students, setStudents] = useState([]);
   const [ateliers, setAteliers] = useState([]);
@@ -1132,9 +1381,46 @@ export default function App() {
       if (cri) { try { setCrises(JSON.parse(cri)); } catch (e) {} }
       const act = await store.get('aba:active');
       if (act) { try { setActiveSession(JSON.parse(act)); } catch (e) {} }
+      const sec = await store.get('aba:security');
+      if (sec) {
+        try {
+          const parsed = JSON.parse(sec);
+          setSecurity(parsed);
+          setLocked(!!parsed.pinHash);
+        } catch (e) { setLocked(false); }
+      } else {
+        setLocked(false); // pas encore de code : l'écran de création s'affichera
+      }
       setLoaded(true);
     })();
   }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    store.set('aba:security', JSON.stringify(security));
+  }, [security, loaded]);
+
+  /* Verrouillage automatique : dès que l'app repasse au premier plan après
+     avoir été masquée (écran éteint, changement d'appli), et après un long
+     moment sans interaction pendant qu'elle reste affichée. */
+  useEffect(() => {
+    if (!security.pinHash) return undefined;
+    let idleTimer = null;
+    const IDLE_MS = 10 * 60 * 1000;
+    const resetIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => setLocked(true), IDLE_MS);
+    };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') setLocked(true); };
+    document.addEventListener('visibilitychange', onVisibility);
+    ['touchstart', 'mousedown', 'keydown'].forEach((ev) => document.addEventListener(ev, resetIdle));
+    resetIdle();
+    return () => {
+      clearTimeout(idleTimer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      ['touchstart', 'mousedown', 'keydown'].forEach((ev) => document.removeEventListener(ev, resetIdle));
+    };
+  }, [security.pinHash]);
 
   /* --- sauvegardes --- */
   useEffect(() => {
@@ -1175,12 +1461,39 @@ export default function App() {
   const toggleIndependent = (code) => setGuidances((l) => l.map((x) => (x.code === code ? { ...x, independent: !x.independent } : x)));
 
   /* --- sauvegarde / restauration --- */
+  const [backupPrompt, setBackupPrompt] = useState(null); // { mode: 'export' } | { mode: 'import', envelope, error }
+
   function exportBackup() {
-    const payload = { format: 'aba-backup', version: 2, exportedAt: new Date().toISOString(), students, ateliers, intervenants, guidances, sessions, crises };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    downloadBlob(blob, `sauvegarde-aba-${new Date().toISOString().slice(0, 10)}.json`);
-    notify('Sauvegarde exportée');
+    setBackupPrompt({ mode: 'export' });
   }
+
+  async function confirmExport(passphrase) {
+    const payload = { format: 'aba-backup', version: 2, exportedAt: new Date().toISOString(), students, ateliers, intervenants, guidances, sessions, crises };
+    const envelope = await encryptJSON(payload, passphrase);
+    const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json' });
+    downloadBlob(blob, `sauvegarde-aba-${new Date().toISOString().slice(0, 10)}.json`);
+    setBackupPrompt(null);
+    notify('Sauvegarde chiffrée exportée');
+  }
+
+  function applyRestoredData(d) {
+    if (!d || !Array.isArray(d.students)) {
+      notify('Ce fichier n’est pas une sauvegarde valide');
+      return;
+    }
+    const ok = window.confirm(
+      `Restaurer cette sauvegarde ?\n\n${(d.students || []).length} élève(s), ${(d.sessions || []).length} séance(s).\n\nToutes les données actuelles de cette tablette seront remplacées.`
+    );
+    if (!ok) return;
+    setStudents(d.students || []);
+    setAteliers(d.ateliers || []);
+    setIntervenants(d.intervenants || []);
+    if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
+    setSessions(d.sessions || []);
+    setCrises(d.crises || []);
+    notify('Sauvegarde restaurée');
+  }
+
   function importBackup(file) {
     const reader = new FileReader();
     reader.onload = () => {
@@ -1191,23 +1504,24 @@ export default function App() {
         notify('Fichier illisible');
         return;
       }
-      if (!d || !Array.isArray(d.students)) {
-        notify('Ce fichier n’est pas une sauvegarde valide');
+      if (d && d.format === 'aba-backup-encrypted') {
+        setBackupPrompt({ mode: 'import', envelope: d, error: '' });
         return;
       }
-      const ok = window.confirm(
-        `Restaurer cette sauvegarde ?\n\n${(d.students || []).length} élève(s), ${(d.sessions || []).length} séance(s).\n\nToutes les données actuelles de cette tablette seront remplacées.`
-      );
-      if (!ok) return;
-      setStudents(d.students || []);
-      setAteliers(d.ateliers || []);
-      setIntervenants(d.intervenants || []);
-      if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
-      setSessions(d.sessions || []);
-      setCrises(d.crises || []);
-      notify('Sauvegarde restaurée');
+      // Ancienne sauvegarde exportée en clair, avant l'ajout du chiffrement : toujours acceptée
+      applyRestoredData(d);
     };
     reader.readAsText(file);
+  }
+
+  async function confirmImport(passphrase) {
+    try {
+      const d = await decryptJSON(backupPrompt.envelope, passphrase);
+      setBackupPrompt(null);
+      applyRestoredData(d);
+    } catch (e) {
+      setBackupPrompt({ ...backupPrompt, error: 'Mot de passe incorrect ou fichier corrompu' });
+    }
   }
 
   const addObjective = (studentId, objective) =>
@@ -1231,18 +1545,10 @@ export default function App() {
 
   /* --- reprise d'une séance enregistrée pour correction --- */
   const editSession = (s) => setActiveSession({ ...s, isEdit: true });
-  const mailSession = (s) => {
+  const shareSession = (s) => {
     const wb = buildWorkbook([s], crises.filter((c) => c.sessionId === s.id), students, ateliers, intervenants, guidances);
-    const a = ateliers.find((x) => x.id === s.atelierId);
-    const jour = new Date(s.date).toLocaleDateString('fr-FR');
     const name = `seance-${new Date(s.date).toISOString().slice(0, 10)}.xlsx`;
-    shareReport({
-      blob: workbookBlob(wb),
-      name,
-      subject: name,
-      body: `Bonjour,\n\nVeuillez trouver le relevé de cotations de la séance du ${jour}${a ? ` (${a.name})` : ''}, ${s.studentIds.length} élève(s).\n\nCordialement,`,
-      notify,
-    });
+    shareReport({ blob: workbookBlob(wb), name, title: name, notify });
     markSent([s.id]);
   };
 
@@ -1306,6 +1612,19 @@ export default function App() {
     );
   }
 
+  if (locked) {
+    return (
+      <LockScreen
+        security={security}
+        onUnlock={() => setLocked(false)}
+        onSetup={async (pinHash, pinSalt) => {
+          setSecurity({ pinHash, pinSalt });
+          setLocked(false);
+        }}
+      />
+    );
+  }
+
   return (
     <div ref={rootRef} className="min-h-screen" style={{ background: PAPER, color: INK, fontFamily: F_BODY }}>
       {/* Navigation */}
@@ -1319,7 +1638,7 @@ export default function App() {
             { k: 'students', label: 'Élèves', icon: Users },
             { k: 'session', label: 'Session', icon: Play },
             { k: 'suivi', label: 'Suivi', icon: TrendingUp },
-            { k: 'export', label: 'Export', icon: Mail },
+            { k: 'export', label: 'Export', icon: FileSpreadsheet },
           ].map((t) => {
             const Icon = t.icon;
             const on = tab === t.k;
@@ -1363,6 +1682,7 @@ export default function App() {
             addAtelier={addAtelier} removeAtelier={removeAtelier} renameAtelier={renameAtelier}
             addIntervenant={addIntervenant} removeIntervenant={removeIntervenant} renameIntervenant={renameIntervenant}
             onAddGuidance={addGuidance} onRemoveGuidance={removeGuidance} onToggleIndependent={toggleIndependent}
+            security={security} onChangePin={(pinHash, pinSalt) => { setSecurity({ pinHash, pinSalt }); notify('Code modifié'); }}
             onExportBackup={exportBackup} onImportBackup={importBackup}
           />
         )}
@@ -1373,7 +1693,7 @@ export default function App() {
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
             sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession}
-            onSetAtelierGroup={setAtelierGroup} onMailSession={mailSession} notify={notify}
+            onSetAtelierGroup={setAtelierGroup} onShareSession={shareSession} notify={notify}
             activeSession={activeSession} setActiveSession={setActiveSession}
             onFinish={(session) => {
               const { isEdit, ...rest } = session;
@@ -1430,6 +1750,15 @@ export default function App() {
         />
       )}
 
+      {backupPrompt && (
+        <PassphraseModal
+          mode={backupPrompt.mode}
+          error={backupPrompt.error}
+          onSubmit={backupPrompt.mode === 'export' ? confirmExport : confirmImport}
+          onClose={() => setBackupPrompt(null)}
+        />
+      )}
+
       {toast && (
         <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 rounded-xl text-sm text-white shadow-lg" style={{ backgroundColor: INK }}>
           {toast}
@@ -1440,7 +1769,95 @@ export default function App() {
 }
 
 /* ==================== Écran 1 : administratif ==================== */
-function AdminScreen({ students, ateliers, intervenants, guidances, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onExportBackup, onImportBackup }) {
+/* Modification du code : ré-utilise les mêmes pavés numériques que l'écran de
+   verrouillage, mais dans une fenêtre compacte plutôt qu'en plein écran. */
+function ChangePinModal({ security, onSave, onClose }) {
+  const [step, setStep] = useState('current');
+  const [newPin, setNewPin] = useState('');
+  const [error, setError] = useState('');
+
+  async function checkCurrent(pin) {
+    const hash = await hashPin(pin, security.pinSalt);
+    if (hash === security.pinHash) {
+      setStep('new1');
+    } else {
+      setError('Code actuel incorrect');
+      setTimeout(() => setError(''), 1200);
+    }
+  }
+  function acceptNew(pin) {
+    setNewPin(pin);
+    setStep('new2');
+  }
+  async function confirmNew(pin) {
+    if (pin !== newPin) {
+      setError('Les deux codes ne correspondent pas');
+      setStep('new1');
+      setNewPin('');
+      setTimeout(() => setError(''), 1500);
+      return;
+    }
+    const salt = newSalt();
+    const hash = await hashPin(pin, salt);
+    onSave(hash, salt);
+  }
+
+  const copy = {
+    current: { title: 'Code actuel', sub: 'Confirmez le code en cours', fn: checkCurrent },
+    new1: { title: 'Nouveau code', sub: 'Choisissez un nouveau code à 4 chiffres', fn: acceptNew },
+    new2: { title: 'Confirmez', sub: 'Ressaisissez le nouveau code', fn: confirmNew },
+  }[step];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
+        <div className="flex justify-end mb-1">
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        <h2 className="text-lg font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY }}>{copy.title}</h2>
+        <p className="text-sm text-center mb-4" style={{ color: INK_SOFT }}>{copy.sub}</p>
+        {error && <p className="text-sm text-center mb-3" style={{ color: CRISIS }}>{error}</p>}
+        <MiniPinInput onSubmit={copy.fn} />
+      </div>
+    </div>
+  );
+}
+
+/* Petit pavé numérique compact, pour une utilisation dans une fenêtre plutôt qu'en plein écran */
+function MiniPinInput({ onSubmit, digits = 4 }) {
+  const [value, setValue] = useState('');
+  function press(d) {
+    if (value.length >= digits) return;
+    const next = value + d;
+    setValue(next);
+    if (next.length === digits) { onSubmit(next); setValue(''); }
+  }
+  return (
+    <div>
+      <div className="flex justify-center gap-3 mb-4">
+        {Array.from({ length: digits }, (_, i) => (
+          <div key={i} className="w-3.5 h-3.5 rounded-full border-2" style={{ borderColor: INK, backgroundColor: i < value.length ? INK : 'transparent' }} />
+        ))}
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((d, i) =>
+          d === '' ? <div key={i} /> : (
+            <button
+              key={i}
+              onClick={() => (d === '⌫' ? setValue((v) => v.slice(0, -1)) : press(d))}
+              className="rounded-xl py-3 text-lg font-medium active:scale-95 transition-transform"
+              style={{ backgroundColor: PAPER, color: INK, fontFamily: F_DISPLAY, border: `1px solid ${BORDER}` }}
+            >
+              {d}
+            </button>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onExportBackup, onImportBackup }) {
   const [initials, setInitials] = useState('');
   const [atelier, setAtelier] = useState('');
   const [intervenant, setIntervenant] = useState('');
@@ -1450,6 +1867,7 @@ function AdminScreen({ students, ateliers, intervenants, guidances, addStudent, 
   const [gColor, setGColor] = useState(GUIDANCE_PALETTE[0]);
   const [gIndep, setGIndep] = useState(false);
   const fileRef = useRef(null);
+  const [changingPin, setChangingPin] = useState(false);
 
   return (
     <div>
@@ -1600,13 +2018,34 @@ function AdminScreen({ students, ateliers, intervenants, guidances, addStudent, 
         )}
       </Card>
 
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Lock size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Sécurité</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          L'application se verrouille automatiquement à chaque mise en veille et après 10 minutes d'inactivité.
+        </p>
+        <Btn variant="outline" onClick={() => setChangingPin(true)} className="w-full text-sm">
+          <Lock size={16} /> Modifier le code
+        </Btn>
+        {changingPin && (
+          <ChangePinModal
+            security={security}
+            onSave={(hash, salt) => { onChangePin(hash, salt); setChangingPin(false); }}
+            onClose={() => setChangingPin(false)}
+          />
+        )}
+      </Card>
+
       <Card>
         <div className="flex items-center gap-2 mb-2">
           <Save size={16} style={{ color: INK_SOFT }} />
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Sauvegarde</span>
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Les données ne vivent que sur cette tablette. Exportez régulièrement une sauvegarde : c'est le seul moyen de récupérer l'historique après un effacement ou un changement d'appareil.
+          Les données ne vivent que sur cette tablette. Exportez régulièrement une sauvegarde chiffrée par mot de
+          passe : c'est le seul moyen de récupérer l'historique après un effacement ou un changement d'appareil.
         </p>
         <input
           ref={fileRef}
@@ -1694,7 +2133,7 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                             )}
                               <div className="text-xs" style={{ color: INK_SOFT }}>
                                 {meta.short}
-                                {o.type === 'trials' && ` · ${o.config.trialCount} essais`}
+                                {o.type === 'trials' && (o.config.trialCount ? ` · ${o.config.trialCount} essais prévus` : ' · essais sans limite')}
                                 {o.type === 'interval' && ` · toutes les ${o.config.intervalMinutes} min · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
                                 {(o.type === 'chaining' || o.type === 'balance') && ` · ${(o.config.steps || []).length} étapes`}
                                 {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions} ${o.config.mastery.unit === 'days' ? 'jours' : 'séances'}`}
@@ -1776,7 +2215,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const initConfig = init.config || {};
   const [name, setName] = useState(init.name || '');
   const [type, setType] = useState(init.type || 'trials');
-  const [trialCount, setTrialCount] = useState(initConfig.trialCount || 10);
+  const [trialCount, setTrialCount] = useState(initConfig.trialCount === undefined ? 0 : initConfig.trialCount);
   const [intervalMinutes, setIntervalMinutes] = useState(initConfig.intervalMinutes || 5);
   const [intervalMode, setIntervalMode] = useState(initConfig.intervalMode || 'momentane');
   const [steps, setSteps] = useState(initConfig.steps || DEFAULT_CHAIN_STEPS);
@@ -1808,7 +2247,11 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
     if (type === 'probe') config.useGuidance = useGuidance;
     if (USES_GUIDANCE.includes(type) && guidanceCodes && guidanceCodes.length) config.guidanceCodes = guidanceCodes;
     if (PERCENT_TYPES.includes(type)) {
-      config.mastery = { threshold, sessions: masterySessions, unit: masteryUnit };
+      config.mastery = {
+        threshold: threshold === '' || threshold === null ? 80 : Math.min(100, Math.max(1, Number(threshold))),
+        sessions: masterySessions === '' || masterySessions === null ? 3 : Math.min(60, Math.max(1, Number(masterySessions))),
+        unit: masteryUnit,
+      };
       if (targets.length) config.targets = targets;
     }
     onSubmit({
@@ -1848,15 +2291,33 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 
       {type === 'trials' && (
         <div>
-          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Nombre d'essais : <span style={{ fontFamily: F_MONO }}>{trialCount}</span></div>
-          <div className="flex gap-1.5 flex-wrap">
-            {[3, 5, 8, 10].map((n) => (
+          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
+            Nombre d'essais prévus{' '}
+            <span style={{ fontFamily: F_MONO }}>{trialCount ? trialCount : 'sans limite'}</span>
+          </div>
+          <div className="flex gap-1.5 flex-wrap items-center">
+            <button onClick={() => setTrialCount(0)} className="rounded-lg px-3 py-2 text-xs border"
+              style={{ borderColor: !trialCount ? INK : BORDER, backgroundColor: !trialCount ? INK : 'transparent', color: !trialCount ? '#fff' : INK_SOFT }}>
+              Sans limite
+            </button>
+            {[3, 5, 8, 10, 20].map((n) => (
               <button key={n} onClick={() => setTrialCount(n)} className="rounded-lg px-3.5 py-2 text-sm border"
                 style={{ borderColor: trialCount === n ? INK : BORDER, backgroundColor: trialCount === n ? INK : 'transparent', color: trialCount === n ? '#fff' : INK_SOFT, fontFamily: F_MONO }}>
                 {n}
               </button>
             ))}
+            <input
+              type="number" inputMode="numeric" min="0" max="200" value={trialCount || ''}
+              placeholder="autre"
+              onChange={(e) => setTrialCount(e.target.value === '' ? 0 : Number(e.target.value))}
+              onBlur={() => setTrialCount((v) => Math.min(200, Math.max(0, Number(v) || 0)))}
+              className="w-20 rounded-lg border px-2 py-2 text-sm bg-transparent text-center"
+              style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
+            />
           </div>
+          <p className="text-xs mt-1.5" style={{ color: INK_SOFT }}>
+            Un nombre prévu sert de repère pendant la cotation, mais n'empêche jamais d'ajouter des essais supplémentaires.
+          </p>
         </div>
       )}
 
@@ -2001,15 +2462,20 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm">À partir de</span>
             <input
-              type="number" min="1" max="100" value={threshold}
-              onChange={(e) => setThreshold(Math.min(100, Math.max(1, Number(e.target.value) || 0)))}
+              type="number" inputMode="numeric" min="1" max="100" value={threshold}
+              /* On accepte la saisie telle quelle pendant la frappe, y compris
+                 vide : borner à chaque caractère empêchait d'écrire « 85 »,
+                 le « 8 » intermédiaire étant aussitôt réécrit. */
+              onChange={(e) => setThreshold(e.target.value === '' ? '' : Number(e.target.value))}
+              onBlur={() => setThreshold((v) => (v === '' || v === null ? 80 : Math.min(100, Math.max(1, Number(v)))))}
               className="w-16 rounded-lg border px-2 py-2 text-sm bg-transparent text-center"
               style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
             />
             <span className="text-sm">% sur</span>
             <input
-              type="number" min="1" max="60" value={masterySessions}
-              onChange={(e) => setMasterySessions(Math.min(60, Math.max(1, Number(e.target.value) || 0)))}
+              type="number" inputMode="numeric" min="1" max="60" value={masterySessions}
+              onChange={(e) => setMasterySessions(e.target.value === '' ? '' : Number(e.target.value))}
+              onBlur={() => setMasterySessions((v) => (v === '' || v === null ? 3 : Math.min(60, Math.max(1, Number(v)))))}
               className="w-16 rounded-lg border px-2 py-2 text-sm bg-transparent text-center"
               style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
             />
@@ -2073,21 +2539,21 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onMailSession, onSetAtelierGroup, notify, activeSession, setActiveSession, onFinish }) {
+function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onShareSession, onSetAtelierGroup, notify, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
     return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} onFinish={onFinish} />;
   }
   return (
     <SessionSetup
       students={students} ateliers={ateliers} intervenants={intervenants} sessions={sessions}
-      onEditSession={onEditSession} onDeleteSession={onDeleteSession} onMailSession={onMailSession}
+      onEditSession={onEditSession} onDeleteSession={onDeleteSession} onShareSession={onShareSession}
       onSetAtelierGroup={onSetAtelierGroup} notify={notify}
       onStart={setActiveSession}
     />
   );
 }
 
-function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onMailSession, onSetAtelierGroup, notify, onStart }) {
+function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onShareSession, onSetAtelierGroup, notify, onStart }) {
   const [atelierId, setAtelierId] = useState(null);
   const [intervenantId, setIntervenantId] = useState(null);
   const [studentIds, setStudentIds] = useState([]);
@@ -2330,11 +2796,11 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                     </div>
                   </button>
                   <button
-                    onClick={() => onMailSession(s)}
+                    onClick={() => onShareSession(s)}
                     style={{ color: INK_SOFT }}
-                    title="Envoyer ce rapport par mail"
+                    title="Partager ce rapport"
                   >
-                    <Mail size={16} />
+                    <Share2 size={16} />
                   </button>
                   <button
                     onClick={() => { if (window.confirm('Supprimer définitivement cette séance ?')) onDeleteSession(s.id); }}
@@ -2358,6 +2824,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const [viewMode, setViewMode] = useState('priority');
   const [now, setNow] = useState(Date.now());
   const [soundOn, setSoundOn] = useState(true);
+  const [vibrateOn, setVibrateOn] = useState(true);
   const [wakeOk, setWakeOk] = useState(false);
   const stepsRef = useRef({});
   const cotationRef = useRef(null);
@@ -2406,7 +2873,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
       if (prev !== undefined && idx > prev) fire = true;
       stepsRef.current[min] = idx;
     });
-    if (fire) alertInterval(soundOn);
+    if (fire) alertInterval({ soundOn, vibrateOn });
   }, [now]);
 
   /* Balayage dans la zone de cotation : bascule prioritaires / par élève.
@@ -2487,6 +2954,20 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               title={soundOn ? 'Alerte sonore activée' : 'Alerte sonore coupée'}
             >
               {soundOn ? <Volume2 size={17} /> : <VolumeX size={17} />}
+            </button>
+          )}
+          {hasInterval && !isEdit && vibrateSupported() && (
+            <button
+              onClick={() => {
+                const next = !vibrateOn;
+                setVibrateOn(next);
+                if (next) { try { navigator.vibrate([200, 100, 200]); } catch (e) {} }
+              }}
+              className="rounded-xl px-3 py-2.5 border"
+              style={{ borderColor: BORDER, color: vibrateOn ? INK : INK_SOFT, backgroundColor: CARD }}
+              title={vibrateOn ? 'Vibration activée' : 'Vibration coupée'}
+            >
+              <Vibrate size={17} />
             </button>
           )}
           {isEdit && (
@@ -2772,35 +3253,52 @@ function ObjectiveHeader({ obj, entry, guidances }) {
 /* --- Widgets de cotation --- */
 function TrialsWidget({ obj, entry, guidances, onChange }) {
   const list = objectiveGuidances(obj, guidances);
-  const trials = entry.trials;
-  const cursor = trials.findIndex((t) => t === null);
-  const active = cursor === -1 ? trials.length - 1 : cursor;
+  const trials = entry.trials || [];
+  const planned = obj.config.trialCount || 0; // 0 = pas de limite
+  const done = trials.filter(Boolean).length;
+  const unlimited = !planned;
+
+  /* Sans limite, on affiche toujours une case vide à la suite pour montrer
+     où l'essai suivant va tomber. Avec un nombre planifié, on garde la
+     grille complète, et on peut tout de même dépasser si besoin. */
+  const cells = unlimited ? [...trials.filter(Boolean), null] : trials;
 
   function record(code) {
+    if (unlimited) {
+      onChange({ trials: [...trials.filter(Boolean), code] });
+      return;
+    }
     const idx = trials.findIndex((t) => t === null);
-    if (idx === -1) return;
+    if (idx === -1) {
+      onChange({ trials: [...trials, code] }); // dépassement autorisé
+      return;
+    }
     const next = trials.slice();
     next[idx] = code;
     onChange({ trials: next });
   }
+
   function undo() {
-    const done = trials.filter(Boolean).length;
     if (!done) return;
+    if (unlimited || done > planned) {
+      const kept = trials.filter(Boolean);
+      kept.pop();
+      onChange({ trials: unlimited ? kept : [...kept, ...Array(Math.max(0, planned - kept.length)).fill(null)] });
+      return;
+    }
     const next = trials.slice();
     next[done - 1] = null;
     onChange({ trials: next });
   }
-  function setAt(i, code) {
-    const next = trials.slice();
-    next[i] = next[i] === code ? null : code;
-    onChange({ trials: next });
-  }
+
+  const cursor = unlimited ? done : trials.findIndex((t) => t === null);
 
   return (
     <div>
       <div className="flex gap-1.5 mb-2.5 overflow-x-auto pb-1">
-        {trials.map((t, i) => {
+        {cells.map((t, i) => {
           const g = t ? guidanceByCode(list, t) : null;
+          const isNext = !t && (unlimited ? i === cells.length - 1 : i === cursor);
           return (
             <div
               key={i}
@@ -2810,7 +3308,7 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
                 backgroundColor: g ? g.color : CARD,
                 color: g ? '#fff' : INK_SOFT,
                 borderColor: g ? g.color : BORDER,
-                boxShadow: i === active && !t ? `0 0 0 2px ${TYPES.trials.color}66` : 'none',
+                boxShadow: isNext ? `0 0 0 2px ${TYPES.trials.color}66` : 'none',
               }}
             >
               {t || i + 1}
@@ -2823,8 +3321,7 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
           <button
             key={g.code}
             onClick={() => record(g.code)}
-            disabled={cursor === -1}
-            className="flex-1 min-w-[72px] rounded-xl py-3 text-white active:scale-95 transition-transform disabled:opacity-30"
+            className="flex-1 min-w-[72px] rounded-xl py-3 text-white active:scale-95 transition-transform"
             style={{ backgroundColor: g.color }}
           >
             <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
@@ -2834,9 +3331,13 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
       </div>
       <div className="flex items-center justify-between mt-2">
         <span className="text-xs" style={{ color: INK_SOFT }}>
-          {cursor === -1 ? 'Tous les essais sont cotés' : `Essai ${cursor + 1} sur ${trials.length}`}
+          {unlimited
+            ? `${done} essai${done !== 1 ? 's' : ''} coté${done !== 1 ? 's' : ''}`
+            : cursor === -1
+            ? `${done} essais cotés${done > planned ? ` (${planned} prévus)` : ' — série complète'}`
+            : `Essai ${cursor + 1} sur ${planned}`}
         </span>
-        {trials.some(Boolean) && (
+        {done > 0 && (
           <button onClick={undo} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
             <RotateCcw size={12} /> annuler
           </button>
@@ -3525,33 +4026,10 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     notify('Fichier Excel téléchargé');
   }
 
-  async function sendMail() {
+  async function shareSelection() {
     if (!confirmIfNeeded()) return;
     const { blob, name } = makeFile();
-    const subject = name;
-    const lines = chosen.map((s) => `- ${new Date(s.date).toLocaleDateString('fr-FR')} ${timeShort(s.date)} · ${sessionLabel(s)} · ${s.studentIds.length} élève(s)`);
-    const body = `Bonjour,\n\nVeuillez trouver le relevé de cotations ABA.\n\n${lines.join('\n')}\n\nCrises consignées : ${chosenCrises.length}\n\nLe fichier Excel détaillé est joint (à ajouter depuis vos téléchargements si la pièce jointe n'apparaît pas).\n\nCordialement,`;
-
-    const file = new File([blob], name, { type: blob.type });
-    let shared = false;
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: subject, text: body });
-        shared = true;
-      } catch (e) {
-        if (e && e.name === 'AbortError') return;
-      }
-    }
-    if (!shared) {
-      downloadBlob(blob, name);
-      const a = document.createElement('a');
-      a.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-      a.target = '_blank';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      notify('Fichier téléchargé — joignez-le au mail');
-    }
+    await shareReport({ blob, name, title: name, notify });
     onMarkSent(picked);
   }
 
@@ -3617,8 +4095,8 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
         <Btn variant="outline" onClick={download} disabled={!canExport} className="flex-1">
           <FileSpreadsheet size={17} /> Télécharger
         </Btn>
-        <Btn onClick={sendMail} disabled={!canExport} className="flex-1">
-          <Mail size={17} /> Envoyer par mail
+        <Btn onClick={shareSelection} disabled={!canExport} className="flex-1">
+          <Share2 size={17} /> Partager
         </Btn>
       </div>
 
