@@ -56,7 +56,21 @@ const DEFAULT_GUIDANCE = [
   { code: 'I', label: 'Indépendant', color: '#0F8B6C', independent: true },
   { code: 'GP', label: 'Guidance partielle', color: '#D69A2D', independent: false },
   { code: 'GT', label: 'Guidance totale', color: '#A8402F', independent: false },
+  { code: '0', label: 'Mauvaise réponse', color: '#565E54', independent: false },
 ];
+
+/* Version du jeu de guidances préenregistrées. Incrémentée quand on en ajoute,
+   pour compléter les listes déjà enregistrées sans écraser les personnalisations. */
+const GUIDANCE_VERSION = 2;
+
+/* Guidances retenues pour un objectif donné : sa sélection, ou toutes par défaut */
+function objectiveGuidances(obj, guidances) {
+  const all = guidances && guidances.length ? guidances : DEFAULT_GUIDANCE;
+  const codes = obj.config && obj.config.guidanceCodes;
+  if (!codes || !codes.length) return all;
+  const sel = all.filter((g) => codes.includes(g.code));
+  return sel.length ? sel : all;
+}
 const GUIDANCE_PALETTE = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
 
 function guidanceByCode(guidances, code) {
@@ -100,6 +114,8 @@ const LEVEL_COLORS = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2
 
 /* Types dont le score est un pourcentage : seuls ceux-là admettent un critère de maîtrise */
 const PERCENT_TYPES = ['trials', 'probe', 'interval', 'chaining'];
+/* Types dont la cotation repose sur des niveaux de guidance */
+const USES_GUIDANCE = ['trials', 'chaining', 'probe'];
 const DEFAULT_MASTERY = { threshold: 80, sessions: 3, unit: 'sessions' };
 
 /* ==================== Stockage ====================
@@ -213,7 +229,7 @@ function fromLocalInput(value) {
 
 function emptyEntry(obj) {
   if (obj.type === 'trials') return { trials: Array(obj.config.trialCount).fill(null) };
-  if (obj.type === 'probe') return { value: null };
+  if (obj.type === 'probe') return { value: null, guidance: null };
   if (obj.type === 'occurrence') return { count: 0 };
   if (obj.type === 'timer') return { elapsedMs: 0, running: false, startedAt: null };
   if (obj.type === 'interval') return { marks: {}, segments: [] };
@@ -226,7 +242,7 @@ function emptyEntry(obj) {
 function entryMatches(obj, entry) {
   if (!entry) return false;
   if (obj.type === 'trials') return Array.isArray(entry.trials);
-  if (obj.type === 'probe') return entry.value === 0 || entry.value === 1 || entry.value === null;
+  if (obj.type === 'probe') return entry.value === 0 || entry.value === 1 || entry.value === null || 'guidance' in entry;
   if (obj.type === 'occurrence') return typeof entry.count === 'number';
   if (obj.type === 'timer') return typeof entry.elapsedMs === 'number';
   if (obj.type === 'interval') return !!entry.marks;
@@ -317,6 +333,11 @@ function summarize(obj, entry, guidances) {
     };
   }
   if (obj.type === 'probe') {
+    if (obj.config && obj.config.useGuidance) {
+      if (!entry.guidance) return { result: 'Non coté', detail: '' };
+      const g = guidanceByCode(guidances, entry.guidance);
+      return { result: g ? `${g.label} (${g.code})` : entry.guidance, detail: entry.guidance };
+    }
     return { result: entry.value === 1 ? 'Réussi (1)' : entry.value === 0 ? 'Échoué (0)' : 'Non coté', detail: '' };
   }
   if (obj.type === 'occurrence') {
@@ -370,6 +391,10 @@ function objectiveScore(obj, entry, guidances) {
     return { value: Math.round((done.filter((c) => isIndependentCode(guidances, c)).length / done.length) * 100), percent: true, unit: '%' };
   }
   if (obj.type === 'probe') {
+    if (obj.config && obj.config.useGuidance) {
+      if (!entry.guidance) return null;
+      return { value: isIndependentCode(guidances, entry.guidance) ? 100 : 0, percent: true, unit: '%' };
+    }
     if (entry.value !== 0 && entry.value !== 1) return null;
     return { value: entry.value * 100, percent: true, unit: '%' };
   }
@@ -831,7 +856,15 @@ export default function App() {
           setStudents(d.students || []);
           setAteliers(d.ateliers || []);
           setIntervenants(d.intervenants || []);
-          if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
+          if (Array.isArray(d.guidances) && d.guidances.length) {
+            // Complète les guidances préenregistrées ajoutées depuis, sans toucher aux personnalisées
+            const stored = d.guidances;
+            const merged =
+              (d.guidanceVersion || 1) < GUIDANCE_VERSION
+                ? [...stored, ...DEFAULT_GUIDANCE.filter((g) => !stored.some((x) => x.code === g.code))]
+                : stored;
+            setGuidances(merged);
+          }
         } catch (e) {}
       }
       const sess = await store.get('aba:sessions');
@@ -847,7 +880,7 @@ export default function App() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances }));
+    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION }));
   }, [students, ateliers, intervenants, guidances, loaded]);
   useEffect(() => {
     if (!loaded) return;
@@ -1057,7 +1090,7 @@ export default function App() {
           />
         )}
         {tab === 'students' && (
-          <StudentsScreen students={students} addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective} duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} />
+          <StudentsScreen students={students} guidances={guidances} addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective} duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} />
         )}
         {tab === 'session' && (
           <SessionScreen
@@ -1317,7 +1350,7 @@ function AdminScreen({ students, ateliers, intervenants, guidances, addStudent, 
 }
 
 /* ==================== Écran 2 : élèves et objectifs ==================== */
-function StudentsScreen({ students, addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite }) {
+function StudentsScreen({ students, guidances, addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite }) {
   const [openId, setOpenId] = useState(null);
   const [editingObj, setEditingObj] = useState(null);
   const [copyingObj, setCopyingObj] = useState(null);
@@ -1362,6 +1395,7 @@ function StudentsScreen({ students, addObjective, removeObjective, updateObjecti
                         <ObjectiveForm
                           key={o.id}
                           initial={o}
+                          guidances={guidances}
                           onSubmit={(next) => { updateObjective(s.id, o.id, next); setEditingObj(null); }}
                           onCancel={() => setEditingObj(null)}
                         />
@@ -1432,7 +1466,7 @@ function StudentsScreen({ students, addObjective, removeObjective, updateObjecti
                     );
                   })}
                 </div>
-                <ObjectiveEditor onAdd={(o) => addObjective(s.id, o)} />
+                <ObjectiveEditor guidances={guidances} onAdd={(o) => addObjective(s.id, o)} />
               </div>
             )}
           </Card>
@@ -1442,7 +1476,7 @@ function StudentsScreen({ students, addObjective, removeObjective, updateObjecti
   );
 }
 
-function ObjectiveEditor({ onAdd }) {
+function ObjectiveEditor({ guidances, onAdd }) {
   const [open, setOpen] = useState(false);
   if (!open) {
     return (
@@ -1451,10 +1485,11 @@ function ObjectiveEditor({ onAdd }) {
       </Btn>
     );
   }
-  return <ObjectiveForm onSubmit={(o) => { onAdd(o); setOpen(false); }} onCancel={() => setOpen(false)} />;
+  return <ObjectiveForm guidances={guidances} onSubmit={(o) => { onAdd(o); setOpen(false); }} onCancel={() => setOpen(false)} />;
 }
 
-function ObjectiveForm({ initial, onSubmit, onCancel }) {
+function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
+  const allGuidances = guidances && guidances.length ? guidances : DEFAULT_GUIDANCE;
   const init = initial || {};
   const initConfig = init.config || {};
   const [name, setName] = useState(init.name || '');
@@ -1466,6 +1501,8 @@ function ObjectiveForm({ initial, onSubmit, onCancel }) {
   const [newStep, setNewStep] = useState('');
   const [targets, setTargets] = useState(initConfig.targets || []);
   const [newTarget, setNewTarget] = useState('');
+  const [guidanceCodes, setGuidanceCodes] = useState(initConfig.guidanceCodes || null);
+  const [useGuidance, setUseGuidance] = useState(!!initConfig.useGuidance);
   const [levels, setLevels] = useState(initConfig.levels || DEFAULT_INTERVAL_LEVELS);
   const [newLevel, setNewLevel] = useState('');
   const [targetLevelId, setTargetLevelId] = useState(
@@ -1486,6 +1523,8 @@ function ObjectiveForm({ initial, onSubmit, onCancel }) {
       config.targetLevelId = levels.some((l) => l.id === targetLevelId) ? targetLevelId : levels[0].id;
     }
     if (type === 'chaining') config.steps = steps;
+    if (type === 'probe') config.useGuidance = useGuidance;
+    if (USES_GUIDANCE.includes(type) && guidanceCodes && guidanceCodes.length) config.guidanceCodes = guidanceCodes;
     if (PERCENT_TYPES.includes(type)) {
       config.mastery = { threshold, sessions: masterySessions, unit: masteryUnit };
       if (targets.length) config.targets = targets;
@@ -1616,6 +1655,53 @@ function ObjectiveForm({ initial, onSubmit, onCancel }) {
             <Field value={newStep} onChange={setNewStep} placeholder="Nom de l'étape" onEnter={() => { if (newStep.trim()) { setSteps((ls) => [...ls, { id: uid(), name: newStep.trim() }]); setNewStep(''); } }} />
             <Btn variant="ghost" onClick={() => { if (newStep.trim()) { setSteps((ls) => [...ls, { id: uid(), name: newStep.trim() }]); setNewStep(''); } }} className="px-4 shrink-0"><Plus size={16} /></Btn>
           </div>
+        </div>
+      )}
+
+      {USES_GUIDANCE.includes(type) && (
+        <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
+          <div className="flex items-center gap-1.5 mb-1">
+            <SlidersHorizontal size={14} style={{ color: INK_SOFT }} />
+            <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Guidances utilisées</span>
+          </div>
+
+          {type === 'probe' && (
+            <button onClick={() => setUseGuidance((v) => !v)} className="flex items-center gap-1.5 text-sm my-2">
+              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: useGuidance ? INK : BORDER }}>
+                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: useGuidance ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+              </span>
+              Coter par guidance plutôt qu'en 1 / 0
+            </button>
+          )}
+
+          {(type !== 'probe' || useGuidance) && (
+            <>
+              <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
+                Aucune sélection = toutes les guidances de l'écran Administratif.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {allGuidances.map((g) => {
+                  const on = !guidanceCodes || guidanceCodes.includes(g.code);
+                  return (
+                    <button
+                      key={g.code}
+                      onClick={() =>
+                        setGuidanceCodes((cur) => {
+                          const base = cur || allGuidances.map((x) => x.code);
+                          const next = base.includes(g.code) ? base.filter((c) => c !== g.code) : [...base, g.code];
+                          return next.length ? next : base;
+                        })
+                      }
+                      className="rounded-lg px-3 py-2 text-xs border-2"
+                      style={{ borderColor: g.color, backgroundColor: on ? g.color : 'transparent', color: on ? '#fff' : g.color }}
+                    >
+                      {g.code} · {g.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -2349,7 +2435,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
       </div>
       <div className="mt-3">
         {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
-        {obj.type === 'probe' && <ProbeWidget entry={entry} onChange={onChange} />}
+        {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
         {obj.type === 'timer' && <TimerWidget entry={entry} now={now} onChange={onChange} />}
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
@@ -2385,7 +2471,7 @@ function ObjectiveHeader({ obj, entry, guidances }) {
 
 /* --- Widgets de cotation --- */
 function TrialsWidget({ obj, entry, guidances, onChange }) {
-  const list = guidances && guidances.length ? guidances : DEFAULT_GUIDANCE;
+  const list = objectiveGuidances(obj, guidances);
   const trials = entry.trials;
   const cursor = trials.findIndex((t) => t === null);
   const active = cursor === -1 ? trials.length - 1 : cursor;
@@ -2460,7 +2546,28 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
   );
 }
 
-function ProbeWidget({ entry, onChange }) {
+function ProbeWidget({ obj, entry, guidances, onChange }) {
+  if (obj && obj.config && obj.config.useGuidance) {
+    const list = objectiveGuidances(obj, guidances);
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {list.map((g) => {
+          const on = entry.guidance === g.code;
+          return (
+            <button
+              key={g.code}
+              onClick={() => onChange({ guidance: on ? null : g.code, value: on ? null : (isIndependentCode(guidances, g.code) ? 1 : 0) })}
+              className="flex-1 min-w-[72px] rounded-xl py-3 border-2 active:scale-95 transition-transform"
+              style={{ borderColor: g.color, backgroundColor: on ? g.color : 'transparent', color: on ? '#fff' : g.color }}
+            >
+              <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
+              <div className="text-[10px] opacity-90 leading-tight">{g.label}</div>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
   return (
     <div className="flex gap-2">
       <button onClick={() => onChange({ value: entry.value === 1 ? null : 1 })}
@@ -2688,7 +2795,7 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
 }
 
 function ChainingWidget({ obj, entry, guidances, onChange }) {
-  const list = guidances && guidances.length ? guidances : DEFAULT_GUIDANCE;
+  const list = objectiveGuidances(obj, guidances);
   const steps = obj.config.steps || [];
   const coded = steps.filter((s) => entry.steps[s.id]).length;
 
