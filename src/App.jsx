@@ -6,7 +6,7 @@ import {
   Timer as TimerIcon, ListChecks, LayoutGrid, CheckCircle2, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate,
+  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -64,8 +64,15 @@ const DEFAULT_GUIDANCE = [
 const GUIDANCE_VERSION = 2;
 
 /* Guidances retenues pour un objectif donné : sa sélection, ou toutes par défaut */
+/* Guidances retenues pour un objectif donné.
+   - guidanceSet : liste complète propre à l'objectif (ordre, couleurs, libellés,
+     et surtout le drapeau "independent" décidé pour cet élève et cet objectif)
+   - guidanceCodes : ancien format, simple sélection dans la liste globale
+   - sinon : toutes les guidances de l'écran Administratif */
 function objectiveGuidances(obj, guidances) {
   const all = guidances && guidances.length ? guidances : DEFAULT_GUIDANCE;
+  const set = obj.config && obj.config.guidanceSet;
+  if (set && set.length) return set;
   const codes = obj.config && obj.config.guidanceCodes;
   if (!codes || !codes.length) return all;
   const sel = all.filter((g) => codes.includes(g.code));
@@ -183,7 +190,10 @@ function PinPad({ title, subtitle, onSubmit, error, digits = 4, submitLabel }) {
     if (value.length >= digits) return;
     const next = value + d;
     setValue(next);
-    if (next.length === digits && !submitLabel) onSubmit(next);
+    if (next.length === digits && !submitLabel) {
+      onSubmit(next);
+      setValue('');
+    }
   }
   function backspace() {
     setValue((v) => v.slice(0, -1));
@@ -529,9 +539,10 @@ function crisisIntervals(session, crises, stepMinutes, studentId) {
 /* Résumé texte d'une cotation, utilisé à l'écran et dans l'export */
 function summarize(obj, entry, guidances) {
   if (!entryMatches(obj, entry)) return { result: '—', detail: '' };
+  const gList = objectiveGuidances(obj, guidances);
   if (obj.type === 'trials') {
     const done = entry.trials.filter(Boolean);
-    const indep = done.filter((c) => isIndependentCode(guidances, c)).length;
+    const indep = done.filter((c) => isIndependentCode(gList, c)).length;
     const pct = done.length ? Math.round((indep / done.length) * 100) : 0;
     return {
       result: done.length ? `${indep}/${done.length} indépendant (${pct} %)` : 'Non coté',
@@ -541,7 +552,7 @@ function summarize(obj, entry, guidances) {
   if (obj.type === 'probe') {
     if (obj.config && obj.config.useGuidance) {
       if (!entry.guidance) return { result: 'Non coté', detail: '' };
-      const g = guidanceByCode(guidances, entry.guidance);
+      const g = guidanceByCode(gList, entry.guidance);
       return { result: g ? `${g.label} (${g.code})` : entry.guidance, detail: entry.guidance };
     }
     return { result: entry.value === 1 ? 'Réussi (1)' : entry.value === 0 ? 'Échoué (0)' : 'Non coté', detail: '' };
@@ -569,7 +580,7 @@ function summarize(obj, entry, guidances) {
     const steps = obj.config.steps || [];
     const coded = steps.filter((s) => entry.steps[s.id]);
     if (!coded.length) return { result: 'Non coté', detail: '' };
-    const indep = coded.filter((s) => isIndependentCode(guidances, entry.steps[s.id])).length;
+    const indep = coded.filter((s) => isIndependentCode(gList, entry.steps[s.id])).length;
     const pct = Math.round((indep / coded.length) * 100);
     return {
       result: `${indep}/${coded.length} étapes indépendantes (${pct} %)`,
@@ -616,15 +627,16 @@ function summarize(obj, entry, guidances) {
 /* Score normalisé d'une cotation, utilisé pour les courbes de progression */
 function objectiveScore(obj, entry, guidances) {
   if (!entryMatches(obj, entry)) return null;
+  const gList = objectiveGuidances(obj, guidances);
   if (obj.type === 'trials') {
     const done = entry.trials.filter(Boolean);
     if (!done.length) return null;
-    return { value: Math.round((done.filter((c) => isIndependentCode(guidances, c)).length / done.length) * 100), percent: true, unit: '%' };
+    return { value: Math.round((done.filter((c) => isIndependentCode(gList, c)).length / done.length) * 100), percent: true, unit: '%' };
   }
   if (obj.type === 'probe') {
     if (obj.config && obj.config.useGuidance) {
       if (!entry.guidance) return null;
-      return { value: isIndependentCode(guidances, entry.guidance) ? 100 : 0, percent: true, unit: '%' };
+      return { value: isIndependentCode(gList, entry.guidance) ? 100 : 0, percent: true, unit: '%' };
     }
     if (entry.value !== 0 && entry.value !== 1) return null;
     return { value: entry.value * 100, percent: true, unit: '%' };
@@ -640,7 +652,7 @@ function objectiveScore(obj, entry, guidances) {
     const steps = obj.config.steps || [];
     const coded = steps.filter((s) => entry.steps[s.id]);
     if (!coded.length) return null;
-    return { value: Math.round((coded.filter((s) => isIndependentCode(guidances, entry.steps[s.id])).length / coded.length) * 100), percent: true, unit: '%' };
+    return { value: Math.round((coded.filter((s) => isIndependentCode(gList, entry.steps[s.id])).length / coded.length) * 100), percent: true, unit: '%' };
   }
   if (obj.type === 'balance') {
     // Les étapes manquées sont écartées : elles n'ont pas été présentées
@@ -826,12 +838,13 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances) 
         const entry = ((sess.data || {})[sid] || {})[oid];
         if (!entry) return;
         const b = base(sess, sid, obj);
+        const gl = objectiveGuidances(obj, guidances);
 
         if (obj.type === 'trials') {
           (entry.trials || []).forEach((code, i) => {
             if (!code) return;
-            const g = guidanceByCode(guidances, code);
-            rows.push([...b, 'Essai par essai', i + 1, '', g ? g.label : code, isIndependentCode(guidances, code) ? 1 : 0, '', '']);
+            const g = guidanceByCode(gl, code);
+            rows.push([...b, 'Essai par essai', i + 1, '', g ? g.label : code, isIndependentCode(gl, code) ? 1 : 0, '', '']);
           });
         }
 
@@ -839,8 +852,8 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances) 
           (obj.config.steps || []).forEach((st, i) => {
             const code = entry.steps && entry.steps[st.id];
             if (!code) return;
-            const g = guidanceByCode(guidances, code);
-            rows.push([...b, 'Chaînage', i + 1, st.name, g ? g.label : code, isIndependentCode(guidances, code) ? 1 : 0, '', '']);
+            const g = guidanceByCode(gl, code);
+            rows.push([...b, 'Chaînage', i + 1, st.name, g ? g.label : code, isIndependentCode(gl, code) ? 1 : 0, '', '']);
           });
         }
 
@@ -1149,6 +1162,140 @@ function EditableRow({ label, onRename, onRemove, chip }) {
         <button onClick={() => { setDraft(label); setEditing(true); }} style={{ color: INK_SOFT }} title="Renommer"><Pencil size={14} /></button>
         <button onClick={onRemove} style={{ color: INK_SOFT }} title="Supprimer"><X size={15} /></button>
       </div>
+    </div>
+  );
+}
+
+/* Liste réordonnable : appui long (~0,3 s) puis glissement vertical.
+   Les écouteurs sont posés en natif avec passive:false, indispensable pour
+   bloquer le défilement pendant le déplacement — React les poserait en passif. */
+function ReorderList({ items, keyOf, onReorder, renderItem, className = '' }) {
+  const containerRef = useRef(null);
+  const [dragKey, setDragKey] = useState(null);
+  const [overIndex, setOverIndex] = useState(null);
+  const st = useRef({ timer: null, dragging: false, from: null, over: null, justDragged: false });
+
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const keyOfRef = useRef(keyOf);
+  keyOfRef.current = keyOf;
+  const onReorderRef = useRef(onReorder);
+  onReorderRef.current = onReorder;
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return undefined;
+    const s = st.current;
+
+    const rows = () => Array.from(el.children);
+
+    function indexFromTarget(target) {
+      const list = rows();
+      const row = list.find((r) => r.contains(target));
+      return row ? list.indexOf(row) : -1;
+    }
+    function indexFromY(clientY) {
+      const list = rows();
+      if (!list.length) return -1;
+      for (let i = 0; i < list.length; i++) {
+        const r = list[i].getBoundingClientRect();
+        if (clientY >= r.top && clientY <= r.bottom) return i;
+      }
+      return clientY < list[0].getBoundingClientRect().top ? 0 : list.length - 1;
+    }
+
+    function start(e) {
+      const t = e.touches ? e.touches[0] : e;
+      const i = indexFromTarget(e.target);
+      if (i < 0) return;
+      s.startY = t.clientY;
+      s.from = i;
+      s.dragging = false;
+      clearTimeout(s.timer);
+      s.timer = setTimeout(() => {
+        s.dragging = true;
+        s.over = i;
+        setDragKey(keyOfRef.current(itemsRef.current[i]));
+        setOverIndex(i);
+        try { if (navigator.vibrate) navigator.vibrate(25); } catch (err) {}
+      }, 320);
+    }
+
+    function move(e) {
+      const t = e.touches ? e.touches[0] : e;
+      if (!s.dragging) {
+        // Un mouvement franc avant la fin du délai = défilement, pas un déplacement
+        if (s.timer && Math.abs(t.clientY - s.startY) > 8) { clearTimeout(s.timer); s.timer = null; }
+        return;
+      }
+      if (e.cancelable) e.preventDefault();
+      const i = indexFromY(t.clientY);
+      if (i >= 0 && i !== s.over) { s.over = i; setOverIndex(i); }
+    }
+
+    function end() {
+      clearTimeout(s.timer);
+      s.timer = null;
+      if (s.dragging && s.from !== null && s.over !== null && s.from !== s.over) {
+        const next = itemsRef.current.slice();
+        const [moved] = next.splice(s.from, 1);
+        next.splice(s.over, 0, moved);
+        onReorderRef.current(next);
+      }
+      if (s.dragging) {
+        // Empêche le clic parasite sur le bouton relâché en fin de glissement
+        s.justDragged = true;
+        setTimeout(() => { s.justDragged = false; }, 250);
+      }
+      s.dragging = false; s.from = null; s.over = null;
+      setDragKey(null); setOverIndex(null);
+    }
+
+    function blockClick(e) {
+      if (s.justDragged) { e.stopPropagation(); e.preventDefault(); }
+    }
+
+    el.addEventListener('touchstart', start, { passive: true });
+    el.addEventListener('touchmove', move, { passive: false });
+    el.addEventListener('touchend', end, { passive: true });
+    el.addEventListener('touchcancel', end, { passive: true });
+    el.addEventListener('mousedown', start);
+    el.addEventListener('click', blockClick, true);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', end);
+    return () => {
+      clearTimeout(s.timer);
+      el.removeEventListener('touchstart', start);
+      el.removeEventListener('touchmove', move);
+      el.removeEventListener('touchend', end);
+      el.removeEventListener('touchcancel', end);
+      el.removeEventListener('mousedown', start);
+      el.removeEventListener('click', blockClick, true);
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', end);
+    };
+  }, []);
+
+  return (
+    <div ref={containerRef} data-no-swipe className={className}>
+      {items.map((it, i) => {
+        const k = keyOf(it);
+        const isDragging = dragKey === k;
+        const isOver = dragKey !== null && overIndex === i && !isDragging;
+        return (
+          <div
+            key={k}
+            style={{
+              opacity: isDragging ? 0.45 : 1,
+              borderTop: isOver ? `2px solid ${INK}` : '2px solid transparent',
+              transition: 'opacity .15s',
+              touchAction: dragKey !== null ? 'none' : 'auto',
+            }}
+          >
+            {renderItem(it, i, isDragging)}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1612,7 +1759,7 @@ export default function App() {
     );
   }
 
-  if (locked) {
+  if (locked || !security.pinHash) {
     return (
       <LockScreen
         security={security}
@@ -1681,7 +1828,7 @@ export default function App() {
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
             addAtelier={addAtelier} removeAtelier={removeAtelier} renameAtelier={renameAtelier}
             addIntervenant={addIntervenant} removeIntervenant={removeIntervenant} renameIntervenant={renameIntervenant}
-            onAddGuidance={addGuidance} onRemoveGuidance={removeGuidance} onToggleIndependent={toggleIndependent}
+            onAddGuidance={addGuidance} onRemoveGuidance={removeGuidance} onToggleIndependent={toggleIndependent} onReorderGuidances={setGuidances}
             security={security} onChangePin={(pinHash, pinSalt) => { setSecurity({ pinHash, pinSalt }); notify('Code modifié'); }}
             onExportBackup={exportBackup} onImportBackup={importBackup}
           />
@@ -1857,7 +2004,7 @@ function MiniPinInput({ onSubmit, digits = 4 }) {
   );
 }
 
-function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onExportBackup, onImportBackup }) {
+function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onReorderGuidances, onExportBackup, onImportBackup }) {
   const [initials, setInitials] = useState('');
   const [atelier, setAtelier] = useState('');
   const [intervenant, setIntervenant] = useState('');
@@ -1950,18 +2097,24 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
           <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{guidances.length}</span>
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Utilisées pour les cotations essai par essai et par analyse de tâche. Les guidances marquées d'une étoile
-          comptent comme réussite autonome dans les pourcentages et les critères de maîtrise.
+          Bibliothèque proposée à la création d'un objectif. C'est ensuite dans chaque objectif que l'on
+          choisit les réponses retenues et celles qui comptent comme réussite autonome — l'étoile ci-dessous
+          ne fixe que la valeur par défaut. Appui long sur une ligne pour la déplacer.
         </p>
-        <div className="space-y-1.5 mb-3">
-          {guidances.map((g) => (
-            <div key={g.code} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+        <ReorderList
+          items={guidances}
+          keyOf={(g) => g.code}
+          onReorder={onReorderGuidances}
+          className="space-y-1.5 mb-3"
+          renderItem={(g) => (
+            <div className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+              <GripVertical size={14} style={{ color: INK_SOFT }} className="shrink-0" />
               <span className="w-9 h-7 rounded-md flex items-center justify-center text-xs font-semibold text-white shrink-0"
                 style={{ backgroundColor: g.color, fontFamily: F_DISPLAY }}>
                 {g.code}
               </span>
               <span className="text-sm flex-1 min-w-0 truncate">{g.label}</span>
-              <button onClick={() => onToggleIndependent(g.code)} title="Compte comme indépendant"
+              <button onClick={() => onToggleIndependent(g.code)} title="Réussite autonome par défaut"
                 style={{ color: g.independent ? '#D69A2D' : INK_SOFT }}>
                 <Star size={15} fill={g.independent ? '#D69A2D' : 'none'} />
               </button>
@@ -1969,8 +2122,8 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
                 <X size={15} />
               </button>
             </div>
-          ))}
-        </div>
+          )}
+        />
         {addingGuidance ? (
           <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: BORDER }}>
             <div className="flex gap-2">
@@ -2222,7 +2375,23 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const [newStep, setNewStep] = useState('');
   const [targets, setTargets] = useState(initConfig.targets || []);
   const [newTarget, setNewTarget] = useState('');
-  const [guidanceCodes, setGuidanceCodes] = useState(initConfig.guidanceCodes || null);
+  /* Liste de réponses propre à cet objectif. On reprend d'abord un éventuel
+     guidanceSet enregistré, sinon l'ancienne sélection par codes, sinon toutes
+     les guidances enregistrées — chacune copiée pour que les modifications
+     faites ici ne touchent pas la liste globale. */
+  const [guidanceSet, setGuidanceSet] = useState(() => {
+    if (initConfig.guidanceSet && initConfig.guidanceSet.length) return initConfig.guidanceSet.map((g) => ({ ...g }));
+    if (initConfig.guidanceCodes && initConfig.guidanceCodes.length) {
+      const sel = allGuidances.filter((g) => initConfig.guidanceCodes.includes(g.code));
+      if (sel.length) return sel.map((g) => ({ ...g }));
+    }
+    return allGuidances.map((g) => ({ ...g }));
+  });
+  const [addingResponse, setAddingResponse] = useState(false);
+  const [rCode, setRCode] = useState('');
+  const [rLabel, setRLabel] = useState('');
+  const [rColor, setRColor] = useState(GUIDANCE_PALETTE[0]);
+  const [rIndep, setRIndep] = useState(false);
   const [useGuidance, setUseGuidance] = useState(!!initConfig.useGuidance);
   const [levels, setLevels] = useState(initConfig.levels || DEFAULT_INTERVAL_LEVELS);
   const [newLevel, setNewLevel] = useState('');
@@ -2245,7 +2414,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
     }
     if (type === 'chaining' || type === 'balance') config.steps = steps;
     if (type === 'probe') config.useGuidance = useGuidance;
-    if (USES_GUIDANCE.includes(type) && guidanceCodes && guidanceCodes.length) config.guidanceCodes = guidanceCodes;
+    if (USES_GUIDANCE.includes(type) && guidanceSet.length) config.guidanceSet = guidanceSet;
     if (PERCENT_TYPES.includes(type)) {
       config.mastery = {
         threshold: threshold === '' || threshold === null ? 80 : Math.min(100, Math.max(1, Number(threshold))),
@@ -2410,7 +2579,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
         <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
           <div className="flex items-center gap-1.5 mb-1">
             <SlidersHorizontal size={14} style={{ color: INK_SOFT }} />
-            <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Guidances utilisées</span>
+            <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Réponses possibles</span>
           </div>
 
           {type === 'probe' && (
@@ -2425,29 +2594,104 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
           {(type !== 'probe' || useGuidance) && (
             <>
               <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
-                Aucune sélection = toutes les guidances de l'écran Administratif.
+                Appui long sur une réponse pour la déplacer. L'étoile désigne ce qui compte
+                comme réussite autonome, pour cet élève et cet objectif précis.
               </p>
-              <div className="flex flex-wrap gap-1.5">
-                {allGuidances.map((g) => {
-                  const on = !guidanceCodes || guidanceCodes.includes(g.code);
-                  return (
+
+              <ReorderList
+                items={guidanceSet}
+                keyOf={(g) => g.code}
+                onReorder={setGuidanceSet}
+                className="space-y-1.5 mb-2"
+                renderItem={(g) => (
+                  <div className="flex items-center gap-2 rounded-lg px-2.5 py-2" style={{ backgroundColor: CARD }}>
+                    <GripVertical size={14} style={{ color: INK_SOFT }} className="shrink-0" />
+                    <span className="w-9 h-7 rounded-md flex items-center justify-center text-xs font-semibold text-white shrink-0"
+                      style={{ backgroundColor: g.color, fontFamily: F_DISPLAY }}>
+                      {g.code}
+                    </span>
+                    <span className="text-sm flex-1 min-w-0 truncate">{g.label}</span>
                     <button
-                      key={g.code}
-                      onClick={() =>
-                        setGuidanceCodes((cur) => {
-                          const base = cur || allGuidances.map((x) => x.code);
-                          const next = base.includes(g.code) ? base.filter((c) => c !== g.code) : [...base, g.code];
-                          return next.length ? next : base;
-                        })
-                      }
-                      className="rounded-lg px-3 py-2 text-xs border-2"
-                      style={{ borderColor: g.color, backgroundColor: on ? g.color : 'transparent', color: on ? '#fff' : g.color }}
+                      onClick={() => setGuidanceSet((cur) => cur.map((x) => (x.code === g.code ? { ...x, independent: !x.independent } : x)))}
+                      style={{ color: g.independent ? '#D69A2D' : INK_SOFT }}
+                      title="Compte comme réussite autonome"
                     >
-                      {g.code} · {g.label}
+                      <Star size={15} fill={g.independent ? '#D69A2D' : 'none'} />
                     </button>
-                  );
-                })}
-              </div>
+                    <button
+                      onClick={() => setGuidanceSet((cur) => (cur.length > 1 ? cur.filter((x) => x.code !== g.code) : cur))}
+                      style={{ color: INK_SOFT }}
+                      title="Retirer de cet objectif"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                )}
+              />
+
+              {allGuidances.filter((g) => !guidanceSet.some((x) => x.code === g.code)).length > 0 && (
+                <div className="mb-2">
+                  <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Ajouter depuis les guidances enregistrées</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {allGuidances.filter((g) => !guidanceSet.some((x) => x.code === g.code)).map((g) => (
+                      <button
+                        key={g.code}
+                        onClick={() => setGuidanceSet((cur) => [...cur, { ...g }])}
+                        className="rounded-lg px-3 py-2 text-xs border-2 flex items-center gap-1"
+                        style={{ borderColor: g.color, color: g.color }}
+                      >
+                        <Plus size={12} /> {g.code} · {g.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {addingResponse ? (
+                <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+                  <div className="flex gap-2">
+                    <input
+                      value={rCode}
+                      onChange={(e) => setRCode(e.target.value.toUpperCase().slice(0, 4))}
+                      placeholder="Code"
+                      className="w-24 rounded-xl border px-3 py-2.5 text-sm bg-transparent text-center"
+                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
+                    />
+                    <Field value={rLabel} onChange={setRLabel} placeholder="Intitulé complet" />
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {GUIDANCE_PALETTE.map((c) => (
+                      <button key={c} onClick={() => setRColor(c)} className="w-8 h-8 rounded-lg border-2"
+                        style={{ backgroundColor: c, borderColor: rColor === c ? INK : 'transparent' }} />
+                    ))}
+                  </div>
+                  <button onClick={() => setRIndep((v) => !v)} className="flex items-center gap-1.5 text-xs" style={{ color: rIndep ? '#D69A2D' : INK_SOFT }}>
+                    <Star size={14} fill={rIndep ? '#D69A2D' : 'none'} /> Compte comme réussite autonome
+                  </button>
+                  <div className="flex gap-2">
+                    <Btn
+                      onClick={() => {
+                        const code = rCode.trim();
+                        if (!code || !rLabel.trim()) return;
+                        setGuidanceSet((cur) => [...cur, { code, label: rLabel.trim(), color: rColor, independent: rIndep }]);
+                        setRCode(''); setRLabel(''); setRIndep(false); setAddingResponse(false);
+                      }}
+                      disabled={!rCode.trim() || !rLabel.trim() || guidanceSet.some((x) => x.code === rCode.trim())}
+                      className="flex-1 text-sm py-2.5"
+                    >
+                      Ajouter
+                    </Btn>
+                    <Btn variant="ghost" onClick={() => setAddingResponse(false)} className="text-sm py-2.5">Annuler</Btn>
+                  </div>
+                  {rCode.trim() && guidanceSet.some((x) => x.code === rCode.trim()) && (
+                    <div className="text-xs" style={{ color: CRISIS }}>Ce code est déjà utilisé dans cet objectif.</div>
+                  )}
+                </div>
+              ) : (
+                <Btn variant="ghost" onClick={() => setAddingResponse(true)} className="w-full text-sm py-2.5">
+                  <Plus size={15} /> Créer une réponse personnalisée
+                </Btn>
+              )}
             </>
           )}
         </div>
@@ -3357,7 +3601,7 @@ function ProbeWidget({ obj, entry, guidances, onChange }) {
           return (
             <button
               key={g.code}
-              onClick={() => onChange({ guidance: on ? null : g.code, value: on ? null : (isIndependentCode(guidances, g.code) ? 1 : 0) })}
+              onClick={() => onChange({ guidance: on ? null : g.code, value: on ? null : (isIndependentCode(list, g.code) ? 1 : 0) })}
               className="flex-1 min-w-[72px] rounded-xl py-3 border-2 active:scale-95 transition-transform"
               style={{ borderColor: g.color, backgroundColor: on ? g.color : 'transparent', color: on ? '#fff' : g.color }}
             >
@@ -3609,20 +3853,25 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
 
   return (
     <div>
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         {steps.map((s, i) => {
           const current = entry.steps[s.id];
           return (
-            <div key={s.id} className="flex items-center gap-2">
-              <span className="text-xs w-5 shrink-0" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
-              <span className="text-sm flex-1 min-w-0 truncate">{s.name}</span>
-              <div className="flex gap-1 shrink-0">
+            /* Nom d'étape sur sa propre ligne : avec les boutons à côté, il était
+               tronqué dès que l'intitulé dépassait quelques mots. */
+            <div key={s.id} className="rounded-xl px-2.5 py-2" style={{ backgroundColor: PAPER }}>
+              <div className="flex items-start gap-2 mb-1.5">
+                <span className="text-xs w-5 shrink-0 pt-0.5" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
+                <span className="text-sm flex-1 leading-snug">{s.name}</span>
+              </div>
+              <div className="flex flex-wrap gap-1">
                 {list.map((g) => {
                   const on = current === g.code;
                   return (
                     <button key={g.code} onClick={() => setStep(s.id, g.code)}
-                      className="w-11 h-9 rounded-lg text-xs font-semibold border active:scale-95 transition-transform"
-                      style={{ fontFamily: F_DISPLAY, borderColor: on ? g.color : BORDER, backgroundColor: on ? g.color : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+                      className="flex-1 min-w-[56px] rounded-lg py-2 text-xs font-semibold border active:scale-95 transition-transform"
+                      style={{ fontFamily: F_DISPLAY, borderColor: on ? g.color : BORDER, backgroundColor: on ? g.color : 'transparent', color: on ? '#fff' : INK_SOFT }}
+                      title={g.label}>
                       {g.code}
                     </button>
                   );
