@@ -49,7 +49,7 @@ function useFonts() {
 }
 
 /* ==================== Constantes métier ==================== */
-/* Guidances par défaut. La liste est modifiable dans l'écran Administratif :
+/* Guidances par défaut. La liste est modifiable dans l'écran Gestion :
    le drapeau "independent" désigne ce qui compte comme réussite autonome
    dans les pourcentages et les critères de maîtrise. */
 const DEFAULT_GUIDANCE = [
@@ -66,9 +66,9 @@ const GUIDANCE_VERSION = 2;
 /* Guidances retenues pour un objectif donné : sa sélection, ou toutes par défaut */
 /* Guidances retenues pour un objectif donné.
    - guidanceSet : liste complète propre à l'objectif (ordre, couleurs, libellés,
-     et surtout le drapeau "independent" décidé pour cet élève et cet objectif)
+     et surtout le drapeau "independent" décidé pour cette personne et cet objectif)
    - guidanceCodes : ancien format, simple sélection dans la liste globale
-   - sinon : toutes les guidances de l'écran Administratif */
+   - sinon : toutes les guidances de l'écran Gestion */
 function objectiveGuidances(obj, guidances) {
   const all = guidances && guidances.length ? guidances : DEFAULT_GUIDANCE;
   const set = obj.config && obj.config.guidanceSet;
@@ -108,7 +108,7 @@ const INTERVAL_MODES = [
 const INTERVAL_MODE_SHORT = { momentane: 'momentané', partiel: 'partiel', total: 'total' };
 
 /* Balance Program : chaque étape reçoit une issue, et deux marqueurs
-   indépendants — une demande de l'élève, et le moment du renforcement,
+   indépendants — une demande de la personne, et le moment du renforcement,
    qui varie d'une étape à l'autre. */
 const BALANCE_OUTCOMES = [
   { k: 'reussi', label: 'Réussi', short: 'R', color: '#0F8B6C' },
@@ -795,7 +795,7 @@ function objectivePoints(obj, studentId, sessions, guidances, targetId) {
 }
 
 /* Après enregistrement d'une séance : marque les cibles atteintes et avance.
-   Renvoie la liste des élèves mise à jour et les cibles franchies. */
+   Renvoie la liste des personnes mise à jour et les cibles franchies. */
 function advanceMasteredTargets(students, sessions, guidances) {
   const achieved = [];
   const ordered = sessions.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -830,7 +830,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Élève', 'Objectif', 'Cible', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé']];
 
   function base(sess, sid, obj) {
     return [
@@ -923,7 +923,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Élève', 'Objectif', 'Cible', 'Type de cotation', 'Résultat', 'Score', 'Détail']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Type de cotation', 'Résultat', 'Score', 'Détail']];
   sessions.forEach((s) => {
     const d = new Date(s.date);
     (s.studentIds || []).forEach((sid) => {
@@ -971,7 +971,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
-  const crisisRows = [['Date', 'Heure', 'Élève', 'Atelier', 'Intervenants présents', 'Durée', 'Antécédent', 'Comportement', 'Conséquence', 'Commentaire']];
+  const crisisRows = [['Date', 'Heure', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Antécédent', 'Comportement', 'Conséquence', 'Commentaire']];
   crises.forEach((c) => {
     if (studentFilter && c.studentId && !studentFilter.includes(c.studentId)) return;
     const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
@@ -992,7 +992,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   ws2['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 40 }, { wch: 40 }, { wch: 40 }, { wch: 40 }];
   XLSX.utils.book_append_sheet(wb, ws2, 'Crises');
 
-  const noteRows = [['Date', 'Heure', 'Atelier', 'Élève', 'Note']];
+  const noteRows = [['Date', 'Heure', 'Atelier', 'Personne accompagnée', 'Note']];
   sessions.forEach((s) => {
     Object.entries(s.notes || {}).forEach(([sid, note]) => {
       if (!note || !note.trim() || !keepStudent(sid)) return;
@@ -1009,7 +1009,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   ws3['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 10 }, { wch: 70 }];
   XLSX.utils.book_append_sheet(wb, ws3, 'Notes');
 
-  /* Tableau de bord : une ligne par élève/objectif, une colonne par date.
+  /* Tableau de bord : une ligne par personne/objectif, une colonne par date.
      Format matriciel directement exploitable en graphique ou tableau croisé. */
   const dates = Array.from(new Set(sessions.map((x) => new Date(x.date).toLocaleDateString('fr-FR'))))
     .sort((a, b) => {
@@ -1048,7 +1048,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
     });
   });
 
-  const dashRows = [['Élève', 'Objectif', 'Cible', 'Unité', ...dates, 'Dernier', 'Moyenne', 'Tendance']];
+  const dashRows = [['Personne accompagnée', 'Objectif', 'Cible', 'Unité', ...dates, 'Dernier', 'Moyenne', 'Tendance']];
   Array.from(byRow.values())
     .sort((a, b) => a.eleve.localeCompare(b.eleve) || a.objectif.localeCompare(b.objectif))
     .forEach((r) => {
@@ -1623,7 +1623,7 @@ export default function App() {
     setTimeout(() => setToast(null), 2600);
   }
 
-  /* --- administratif --- */
+  /* --- gestion --- */
   const addStudent = (initials) => setStudents((s) => [...s, { id: uid(), initials, objectives: [] }]);
   const removeStudent = (id) => setStudents((s) => s.filter((x) => x.id !== id));
   const renameStudent = (id, initials) => setStudents((s) => s.map((x) => (x.id === id ? { ...x, initials } : x)));
@@ -1663,7 +1663,7 @@ export default function App() {
       return;
     }
     const ok = window.confirm(
-      `Restaurer cette sauvegarde ?\n\n${(d.students || []).length} élève(s), ${(d.sessions || []).length} séance(s).\n\nToutes les données actuelles de cette tablette seront remplacées.`
+      `Restaurer cette sauvegarde ?\n\n${(d.students || []).length} personne(s), ${(d.sessions || []).length} séance(s).\n\nToutes les données actuelles de cette tablette seront remplacées.`
     );
     if (!ok) return;
     setStudents(d.students || []);
@@ -1713,7 +1713,7 @@ export default function App() {
     setStudents((s) => s.map((st) => (st.id === studentId ? { ...st, objectives: st.objectives.map((o) => (o.id === objId ? { ...next, id: objId } : o)) } : st)));
   const duplicateObjective = (objective, targetIds) => {
     setStudents((s) => s.map((st) => (targetIds.includes(st.id) ? { ...st, objectives: [...st.objectives, { ...objective, id: uid() }] } : st)));
-    notify(`Objectif copié vers ${targetIds.length} élève${targetIds.length !== 1 ? 's' : ''}`);
+    notify(`Objectif copié vers ${targetIds.length} personne${targetIds.length !== 1 ? 's' : ''}`);
   };
   const resetTracking = (studentId, objId) =>
     setStudents((s) => s.map((st) => (st.id === studentId
@@ -1815,8 +1815,8 @@ export default function App() {
       >
         <div className="max-w-4xl mx-auto flex gap-1">
           {[
-            { k: 'admin', label: 'Administratif', icon: Layers },
-            { k: 'students', label: 'Élèves', icon: Users },
+            { k: 'admin', label: 'Gestion', icon: Layers },
+            { k: 'students', label: 'Personnes', icon: Users },
             { k: 'session', label: 'Session', icon: Play },
             { k: 'suivi', label: 'Suivi', icon: TrendingUp },
             { k: 'export', label: 'Export', icon: FileSpreadsheet },
@@ -1949,7 +1949,7 @@ export default function App() {
   );
 }
 
-/* ==================== Écran 1 : administratif ==================== */
+/* ==================== Écran 1 : gestion ==================== */
 /* Modification du code : ré-utilise les mêmes pavés numériques que l'écran de
    verrouillage, mais dans une fenêtre compacte plutôt qu'en plein écran. */
 function ChangePinModal({ security, onSave, onClose }) {
@@ -2052,12 +2052,12 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
 
   return (
     <div>
-      <SectionTitle sub="Les élèves sont identifiés par leurs initiales uniquement.">Administratif</SectionTitle>
+      <SectionTitle sub="Les personnes accompagnées sont identifiées par leurs initiales uniquement.">Gestion</SectionTitle>
 
       <Card className="mb-4">
         <div className="flex items-center gap-2 mb-3">
           <Users size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Élèves</span>
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Personnes accompagnées</span>
           <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{students.length}</span>
         </div>
         <div className="flex gap-2 mb-3">
@@ -2065,7 +2065,7 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
           <Btn onClick={() => { if (initials.trim()) { addStudent(initials.trim()); setInitials(''); } }} className="px-4 shrink-0"><Plus size={18} /></Btn>
         </div>
         {students.length === 0 ? (
-          <Empty>Ajoutez un premier élève pour commencer.</Empty>
+          <Empty>Ajoutez une première personne accompagnée pour commencer.</Empty>
         ) : (
           <div className="space-y-1.5">
             {students.map((s) => (
@@ -2254,7 +2254,7 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
   );
 }
 
-/* ==================== Écran 2 : élèves et objectifs ==================== */
+/* ==================== Écran 2 : personnes accompagnées et objectifs ==================== */
 function StudentsScreen({ students, guidances, addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite }) {
   const [openId, setOpenId] = useState(null);
   const [editingObj, setEditingObj] = useState(null);
@@ -2264,15 +2264,15 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
   if (students.length === 0) {
     return (
       <div>
-        <SectionTitle>Élèves</SectionTitle>
-        <Empty>Ajoutez d'abord des élèves dans l'écran Administratif.</Empty>
+        <SectionTitle>Personnes accompagnées</SectionTitle>
+        <Empty>Ajoutez d'abord des personnes accompagnées dans l'écran Gestion.</Empty>
       </div>
     );
   }
 
   return (
     <div>
-      <SectionTitle sub="Définissez les objectifs de chaque élève et le mode de cotation associé.">Élèves</SectionTitle>
+      <SectionTitle sub="Définissez les objectifs de chaque personne accompagnée et le mode de cotation associé.">Personnes accompagnées</SectionTitle>
       <div className="space-y-3">
         {students.map((s) => (
           <Card key={s.id}>
@@ -2324,7 +2324,7 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                                 {o.type === 'interval' && ` · toutes les ${o.config.intervalMinutes} min · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
                                 {(o.type === 'chaining' || o.type === 'balance') && ` · ${(o.config.steps || []).length} étapes`}
                                 {o.type === 'timer' && (o.config.timerMode === 'countdown' && o.config.timerSeconds
-                                  ? ` · ${Math.round(o.config.timerSeconds / 60)} min`
+                                  ? ` · ${fmtDuration(o.config.timerSeconds * 1000)}`
                                   : ' · chronomètre')}
                                 {o.type === 'timer' && o.config.finalRating && ' · cotation finale'}
                                 {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions} ${o.config.mastery.unit === 'days' ? 'jours' : 'séances'}`}
@@ -2336,7 +2336,7 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                             <button onClick={() => toggleFavorite(s.id, o.id)} style={{ color: o.favorite ? '#D69A2D' : INK_SOFT }} title="Objectif prioritaire">
                               <Star size={15} fill={o.favorite ? '#D69A2D' : 'none'} />
                             </button>
-                            <button onClick={() => { setCopyingObj(copyingObj === o.id ? null : o.id); setCopyTargets([]); }} style={{ color: INK_SOFT }} title="Copier vers d'autres élèves"><Copy size={15} /></button>
+                            <button onClick={() => { setCopyingObj(copyingObj === o.id ? null : o.id); setCopyTargets([]); }} style={{ color: INK_SOFT }} title="Copier vers d'autres personnes"><Copy size={15} /></button>
                             <button onClick={() => setEditingObj(o.id)} style={{ color: INK_SOFT }} title="Modifier"><Pencil size={15} /></button>
                             <button
                               onClick={() => { if (window.confirm(`Supprimer l'objectif « ${o.name} » ?`)) removeObjective(s.id, o.id); }}
@@ -2349,7 +2349,7 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                           <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${BORDER}` }}>
                             <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Copier cet objectif vers</div>
                             {students.filter((x) => x.id !== s.id).length === 0 ? (
-                              <div className="text-xs" style={{ color: INK_SOFT }}>Aucun autre élève enregistré.</div>
+                              <div className="text-xs" style={{ color: INK_SOFT }}>Aucune autre personne enregistrée.</div>
                             ) : (
                               <>
                                 <div className="flex flex-wrap gap-2 mb-2">
@@ -2432,7 +2432,8 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const [rIndep, setRIndep] = useState(false);
   const [useGuidance, setUseGuidance] = useState(!!initConfig.useGuidance);
   const [timerMode, setTimerMode] = useState(initConfig.timerMode || 'chrono');
-  const [timerMinutes, setTimerMinutes] = useState(initConfig.timerSeconds ? Math.round(initConfig.timerSeconds / 60) : 5);
+  const [timerMin, setTimerMin] = useState(initConfig.timerSeconds ? Math.floor(initConfig.timerSeconds / 60) : 5);
+  const [timerSec, setTimerSec] = useState(initConfig.timerSeconds ? initConfig.timerSeconds % 60 : 0);
   const [finalRating, setFinalRating] = useState(!!initConfig.finalRating);
   const [levels, setLevels] = useState(initConfig.levels || DEFAULT_INTERVAL_LEVELS);
   const [newLevel, setNewLevel] = useState('');
@@ -2458,8 +2459,9 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
     if (type === 'timer') {
       config.timerMode = timerMode;
       if (timerMode === 'countdown') {
-        const m = timerMinutes === '' || timerMinutes === null ? 5 : Math.min(60, Math.max(1, Number(timerMinutes)));
-        config.timerSeconds = m * 60;
+        const m = Number(timerMin) || 0;
+        const sec = Number(timerSec) || 0;
+        config.timerSeconds = Math.min(3600, Math.max(5, m * 60 + sec));
       }
       config.finalRating = finalRating;
     }
@@ -2616,21 +2618,40 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
           {timerMode === 'countdown' && (
             <div>
               <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Durée, 60 minutes au maximum</div>
-              <div className="flex gap-1.5 flex-wrap items-center">
-                {[1, 2, 5, 10, 15, 30].map((n) => (
-                  <button key={n} onClick={() => setTimerMinutes(n)} className="rounded-lg px-3 py-2 text-sm border"
-                    style={{ borderColor: timerMinutes === n ? INK : BORDER, backgroundColor: timerMinutes === n ? INK : 'transparent', color: timerMinutes === n ? '#fff' : INK_SOFT, fontFamily: F_MONO }}>
-                    {n}
-                  </button>
-                ))}
+              <div className="flex gap-1.5 flex-wrap mb-2">
+                {[30, 60, 90, 120, 300, 600].map((total) => {
+                  const m = Math.floor(total / 60);
+                  const sec = total % 60;
+                  const on = Number(timerMin) * 60 + Number(timerSec) === total;
+                  return (
+                    <button key={total} onClick={() => { setTimerMin(m); setTimerSec(sec); }}
+                      className="rounded-lg px-3 py-2 text-sm border"
+                      style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT, fontFamily: F_MONO }}>
+                      {m ? `${m} min` : ''}{sec ? `${m ? ' ' : ''}${sec} s` : ''}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex gap-2 items-center">
                 <input
-                  type="number" inputMode="numeric" min="1" max="60" value={timerMinutes}
-                  onChange={(e) => setTimerMinutes(e.target.value === '' ? '' : Number(e.target.value))}
-                  onBlur={() => setTimerMinutes((v) => (v === '' || v === null ? 5 : Math.min(60, Math.max(1, Number(v)))))}
-                  className="w-20 rounded-lg border px-2 py-2 text-sm bg-transparent text-center"
+                  type="number" inputMode="numeric" min="0" max="60" value={timerMin}
+                  onChange={(e) => setTimerMin(e.target.value === '' ? '' : Number(e.target.value))}
+                  onBlur={() => setTimerMin((v) => (v === '' || v === null ? 0 : Math.min(60, Math.max(0, Number(v)))))}
+                  className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
                   style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
                 />
                 <span className="text-xs" style={{ color: INK_SOFT }}>min</span>
+                <input
+                  type="number" inputMode="numeric" min="0" max="59" value={timerSec}
+                  onChange={(e) => setTimerSec(e.target.value === '' ? '' : Number(e.target.value))}
+                  onBlur={() => setTimerSec((v) => (v === '' || v === null ? 0 : Math.min(59, Math.max(0, Number(v)))))}
+                  className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
+                  style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
+                />
+                <span className="text-xs" style={{ color: INK_SOFT }}>s</span>
+                <span className="text-xs ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
+                  = {fmtDuration(Math.min(3600, Math.max(5, (Number(timerMin) || 0) * 60 + (Number(timerSec) || 0))) * 1000)}
+                </span>
               </div>
             </div>
           )}
@@ -2689,7 +2710,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
             <>
               <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
                 Appui long sur une réponse pour la déplacer. L'étoile désigne ce qui compte
-                comme réussite autonome, pour cet élève et cet objectif précis.
+                comme réussite autonome, pour cette personne et cet objectif précis.
               </p>
 
               <ReorderList
@@ -2900,10 +2921,10 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   const [mode, setMode] = useState('atelier');
 
   /* En mode Balance Program, seuls les objectifs de ce type sont proposés :
-     chaque élève a le sien. Il reste disponible dans un atelier classique. */
+     chaque personne a le sien. Il reste disponible dans un atelier classique. */
   const visibleObjectives = (st) => (mode === 'balance' ? st.objectives.filter((o) => o.type === 'balance') : st.objectives);
 
-  /* Objectifs prioritaires propres à cet atelier : un même élève peut avoir des
+  /* Objectifs prioritaires propres à cet atelier : une même personne peut avoir des
      priorités différentes d'un atelier à l'autre. Distinct du prioritaire posé
      à la création de l'objectif, qui vaut lui quel que soit l'atelier. */
   const [atelierFavorites, setAtelierFavorites] = useState([]);
@@ -3008,14 +3029,14 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
     return (
       <div>
         <SectionTitle>Session</SectionTitle>
-        <Empty>Créez au moins un élève dans l'écran Administratif.</Empty>
+        <Empty>Créez au moins une personne accompagnée dans l'écran Gestion.</Empty>
       </div>
     );
   }
 
   return (
     <div>
-      <SectionTitle sub="Choisissez l'atelier, les élèves présents et les objectifs travaillés.">Nouvelle session</SectionTitle>
+      <SectionTitle sub="Choisissez l'atelier, les personnes présentes et les objectifs travaillés.">Nouvelle session</SectionTitle>
 
       <div className="flex gap-1.5 mb-4">
         {[
@@ -3039,7 +3060,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
 
       {mode === 'balance' && (
         <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
-          Sélectionnez les élèves concernés : chacun cotera son propre Balance Program.
+          Sélectionnez les personnes concernées : chacune cotera son propre Balance Program.
         </p>
       )}
 
@@ -3054,7 +3075,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                 {a.name}
                 {a.usualStudentIds && a.usualStudentIds.length > 0 && (
                   <span className="block text-xs mt-0.5" style={{ opacity: 0.7 }}>
-                    Mémorisé : {a.usualStudentIds.length} élève{a.usualStudentIds.length !== 1 ? 's' : ''}
+                    Mémorisé : {a.usualStudentIds.length} personne{a.usualStudentIds.length !== 1 ? 's' : ''}
                     {a.favoriteObjectiveIds && a.favoriteObjectiveIds.length > 0 &&
                       ` · ${a.favoriteObjectiveIds.length} prioritaire${a.favoriteObjectiveIds.length !== 1 ? 's' : ''}`}
                   </span>
@@ -3086,7 +3107,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
 
       <Card className="mb-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs" style={{ color: INK_SOFT }}>Élèves présents</span>
+          <span className="text-xs" style={{ color: INK_SOFT }}>Personnes présentes</span>
           {mode === 'atelier' && atelierId && studentIds.length > 0 && !sameAsUsual && (
             <button
               onClick={() => {
@@ -3121,7 +3142,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
             <div className="font-semibold mb-2" style={{ fontFamily: F_DISPLAY }}>{st.initials}</div>
             {visibleObjectives(st).length === 0 ? (
               <div className="text-sm" style={{ color: INK_SOFT }}>
-                {mode === 'balance' ? 'Aucun Balance Program défini pour cet élève.' : 'Aucun objectif défini pour cet élève.'}
+                {mode === 'balance' ? 'Aucun Balance Program défini pour cette personne.' : 'Aucun objectif défini pour cette personne.'}
               </div>
             ) : (
               <div className="space-y-1.5">
@@ -3180,7 +3201,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                   <button className="flex-1 text-left" onClick={() => onEditSession(s)}>
                     <div className="text-sm font-medium">{a ? a.name : s.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</div>
                     <div className="text-xs" style={{ color: INK_SOFT }}>
-                      {new Date(s.date).toLocaleDateString('fr-FR')} {timeShort(s.date)} · {s.studentIds.length} élève{s.studentIds.length !== 1 ? 's' : ''}
+                      {new Date(s.date).toLocaleDateString('fr-FR')} {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
                     </div>
                   </button>
                   <button
@@ -3264,7 +3285,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     if (fire) alertInterval({ soundOn, vibrateOn });
   }, [now]);
 
-  /* Balayage dans la zone de cotation : bascule prioritaires / par élève.
+  /* Balayage dans la zone de cotation : bascule prioritaires / par personne.
      Le hook s'arrête au conteneur, donc son propre data-no-swipe — qui empêche
      le changement de page — ne bloque pas ce geste-ci. */
   const toStudentView = React.useCallback(() => setViewMode('student'), []);
@@ -3424,7 +3445,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           />
           {[
             { k: 'priority', label: 'Prioritaires', icon: Star },
-            { k: 'student', label: 'Par élève', icon: Users },
+            { k: 'student', label: 'Par personne', icon: Users },
           ].map((v) => {
             const Icon = v.icon;
             const on = viewMode === v.k;
@@ -3448,7 +3469,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           transition: cotationSwipe.dragging ? 'none' : 'transform .2s ease-out',
         }}
       >
-        {/* Contenu : tous les prioritaires, ou l'élève courant */}
+        {/* Contenu : tous les prioritaires, ou la personne courante */}
         <div className="flex-1 min-w-0">
           {viewMode === 'priority' ? (
             <div className="space-y-5">
@@ -3473,7 +3494,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                     </div>
                     {ids.length === 0 ? (
                       <div className="rounded-xl border border-dashed px-3 py-4 text-center text-xs" style={{ borderColor: BORDER, color: INK_SOFT }}>
-                        Aucun objectif prioritaire pour cet élève.
+                        Aucun objectif prioritaire pour cette personne.
                       </div>
                     ) : (
                       <div className="space-y-3">
@@ -3540,7 +3561,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           )}
         </div>
 
-        {/* Rail de navigation entre élèves */}
+        {/* Rail de navigation entre personnes */}
         <div className="shrink-0 flex flex-col gap-2 sticky top-20 self-start">
           {session.studentIds.map((sid) => {
             const st = students.find((s) => s.id === sid);
@@ -4297,7 +4318,7 @@ function SuiviScreen({ students, sessions, guidances, onResetTracking }) {
     return (
       <div>
         <SectionTitle>Suivi</SectionTitle>
-        <Empty>Ajoutez des élèves et enregistrez des séances pour voir les courbes.</Empty>
+        <Empty>Ajoutez des personnes accompagnées et enregistrez des séances pour voir les courbes.</Empty>
       </div>
     );
   }
@@ -4463,7 +4484,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
   const [picked, setPicked] = useState(unsentIds);
 
   /* Deux façons de composer un rapport : en choisissant des séances, ou en
-     choisissant des élèves — auquel cas toutes leurs cotations sont reprises,
+     choisissant des personnes — auquel cas toutes leurs cotations sont reprises,
      quelles que soient les séances. */
   const [mode, setMode] = useState('sessions');
   const [pickedStudents, setPickedStudents] = useState([]);
@@ -4531,7 +4552,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
           <div className="flex gap-1.5 mb-4">
             {[
               { k: 'sessions', label: 'Par séance', icon: Layers },
-              { k: 'students', label: 'Par élève', icon: Users },
+              { k: 'students', label: 'Par personne', icon: Users },
             ].map((m) => {
               const Icon = m.icon;
               const on = mode === m.k;
@@ -4548,7 +4569,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
           {byStudent ? (
             <div className="mb-4">
               <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
-                Élèves à inclure — toutes leurs cotations sont reprises, quelles que soient les séances
+                Personnes à inclure — toutes leurs cotations sont reprises, quelles que soient les séances
               </div>
               <div className="flex flex-wrap gap-2 mb-2">
                 {students.map((st) => {
@@ -4594,7 +4615,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                   <button className="flex-1 text-left min-w-0" onClick={() => setPicked((p) => (on ? p.filter((x) => x !== s.id) : [...p, s.id]))}>
                     <div className="text-sm font-medium truncate">{sessionLabel(s)}</div>
                     <div className="text-xs" style={{ color: INK_SOFT }}>
-                      {new Date(s.date).toLocaleDateString('fr-FR')} {timeShort(s.date)} · {s.studentIds.length} élève{s.studentIds.length !== 1 ? 's' : ''}
+                      {new Date(s.date).toLocaleDateString('fr-FR')} {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
                     </div>
                   </button>
                   <button
@@ -4644,7 +4665,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
               return (
                 <button key={c.id} onClick={() => onEditCrisis(c)} className="w-full text-left rounded-2xl border p-4" style={{ borderColor: BORDER, backgroundColor: CARD }}>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{st ? st.initials : 'Élève non renseigné'}</span>
+                    <span className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{st ? st.initials : 'Personne non renseignée'}</span>
                     <span className="text-xs" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{fmtDuration(c.durationMs)}</span>
                   </div>
                   <div className="text-xs" style={{ color: INK_SOFT }}>
@@ -4749,9 +4770,9 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, on
         )}
 
         <div>
-          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Élève concerné</div>
+          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Personne concernée</div>
           {students.length === 0 ? (
-            <div className="text-sm" style={{ color: INK_SOFT }}>Aucun élève enregistré.</div>
+            <div className="text-sm" style={{ color: INK_SOFT }}>Aucune personne enregistrée.</div>
           ) : (
             <div className="flex flex-wrap gap-2">
               {students.map((s) => (
