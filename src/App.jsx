@@ -117,6 +117,13 @@ const BALANCE_OUTCOMES = [
   { k: 'manque', label: 'Étape manquée', short: 'M', color: '#565E54' },
 ];
 
+/* Cotation facultative en fin de temps, pour les objectifs chronométrés */
+const TIMER_OUTCOMES = [
+  { k: 'reussi', label: 'Réussite', short: 'R', color: '#0F8B6C' },
+  { k: 'guide', label: 'Guidé', short: 'G', color: '#D69A2D' },
+  { k: 'echec', label: 'Échec', short: 'E', color: '#A8402F' },
+];
+
 const DEFAULT_CHAIN_STEPS = [
   { id: 'st1', name: 'Étape 1' },
   { id: 'st2', name: 'Étape 2' },
@@ -445,7 +452,7 @@ function emptyEntry(obj) {
   if (obj.type === 'trials') return { trials: obj.config.trialCount ? Array(obj.config.trialCount).fill(null) : [] };
   if (obj.type === 'probe') return { value: null, guidance: null };
   if (obj.type === 'occurrence') return { count: 0 };
-  if (obj.type === 'timer') return { elapsedMs: 0, running: false, startedAt: null };
+  if (obj.type === 'timer') return { elapsedMs: 0, running: false, startedAt: null, finalOutcome: null };
   if (obj.type === 'interval') return { marks: {}, segments: [] };
   if (obj.type === 'chaining') return { steps: {} };
   if (obj.type === 'latency') return { latencies: [], running: false, startedAt: null };
@@ -561,7 +568,15 @@ function summarize(obj, entry, guidances) {
     return { result: `${entry.count} occurrence${entry.count !== 1 ? 's' : ''}`, detail: '' };
   }
   if (obj.type === 'timer') {
-    return { result: entry.elapsedMs ? fmtDuration(entry.elapsedMs) : 'Non démarré', detail: `${Math.round(entry.elapsedMs / 1000)} s` };
+    const o = entry.finalOutcome ? TIMER_OUTCOMES.find((x) => x.k === entry.finalOutcome) : null;
+    const base = entry.elapsedMs ? fmtDuration(entry.elapsedMs) : 'Non démarré';
+    const cible = obj.config && obj.config.timerMode === 'countdown' && obj.config.timerSeconds
+      ? ` / ${fmtDuration(obj.config.timerSeconds * 1000)}`
+      : '';
+    return {
+      result: `${base}${cible}${o ? ` · ${o.label}` : ''}`,
+      detail: `${Math.round((entry.elapsedMs || 0) / 1000)} s${o ? ` | ${o.label}` : ''}`,
+    };
   }
   if (obj.type === 'interval') {
     const levels = obj.config.levels || [];
@@ -810,7 +825,7 @@ function advanceMasteredTargets(students, sessions, guidances) {
    sa propre ligne. La colonne "Indépendant" vaut 1 ou 0 : une moyenne dessus
    donne directement un pourcentage, sans formule à écrire. Les étapes
    manquées restent hors de cette colonne, comme dans les calculs de l'appli. */
-function buildDetailRows(sessions, students, ateliers, intervenants, guidances) {
+function buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter) {
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
@@ -831,6 +846,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances) 
 
   sessions.forEach((sess) => {
     (sess.studentIds || []).forEach((sid) => {
+      if (studentFilter && !studentFilter.includes(sid)) return;
       const objIds = (sess.selectedObjectives && sess.selectedObjectives[sid]) || [];
       objIds.forEach((oid) => {
         const obj = (sess.objectiveSnapshot || {})[oid];
@@ -872,6 +888,17 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances) 
           });
         }
 
+        if (obj.type === 'timer' && ((entry.elapsedMs || 0) > 0 || entry.finalOutcome)) {
+          const o = entry.finalOutcome ? TIMER_OUTCOMES.find((x) => x.k === entry.finalOutcome) : null;
+          const secondes = Math.round((entry.elapsedMs || 0) / 1000);
+          rows.push([
+            ...b, 'Timer', 1, '',
+            `${secondes} s${o ? ` · ${o.label}` : ''}`,
+            o ? (o.k === 'reussi' ? 1 : 0) : '',
+            '', '',
+          ]);
+        }
+
         if (obj.type === 'interval') {
           const levels = obj.config.levels || [];
           Object.entries(entry.marks || {}).forEach(([n, lid]) => {
@@ -890,7 +917,8 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances) 
   return rows;
 }
 
-function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], guidances) {
+function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], guidances, studentFilter) {
+  const keepStudent = (sid) => !studentFilter || studentFilter.includes(sid);
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
@@ -899,6 +927,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   sessions.forEach((s) => {
     const d = new Date(s.date);
     (s.studentIds || []).forEach((sid) => {
+      if (!keepStudent(sid)) return;
       const objIds = (s.selectedObjectives && s.selectedObjectives[sid]) || [];
       objIds.forEach((oid) => {
         const obj = (s.objectiveSnapshot || {})[oid];
@@ -936,7 +965,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Cotations');
 
-  const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, guidances);
+  const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter);
   const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
   wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }];
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
@@ -944,6 +973,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
 
   const crisisRows = [['Date', 'Heure', 'Élève', 'Atelier', 'Intervenants présents', 'Durée', 'Antécédent', 'Comportement', 'Conséquence', 'Commentaire']];
   crises.forEach((c) => {
+    if (studentFilter && c.studentId && !studentFilter.includes(c.studentId)) return;
     const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
     crisisRows.push([
       new Date(c.date).toLocaleDateString('fr-FR'),
@@ -965,7 +995,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   const noteRows = [['Date', 'Heure', 'Atelier', 'Élève', 'Note']];
   sessions.forEach((s) => {
     Object.entries(s.notes || {}).forEach(([sid, note]) => {
-      if (!note || !note.trim()) return;
+      if (!note || !note.trim() || !keepStudent(sid)) return;
       noteRows.push([
         new Date(s.date).toLocaleDateString('fr-FR'),
         timeShort(s.date),
@@ -992,6 +1022,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   sessions.forEach((sess) => {
     const jour = new Date(sess.date).toLocaleDateString('fr-FR');
     (sess.studentIds || []).forEach((sid) => {
+      if (!keepStudent(sid)) return;
       const objIds = (sess.selectedObjectives && sess.selectedObjectives[sid]) || [];
       objIds.forEach((oid) => {
         const obj = (sess.objectiveSnapshot || {})[oid];
@@ -1599,7 +1630,10 @@ export default function App() {
   const addAtelier = (name) => setAteliers((a) => [...a, { id: uid(), name }]);
   const removeAtelier = (id) => setAteliers((a) => a.filter((x) => x.id !== id));
   const renameAtelier = (id, name) => setAteliers((a) => a.map((x) => (x.id === id ? { ...x, name } : x)));
-  const setAtelierGroup = (id, studentIds) => setAteliers((a) => a.map((x) => (x.id === id ? { ...x, usualStudentIds: studentIds } : x)));
+  const setAtelierGroup = (id, config) =>
+    setAteliers((a) => a.map((x) => (x.id === id
+      ? { ...x, usualStudentIds: config.studentIds, usualObjectives: config.objectives, favoriteObjectiveIds: config.favorites }
+      : x)));
   const addIntervenant = (name) => setIntervenants((l) => [...l, { id: uid(), name }]);
   const removeIntervenant = (id) => setIntervenants((l) => l.filter((x) => x.id !== id));
   const renameIntervenant = (id, name) => setIntervenants((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
@@ -2289,6 +2323,10 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                                 {o.type === 'trials' && (o.config.trialCount ? ` · ${o.config.trialCount} essais prévus` : ' · essais sans limite')}
                                 {o.type === 'interval' && ` · toutes les ${o.config.intervalMinutes} min · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
                                 {(o.type === 'chaining' || o.type === 'balance') && ` · ${(o.config.steps || []).length} étapes`}
+                                {o.type === 'timer' && (o.config.timerMode === 'countdown' && o.config.timerSeconds
+                                  ? ` · ${Math.round(o.config.timerSeconds / 60)} min`
+                                  : ' · chronomètre')}
+                                {o.type === 'timer' && o.config.finalRating && ' · cotation finale'}
                                 {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions} ${o.config.mastery.unit === 'days' ? 'jours' : 'séances'}`}
                                 {objectiveTargets(o).length > 0 && ` · ${(o.masteredTargetIds || []).length}/${objectiveTargets(o).length} cibles acquises`}
                               </div>
@@ -2393,6 +2431,9 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const [rColor, setRColor] = useState(GUIDANCE_PALETTE[0]);
   const [rIndep, setRIndep] = useState(false);
   const [useGuidance, setUseGuidance] = useState(!!initConfig.useGuidance);
+  const [timerMode, setTimerMode] = useState(initConfig.timerMode || 'chrono');
+  const [timerMinutes, setTimerMinutes] = useState(initConfig.timerSeconds ? Math.round(initConfig.timerSeconds / 60) : 5);
+  const [finalRating, setFinalRating] = useState(!!initConfig.finalRating);
   const [levels, setLevels] = useState(initConfig.levels || DEFAULT_INTERVAL_LEVELS);
   const [newLevel, setNewLevel] = useState('');
   const [targetLevelId, setTargetLevelId] = useState(
@@ -2414,6 +2455,14 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
     }
     if (type === 'chaining' || type === 'balance') config.steps = steps;
     if (type === 'probe') config.useGuidance = useGuidance;
+    if (type === 'timer') {
+      config.timerMode = timerMode;
+      if (timerMode === 'countdown') {
+        const m = timerMinutes === '' || timerMinutes === null ? 5 : Math.min(60, Math.max(1, Number(timerMinutes)));
+        config.timerSeconds = m * 60;
+      }
+      config.finalRating = finalRating;
+    }
     if (USES_GUIDANCE.includes(type) && guidanceSet.length) config.guidanceSet = guidanceSet;
     if (PERCENT_TYPES.includes(type)) {
       config.mastery = {
@@ -2547,6 +2596,51 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {type === 'timer' && (
+        <div className="space-y-3">
+          <div>
+            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Fonctionnement</div>
+            <div className="flex gap-1.5">
+              {[{ k: 'chrono', l: 'Chronomètre' }, { k: 'countdown', l: 'Temps fixé' }].map((m) => (
+                <button key={m.k} onClick={() => setTimerMode(m.k)} className="flex-1 rounded-lg py-2.5 text-sm border"
+                  style={{ borderColor: timerMode === m.k ? INK : BORDER, backgroundColor: timerMode === m.k ? INK : 'transparent', color: timerMode === m.k ? '#fff' : INK_SOFT }}>
+                  {m.l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {timerMode === 'countdown' && (
+            <div>
+              <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Durée, 60 minutes au maximum</div>
+              <div className="flex gap-1.5 flex-wrap items-center">
+                {[1, 2, 5, 10, 15, 30].map((n) => (
+                  <button key={n} onClick={() => setTimerMinutes(n)} className="rounded-lg px-3 py-2 text-sm border"
+                    style={{ borderColor: timerMinutes === n ? INK : BORDER, backgroundColor: timerMinutes === n ? INK : 'transparent', color: timerMinutes === n ? '#fff' : INK_SOFT, fontFamily: F_MONO }}>
+                    {n}
+                  </button>
+                ))}
+                <input
+                  type="number" inputMode="numeric" min="1" max="60" value={timerMinutes}
+                  onChange={(e) => setTimerMinutes(e.target.value === '' ? '' : Number(e.target.value))}
+                  onBlur={() => setTimerMinutes((v) => (v === '' || v === null ? 5 : Math.min(60, Math.max(1, Number(v)))))}
+                  className="w-20 rounded-lg border px-2 py-2 text-sm bg-transparent text-center"
+                  style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
+                />
+                <span className="text-xs" style={{ color: INK_SOFT }}>min</span>
+              </div>
+            </div>
+          )}
+
+          <button onClick={() => setFinalRating((v) => !v)} className="flex items-center gap-1.5 text-sm">
+            <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: finalRating ? INK : BORDER }}>
+              <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: finalRating ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+            </span>
+            Cotation en fin de temps (réussite / guidé / échec)
+          </button>
         </div>
       )}
 
@@ -2809,13 +2903,23 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
      chaque élève a le sien. Il reste disponible dans un atelier classique. */
   const visibleObjectives = (st) => (mode === 'balance' ? st.objectives.filter((o) => o.type === 'balance') : st.objectives);
 
-  const applyGroup = (ids) => {
+  /* Objectifs prioritaires propres à cet atelier : un même élève peut avoir des
+     priorités différentes d'un atelier à l'autre. Distinct du prioritaire posé
+     à la création de l'objectif, qui vaut lui quel que soit l'atelier. */
+  const [atelierFavorites, setAtelierFavorites] = useState([]);
+
+  const applyGroup = (ids, savedObjectives) => {
     setStudentIds(ids);
     setSelected(() => {
       const next = {};
       ids.forEach((id) => {
         const st = students.find((s) => s.id === id);
-        next[id] = st ? visibleObjectives(st).map((o) => o.id) : [];
+        if (!st) return;
+        const visibles = visibleObjectives(st).map((o) => o.id);
+        const saved = savedObjectives && savedObjectives[id];
+        // On ne retient que les objectifs encore existants et visibles dans ce mode
+        next[id] = saved ? saved.filter((oid) => visibles.includes(oid)) : visibles;
+        if (!next[id].length) next[id] = visibles;
       });
       return next;
     });
@@ -2825,11 +2929,11 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   const pickAtelier = (id) => {
     const next = atelierId === id ? null : id;
     setAtelierId(next);
-    if (next) {
-      const a = ateliers.find((x) => x.id === next);
-      const usual = a && a.usualStudentIds ? a.usualStudentIds.filter((sid) => students.some((s) => s.id === sid)) : [];
-      if (usual.length && (studentIds.length === 0 || autoApplied)) applyGroup(usual);
-    }
+    if (!next) { setAtelierFavorites([]); return; }
+    const a = ateliers.find((x) => x.id === next);
+    const usual = a && a.usualStudentIds ? a.usualStudentIds.filter((sid) => students.some((s) => s.id === sid)) : [];
+    setAtelierFavorites((a && a.favoriteObjectiveIds) || []);
+    if (usual.length && (studentIds.length === 0 || autoApplied)) applyGroup(usual, a && a.usualObjectives);
   };
 
   const toggleStudent = (id) => {
@@ -2846,12 +2950,26 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       const cur = sel[sid] || [];
       return { ...sel, [sid]: cur.includes(oid) ? cur.filter((x) => x !== oid) : [...cur, oid] };
     });
+  const toggleAtelierFavorite = (oid) =>
+    setAtelierFavorites((cur) => (cur.includes(oid) ? cur.filter((x) => x !== oid) : [...cur, oid]));
 
   const currentAtelier = ateliers.find((a) => a.id === atelierId);
-  const sameAsUsual =
-    currentAtelier && currentAtelier.usualStudentIds &&
-    currentAtelier.usualStudentIds.length === studentIds.length &&
-    currentAtelier.usualStudentIds.every((id) => studentIds.includes(id));
+
+  /* Le bouton de mémorisation n'apparaît que si la configuration en cours
+     diffère de celle déjà enregistrée pour cet atelier. */
+  const sameAsUsual = (() => {
+    if (!currentAtelier) return false;
+    const savedIds = currentAtelier.usualStudentIds || [];
+    if (savedIds.length !== studentIds.length || !savedIds.every((id) => studentIds.includes(id))) return false;
+    const savedFav = currentAtelier.favoriteObjectiveIds || [];
+    if (savedFav.length !== atelierFavorites.length || !savedFav.every((id) => atelierFavorites.includes(id))) return false;
+    const savedObj = currentAtelier.usualObjectives || {};
+    return studentIds.every((id) => {
+      const a = savedObj[id] || [];
+      const b = selected[id] || [];
+      return a.length === b.length && a.every((oid) => b.includes(oid));
+    });
+  })();
 
   const ready = studentIds.length > 0 && studentIds.every((id) => (selected[id] || []).length > 0);
 
@@ -2865,7 +2983,9 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       (selected[sid] || []).forEach((oid) => {
         const obj = st.objectives.find((o) => o.id === oid);
         const cible = currentTarget(obj);
-        snapshot[oid] = { ...obj, activeTargetName: cible ? cible.name : null };
+        // Prioritaire si l'objectif l'est en soi, ou s'il l'est pour cet atelier
+        const favorite = !!obj.favorite || (mode === 'atelier' && atelierFavorites.includes(oid));
+        snapshot[oid] = { ...obj, favorite, activeTargetName: cible ? cible.name : null };
         data[sid][oid] = { ...emptyEntry(obj), targetId: cible ? cible.id : null };
       });
     });
@@ -2934,7 +3054,9 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                 {a.name}
                 {a.usualStudentIds && a.usualStudentIds.length > 0 && (
                   <span className="block text-xs mt-0.5" style={{ opacity: 0.7 }}>
-                    Groupe habituel : {a.usualStudentIds.length} élève{a.usualStudentIds.length !== 1 ? 's' : ''}
+                    Mémorisé : {a.usualStudentIds.length} élève{a.usualStudentIds.length !== 1 ? 's' : ''}
+                    {a.favoriteObjectiveIds && a.favoriteObjectiveIds.length > 0 &&
+                      ` · ${a.favoriteObjectiveIds.length} prioritaire${a.favoriteObjectiveIds.length !== 1 ? 's' : ''}`}
                   </span>
                 )}
               </span>
@@ -2967,11 +3089,14 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
           <span className="text-xs" style={{ color: INK_SOFT }}>Élèves présents</span>
           {mode === 'atelier' && atelierId && studentIds.length > 0 && !sameAsUsual && (
             <button
-              onClick={() => { onSetAtelierGroup(atelierId, studentIds); notify('Groupe habituel mémorisé pour cet atelier'); }}
+              onClick={() => {
+                onSetAtelierGroup(atelierId, { studentIds, objectives: selected, favorites: atelierFavorites });
+                notify('Configuration mémorisée pour cet atelier');
+              }}
               className="text-xs flex items-center gap-1"
               style={{ color: INK_SOFT }}
             >
-              <Star size={12} /> Mémoriser ce groupe
+              <Star size={12} /> Mémoriser cette configuration
             </button>
           )}
         </div>
@@ -3004,13 +3129,32 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                   const on = (selected[sid] || []).includes(o.id);
                   const meta = TYPES[o.type];
                   const Icon = meta.icon;
+                  const favAtelier = atelierFavorites.includes(o.id);
                   return (
-                    <button key={o.id} onClick={() => toggleObjective(sid, o.id)} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 text-left border text-sm"
+                    <div key={o.id} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm"
                       style={{ borderColor: on ? meta.color : BORDER, backgroundColor: on ? meta.color + '14' : 'transparent' }}>
-                      <Icon size={15} style={{ color: meta.color }} />
-                      <span className="flex-1">{o.name}</span>
-                      {on && <Check size={15} style={{ color: meta.color }} />}
-                    </button>
+                      <button onClick={() => toggleObjective(sid, o.id)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                        <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
+                        <span className="flex-1 min-w-0">
+                          {o.name}
+                          {o.favorite && (
+                            <span className="text-xs ml-1.5" style={{ color: '#D69A2D' }}>prioritaire</span>
+                          )}
+                        </span>
+                        {on && <Check size={15} style={{ color: meta.color }} className="shrink-0" />}
+                      </button>
+                      {/* Prioritaire pour cet atelier seulement */}
+                      {mode === 'atelier' && atelierId && on && !o.favorite && (
+                        <button
+                          onClick={() => toggleAtelierFavorite(o.id)}
+                          className="shrink-0"
+                          style={{ color: favAtelier ? '#D69A2D' : INK_SOFT }}
+                          title="Prioritaire pour cet atelier"
+                        >
+                          <Star size={15} fill={favAtelier ? '#D69A2D' : 'none'} />
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -3461,7 +3605,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
         {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
-        {obj.type === 'timer' && <TimerWidget entry={entry} now={now} onChange={onChange} />}
+        {obj.type === 'timer' && <TimerWidget obj={obj} entry={entry} now={now} onChange={onChange} />}
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
         {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'latency' && <LatencyWidget entry={entry} now={now} onChange={onChange} />}
@@ -3645,24 +3789,97 @@ function OccurrenceWidget({ entry, onChange }) {
   );
 }
 
-function TimerWidget({ entry, now, onChange }) {
-  const display = entry.running ? entry.elapsedMs + (now - entry.startedAt) : entry.elapsedMs;
+function TimerWidget({ obj, entry, now, onChange }) {
+  const cfg = (obj && obj.config) || {};
+  const countdown = cfg.timerMode === 'countdown' && cfg.timerSeconds > 0;
+  const targetMs = (cfg.timerSeconds || 0) * 1000;
+  const raw = entry.running ? (entry.elapsedMs || 0) + (now - entry.startedAt) : (entry.elapsedMs || 0);
+  const fired = useRef(false);
+
+  /* Fin du compte à rebours : on arrête le chronomètre et on signale,
+     comme pour un changement d'intervalle. */
+  useEffect(() => {
+    if (!countdown || !entry.running || fired.current) return;
+    if (raw >= targetMs) {
+      fired.current = true;
+      alertInterval({ soundOn: true, vibrateOn: true });
+      onChange({ running: false, elapsedMs: targetMs, startedAt: null });
+    }
+  });
+  useEffect(() => {
+    if (!entry.running) fired.current = false;
+  }, [entry.running]);
+
+  const finished = countdown && raw >= targetMs;
+  const display = countdown ? Math.max(0, targetMs - raw) : raw;
+
   function toggle() {
-    if (entry.running) onChange({ running: false, elapsedMs: entry.elapsedMs + (Date.now() - entry.startedAt), startedAt: null });
-    else onChange({ running: true, startedAt: Date.now() });
+    if (entry.running) {
+      onChange({ running: false, elapsedMs: (entry.elapsedMs || 0) + (Date.now() - entry.startedAt), startedAt: null });
+      return;
+    }
+    // Relancer après la fin d'un compte à rebours repart de zéro
+    if (countdown && (entry.elapsedMs || 0) >= targetMs) {
+      fired.current = false;
+      onChange({ running: true, startedAt: Date.now(), elapsedMs: 0 });
+      return;
+    }
+    onChange({ running: true, startedAt: Date.now() });
   }
+
   return (
-    <div className="flex items-center gap-3">
-      <div className="text-3xl font-semibold tabular-nums" style={{ fontFamily: F_MONO }}>{fmtClock(display)}</div>
-      <button onClick={toggle}
-        className="ml-auto rounded-xl px-5 py-3 text-white flex items-center gap-2 active:scale-95 transition-transform"
-        style={{ backgroundColor: entry.running ? '#A8402F' : TYPES.timer.color, fontFamily: F_DISPLAY }}>
-        {entry.running ? <><Pause size={17} /> Arrêter</> : <><Play size={17} /> Démarrer</>}
-      </button>
-      {(entry.elapsedMs > 0 || entry.running) && (
-        <button onClick={() => onChange({ running: false, elapsedMs: 0, startedAt: null })} className="p-2" style={{ color: INK_SOFT }}>
-          <RotateCcw size={16} />
+    <div>
+      <div className="flex items-center gap-3">
+        <div>
+          <div className="text-3xl font-semibold tabular-nums leading-none" style={{ fontFamily: F_MONO, color: finished ? TYPES.timer.color : INK }}>
+            {fmtClock(display)}
+          </div>
+          {countdown && (
+            <div className="text-xs mt-1" style={{ color: INK_SOFT }}>
+              {finished ? 'Temps écoulé' : `sur ${fmtDuration(targetMs)}`}
+            </div>
+          )}
+        </div>
+        <button onClick={toggle}
+          className="ml-auto rounded-xl px-5 py-3 text-white flex items-center gap-2 active:scale-95 transition-transform"
+          style={{ backgroundColor: entry.running ? '#A8402F' : TYPES.timer.color, fontFamily: F_DISPLAY }}>
+          {entry.running ? <><Pause size={17} /> Arrêter</> : <><Play size={17} /> {finished ? 'Relancer' : 'Démarrer'}</>}
         </button>
+        {((entry.elapsedMs || 0) > 0 || entry.running) && (
+          <button onClick={() => { fired.current = false; onChange({ running: false, elapsedMs: 0, startedAt: null }); }} className="p-2" style={{ color: INK_SOFT }}>
+            <RotateCcw size={16} />
+          </button>
+        )}
+      </div>
+
+      {countdown && (
+        <div className="h-1.5 rounded-full mt-2.5 overflow-hidden" style={{ backgroundColor: PAPER }}>
+          <div style={{
+            width: `${Math.min(100, (raw / targetMs) * 100)}%`,
+            height: '100%',
+            backgroundColor: TYPES.timer.color,
+            transition: 'width 1s linear',
+          }} />
+        </div>
+      )}
+
+      {cfg.finalRating && (
+        <div className="mt-3">
+          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Cotation en fin de temps</div>
+          <div className="flex gap-1.5">
+            {TIMER_OUTCOMES.map((o) => {
+              const on = entry.finalOutcome === o.k;
+              return (
+                <button key={o.k}
+                  onClick={() => onChange({ finalOutcome: on ? null : o.k })}
+                  className="flex-1 rounded-xl py-2.5 text-sm font-medium border-2 active:scale-95 transition-transform"
+                  style={{ fontFamily: F_DISPLAY, borderColor: o.color, backgroundColor: on ? o.color : 'transparent', color: on ? '#fff' : o.color }}>
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -4245,18 +4462,37 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
   // changement ultérieur (nouvelle séance, statut modifié...).
   const [picked, setPicked] = useState(unsentIds);
 
+  /* Deux façons de composer un rapport : en choisissant des séances, ou en
+     choisissant des élèves — auquel cas toutes leurs cotations sont reprises,
+     quelles que soient les séances. */
+  const [mode, setMode] = useState('sessions');
+  const [pickedStudents, setPickedStudents] = useState([]);
+
   const ordered = sessions.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
-  const chosen = sessions.filter((s) => picked.includes(s.id));
-  const chosenCrises = crises.filter((c) => !c.sessionId || chosen.some((s) => s.id === c.sessionId));
-  const chosenSentCount = chosen.filter((s) => s.sentAt).length;
+  const byStudent = mode === 'students';
+
+  const chosen = byStudent
+    ? sessions.filter((s) => (s.studentIds || []).some((sid) => pickedStudents.includes(sid)))
+    : sessions.filter((s) => picked.includes(s.id));
+  const studentFilter = byStudent ? pickedStudents : null;
+  const chosenCrises = crises.filter((c) => {
+    if (byStudent) return c.studentId && pickedStudents.includes(c.studentId);
+    return !c.sessionId || chosen.some((s) => s.id === c.sessionId);
+  });
+  const chosenSentCount = byStudent ? 0 : chosen.filter((s) => s.sentAt).length;
 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || 'Séance libre';
   const sessionLabel = (sess) => (sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Balance Program' : 'Séance libre');
 
   function makeFile() {
-    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, guidances);
+    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, guidances, studentFilter);
     const blob = workbookBlob(wb);
-    const name = `rapport-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const initials = byStudent
+      ? students.filter((s) => pickedStudents.includes(s.id)).map((s) => s.initials.replace(/\./g, '')).join('-')
+      : '';
+    const name = byStudent
+      ? `rapport-${initials}-${new Date().toISOString().slice(0, 10)}.xlsx`
+      : `rapport-${new Date().toISOString().slice(0, 10)}.xlsx`;
     return { blob, name };
   }
 
@@ -4271,7 +4507,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     if (!confirmIfNeeded()) return;
     const { blob, name } = makeFile();
     downloadBlob(blob, name);
-    onMarkSent(picked);
+    if (!byStudent) onMarkSent(picked);
     notify('Fichier Excel téléchargé');
   }
 
@@ -4279,10 +4515,10 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     if (!confirmIfNeeded()) return;
     const { blob, name } = makeFile();
     await shareReport({ blob, name, title: name, notify });
-    onMarkSent(picked);
+    if (!byStudent) onMarkSent(picked);
   }
 
-  const canExport = picked.length > 0;
+  const canExport = byStudent ? pickedStudents.length > 0 && chosen.length > 0 : picked.length > 0;
 
   return (
     <div>
@@ -4292,6 +4528,50 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
         <Empty>Aucune séance enregistrée pour le moment.</Empty>
       ) : (
         <>
+          <div className="flex gap-1.5 mb-4">
+            {[
+              { k: 'sessions', label: 'Par séance', icon: Layers },
+              { k: 'students', label: 'Par élève', icon: Users },
+            ].map((m) => {
+              const Icon = m.icon;
+              const on = mode === m.k;
+              return (
+                <button key={m.k} onClick={() => setMode(m.k)}
+                  className="flex-1 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-1.5 border"
+                  style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+                  <Icon size={15} /> {m.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {byStudent ? (
+            <div className="mb-4">
+              <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
+                Élèves à inclure — toutes leurs cotations sont reprises, quelles que soient les séances
+              </div>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {students.map((st) => {
+                  const on = pickedStudents.includes(st.id);
+                  return (
+                    <button key={st.id}
+                      onClick={() => setPickedStudents((cur) => (on ? cur.filter((x) => x !== st.id) : [...cur, st.id]))}
+                      className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
+                      style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+                      {st.initials}
+                    </button>
+                  );
+                })}
+              </div>
+              {pickedStudents.length > 0 && (
+                <div className="text-xs" style={{ color: INK_SOFT }}>
+                  <span style={{ fontFamily: F_MONO }}>{chosen.length}</span> séance{chosen.length !== 1 ? 's' : ''} concernée{chosen.length !== 1 ? 's' : ''}
+                  {chosenCrises.length > 0 && <> · <span style={{ fontFamily: F_MONO }}>{chosenCrises.length}</span> crise{chosenCrises.length !== 1 ? 's' : ''}</>}
+                </div>
+              )}
+            </div>
+          ) : (
+          <>
           <div className="flex gap-1.5 mb-3">
             <button onClick={() => setPicked(unsentIds)} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
               Non-envoyés ({unsentIds.length})
@@ -4337,6 +4617,8 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
               );
             })}
           </div>
+          </>
+          )}
         </>
       )}
 
