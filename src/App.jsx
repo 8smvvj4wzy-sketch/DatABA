@@ -6,7 +6,7 @@ import {
   Timer as TimerIcon, ListChecks, LayoutGrid, CheckCircle2, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical,
+  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -190,11 +190,49 @@ function newSalt() {
   return toB64(crypto.getRandomValues(new Uint8Array(16)));
 }
 
+/* --- Chiffrement des données au repos ---
+   La clé est dérivée du code à l'ouverture et ne vit qu'en mémoire : elle
+   n'est jamais écrite sur l'appareil. Sans le code, les données enregistrées
+   ne sont plus lisibles telles quelles.
+   À noter : un code court reste devinable par essais successifs si quelqu'un
+   récupère le fichier ; c'est le verrou de la tablette et la limite de
+   tentatives qui complètent réellement cette protection. */
+let dataKey = null;
+
+async function deriveDataKey(pin, saltB64) {
+  const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: fromB64(saltB64), iterations: 150000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptValue(plaintext, key) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext));
+  return JSON.stringify({ __enc: 1, iv: toB64(iv), data: toB64(ct) });
+}
+
+async function decryptValue(raw, key) {
+  let env = null;
+  try {
+    env = JSON.parse(raw);
+  } catch (e) {
+    return raw; // ancien enregistrement en clair
+  }
+  if (!env || env.__enc !== 1) return raw;
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(env.iv) }, key, fromB64(env.data));
+  return new TextDecoder().decode(plain);
+}
+
 /* ==================== Écran de verrouillage ==================== */
-function PinPad({ title, subtitle, onSubmit, error, digits = 4, submitLabel }) {
+function PinPad({ title, subtitle, onSubmit, error, digits = 4, submitLabel, disabled }) {
   const [value, setValue] = useState('');
   function press(d) {
-    if (value.length >= digits) return;
+    if (disabled || value.length >= digits) return;
     const next = value + d;
     setValue(next);
     if (next.length === digits && !submitLabel) {
@@ -222,7 +260,8 @@ function PinPad({ title, subtitle, onSubmit, error, digits = 4, submitLabel }) {
               <button
                 key={i}
                 onClick={() => (d === '⌫' ? backspace() : press(d))}
-                className="rounded-2xl py-4 text-xl font-medium active:scale-95 transition-transform"
+                disabled={disabled}
+                className="rounded-2xl py-4 text-xl font-medium active:scale-95 transition-transform disabled:opacity-40"
                 style={{ backgroundColor: CARD, color: INK, fontFamily: F_DISPLAY, border: `1px solid ${BORDER}` }}
               >
                 {d}
@@ -238,23 +277,48 @@ function PinPad({ title, subtitle, onSubmit, error, digits = 4, submitLabel }) {
   );
 }
 
-function LockScreen({ security, onUnlock, onSetup }) {
-  const [step, setStep] = useState(security.pinHash ? 'enter' : 'create1');
+/* Délai imposé après plusieurs codes erronés. Il croît avec le nombre d'essais
+   et survit à un redémarrage, puisqu'il est enregistré avec les réglages. */
+function lockDelayMs(failed) {
+  if (failed < 3) return 0;
+  if (failed < 5) return 30 * 1000;
+  if (failed < 8) return 5 * 60 * 1000;
+  return 15 * 60 * 1000;
+}
+
+function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
+  const digits = security.pinDigits || 4;
+  const [step, setStep] = useState(security.pinHash ? 'enter' : 'choose');
+  const [newDigits, setNewDigits] = useState(4);
   const [firstPin, setFirstPin] = useState('');
   const [error, setError] = useState('');
   const [showReset, setShowReset] = useState(false);
+  const [now, setNow] = useState(Date.now());
+
+  const lockedUntil = security.lockUntil || 0;
+  const waiting = lockedUntil > now;
+
+  useEffect(() => {
+    if (!waiting) return undefined;
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [waiting]);
 
   async function handleEnter(pin) {
+    if (waiting) return;
     const hash = await hashPin(pin, security.pinSalt);
     if (hash === security.pinHash) {
-      onUnlock();
-    } else {
-      setError('Code incorrect');
-      setTimeout(() => setError(''), 1200);
+      onUnlock(pin);
+      return;
     }
+    const failed = (security.failedAttempts || 0) + 1;
+    const delay = lockDelayMs(failed);
+    onFailedAttempt(failed, delay ? Date.now() + delay : 0);
+    setError(delay ? 'Code incorrect — saisie suspendue' : 'Code incorrect');
+    setTimeout(() => setError(''), 1500);
   }
 
-  async function handleCreate1(pin) {
+  function handleCreate1(pin) {
     setFirstPin(pin);
     setStep('create2');
   }
@@ -268,13 +332,49 @@ function LockScreen({ security, onUnlock, onSetup }) {
     }
     const salt = newSalt();
     const hash = await hashPin(pin, salt);
-    await onSetup(hash, salt);
+    await onSetup(hash, salt, newDigits, pin);
+  }
+
+  /* Choix de la longueur, à la toute première ouverture */
+  if (step === 'choose') {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{ background: PAPER, fontFamily: F_BODY }}>
+        <div className="w-full max-w-xs">
+          <h1 className="text-xl font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY, color: INK }}>Protéger l'application</h1>
+          <p className="text-sm text-center mb-5" style={{ color: INK_SOFT }}>
+            Ce code verrouille l'accès et sert à chiffrer les données enregistrées sur cet appareil.
+          </p>
+          <div className="flex gap-2 mb-3">
+            {[4, 6].map((n) => (
+              <button key={n} onClick={() => setNewDigits(n)} className="flex-1 rounded-xl py-3 border text-sm font-medium"
+                style={{ fontFamily: F_DISPLAY, borderColor: newDigits === n ? INK : BORDER, backgroundColor: newDigits === n ? INK : 'transparent', color: newDigits === n ? '#fff' : INK_SOFT }}>
+                {n} chiffres
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-center mb-5" style={{ color: INK_SOFT }}>
+            6 chiffres protègent nettement mieux les données en cas de perte de l'appareil.
+          </p>
+          <Btn onClick={() => setStep('create1')} className="w-full">Continuer</Btn>
+        </div>
+      </div>
+    );
   }
 
   if (step === 'enter') {
+    const reste = Math.max(0, Math.ceil((lockedUntil - now) / 1000));
     return (
       <div>
-        <PinPad title="Code verrouillé" subtitle="Saisissez votre code à 4 chiffres" onSubmit={handleEnter} error={error} />
+        <PinPad
+          title={waiting ? 'Saisie suspendue' : 'Code verrouillé'}
+          subtitle={waiting
+            ? `Trop de codes erronés. Nouvel essai possible dans ${fmtClock(reste * 1000)}.`
+            : `Saisissez votre code à ${digits} chiffres`}
+          onSubmit={handleEnter}
+          error={error}
+          digits={digits}
+          disabled={waiting}
+        />
         <div className="fixed bottom-8 left-0 right-0 text-center">
           <button onClick={() => setShowReset(true)} className="text-xs underline" style={{ color: INK_SOFT }}>Code oublié ?</button>
         </div>
@@ -283,8 +383,9 @@ function LockScreen({ security, onUnlock, onSetup }) {
             <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
               <h2 className="font-semibold mb-2" style={{ fontFamily: F_DISPLAY }}>Réinitialiser le code</h2>
               <p className="text-sm mb-4" style={{ color: INK_SOFT }}>
-                Sans le code, la seule solution est d'effacer toutes les données de cette tablette pour repartir à zéro.
-                Si vous avez une sauvegarde chiffrée, vous pourrez la restaurer ensuite avec son mot de passe.
+                Les données étant chiffrées avec ce code, il n'existe aucun moyen de les récupérer sans lui.
+                La seule solution est de tout effacer sur cette tablette, puis de restaurer une sauvegarde
+                chiffrée si vous en avez une.
               </p>
               <div className="flex gap-2">
                 <Btn
@@ -306,9 +407,10 @@ function LockScreen({ security, onUnlock, onSetup }) {
   return (
     <PinPad
       title={step === 'create1' ? 'Créer un code' : 'Confirmez le code'}
-      subtitle={step === 'create1' ? 'Choisissez un code à 4 chiffres pour protéger l\'application' : 'Ressaisissez le même code'}
+      subtitle={step === 'create1' ? `Choisissez un code à ${newDigits} chiffres` : 'Ressaisissez le même code'}
       onSubmit={step === 'create1' ? handleCreate1 : handleCreate2}
       error={error}
+      digits={newDigits}
     />
   );
 }
@@ -318,7 +420,9 @@ function LockScreen({ security, onUnlock, onSetup }) {
    ailleurs (PWA, APK, iOS), il n'existe plus : on bascule sur localStorage.
    Les données restent dans tous les cas sur l'appareil. */
 const store = {
-  async get(key) {
+  /* Lecture et écriture brutes, sans chiffrement : réservées aux réglages de
+     sécurité eux-mêmes, qui doivent être lisibles avant la saisie du code. */
+  async getRaw(key) {
     if (typeof window !== 'undefined' && window.storage) {
       try {
         const r = await window.storage.get(key, false);
@@ -333,7 +437,7 @@ const store = {
       return null;
     }
   },
-  async set(key, value) {
+  async setRaw(key, value) {
     if (typeof window !== 'undefined' && window.storage) {
       try {
         await window.storage.set(key, value, false);
@@ -345,6 +449,26 @@ const store = {
     try {
       window.localStorage.setItem(key, value);
       return true;
+    } catch (e) {
+      return false;
+    }
+  },
+  /* Lecture et écriture des données : chiffrées dès qu'une clé est disponible.
+     Un enregistrement antérieur laissé en clair reste lu correctement, puis
+     réécrit chiffré à la première modification. */
+  async get(key) {
+    const raw = await store.getRaw(key);
+    if (raw == null || !dataKey) return raw;
+    try {
+      return await decryptValue(raw, dataKey);
+    } catch (e) {
+      return null; // clé incorrecte ou enregistrement abîmé
+    }
+  },
+  async set(key, value) {
+    if (!dataKey) return store.setRaw(key, value);
+    try {
+      return store.setRaw(key, await encryptValue(value, dataKey));
     } catch (e) {
       return false;
     }
@@ -1502,7 +1626,9 @@ export default function App() {
   const [tab, setTab] = useState('admin');
   const [loaded, setLoaded] = useState(false);
   const [security, setSecurity] = useState({ pinHash: null, pinSalt: null });
+  const [securityLoaded, setSecurityLoaded] = useState(false);
   const [locked, setLocked] = useState(true);
+  const [retentionMonths, setRetentionMonths] = useState(0);
 
   const [students, setStudents] = useState([]);
   const [ateliers, setAteliers] = useState([]);
@@ -1532,51 +1658,119 @@ export default function App() {
   const onRight = React.useCallback(() => goTab(-1), [goTab]);
   const { offset, dragging } = useHorizontalSwipe(null, { onLeft, onRight, onDocument: true });
 
-  /* --- chargement --- */
+  /* --- chargement ---
+     Les réglages de sécurité se lisent en clair, avant tout déverrouillage.
+     Les données, elles, ne sont chargées qu'une fois la clé dérivée du code. */
   useEffect(() => {
     (async () => {
-      const config = await store.get('aba:config');
-      if (config) {
-        try {
-          const d = JSON.parse(config);
-          setStudents(d.students || []);
-          setAteliers(d.ateliers || []);
-          setIntervenants(d.intervenants || []);
-          if (Array.isArray(d.guidances) && d.guidances.length) {
-            // Complète les guidances préenregistrées ajoutées depuis, sans toucher aux personnalisées
-            const stored = d.guidances;
-            const merged =
-              (d.guidanceVersion || 1) < GUIDANCE_VERSION
-                ? [...stored, ...DEFAULT_GUIDANCE.filter((g) => !stored.some((x) => x.code === g.code))]
-                : stored;
-            setGuidances(merged);
-          }
-        } catch (e) {}
-      }
-      const sess = await store.get('aba:sessions');
-      if (sess) { try { setSessions(JSON.parse(sess)); } catch (e) {} }
-      const cri = await store.get('aba:crises');
-      if (cri) { try { setCrises(JSON.parse(cri)); } catch (e) {} }
-      const act = await store.get('aba:active');
-      if (act) { try { setActiveSession(JSON.parse(act)); } catch (e) {} }
-      const sec = await store.get('aba:security');
+      const sec = await store.getRaw('aba:security');
       if (sec) {
-        try {
-          const parsed = JSON.parse(sec);
-          setSecurity(parsed);
-          setLocked(!!parsed.pinHash);
-        } catch (e) { setLocked(false); }
-      } else {
-        setLocked(false); // pas encore de code : l'écran de création s'affichera
+        try { setSecurity(JSON.parse(sec)); } catch (e) {}
       }
-      setLoaded(true);
+      setSecurityLoaded(true);
     })();
   }, []);
 
+  async function loadData() {
+    const config = await store.get('aba:config');
+    let retention = 0;
+    if (config) {
+      try {
+        const d = JSON.parse(config);
+        setStudents(d.students || []);
+        setAteliers(d.ateliers || []);
+        setIntervenants(d.intervenants || []);
+        retention = d.retentionMonths || 0;
+        setRetentionMonths(retention);
+        if (Array.isArray(d.guidances) && d.guidances.length) {
+          // Complète les guidances préenregistrées ajoutées depuis, sans toucher aux personnalisées
+          const stored = d.guidances;
+          const merged =
+            (d.guidanceVersion || 1) < GUIDANCE_VERSION
+              ? [...stored, ...DEFAULT_GUIDANCE.filter((g) => !stored.some((x) => x.code === g.code))]
+              : stored;
+          setGuidances(merged);
+        }
+      } catch (e) {}
+    }
+
+    let loadedSessions = [];
+    let loadedCrises = [];
+    const sess = await store.get('aba:sessions');
+    if (sess) { try { loadedSessions = JSON.parse(sess) || []; } catch (e) {} }
+    const cri = await store.get('aba:crises');
+    if (cri) { try { loadedCrises = JSON.parse(cri) || []; } catch (e) {} }
+
+    // Purge automatique au-delà de la durée de conservation retenue
+    if (retention > 0) {
+      const limite = new Date();
+      limite.setMonth(limite.getMonth() - retention);
+      const gardeS = loadedSessions.filter((x) => new Date(x.date) >= limite);
+      const gardeC = loadedCrises.filter((x) => new Date(x.date) >= limite);
+      const retires = (loadedSessions.length - gardeS.length) + (loadedCrises.length - gardeC.length);
+      if (retires > 0) {
+        loadedSessions = gardeS;
+        loadedCrises = gardeC;
+        setTimeout(() => notify(`${retires} enregistrement${retires > 1 ? 's' : ''} supprimé${retires > 1 ? 's' : ''} (durée de conservation)`), 600);
+      }
+    }
+    setSessions(loadedSessions);
+    setCrises(loadedCrises);
+
+    const act = await store.get('aba:active');
+    if (act) { try { setActiveSession(JSON.parse(act)); } catch (e) {} }
+    setLoaded(true);
+  }
+
+  /* Déverrouillage : on dérive la clé de chiffrement, puis on charge. */
+  async function unlockWith(pin) {
+    let sec = security;
+    if (!sec.dataSalt) {
+      // Installation antérieure au chiffrement : on crée le sel maintenant,
+      // les données en clair seront réécrites chiffrées à la première sauvegarde.
+      sec = { ...sec, dataSalt: newSalt() };
+      setSecurity(sec);
+      await store.setRaw('aba:security', JSON.stringify(sec));
+    }
+    if (sec.failedAttempts || sec.lockUntil) {
+      const reset = { ...sec, failedAttempts: 0, lockUntil: 0 };
+      setSecurity(reset);
+      await store.setRaw('aba:security', JSON.stringify(reset));
+    }
+    dataKey = await deriveDataKey(pin, sec.dataSalt);
+    setLocked(false);
+    await loadData();
+  }
+
+  /* Réécrit toutes les données avec la clé courante — utilisé après un
+     changement de code, puisque l'ancienne clé ne déchiffrerait plus rien. */
+  async function persistAll() {
+    await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths }));
+    await store.set('aba:sessions', JSON.stringify(sessions));
+    await store.set('aba:crises', JSON.stringify(crises));
+    await store.set('aba:active', JSON.stringify(activeSession));
+  }
+
+  async function changePin(pinHash, pinSalt, pinDigits, pin) {
+    const dataSalt = newSalt();
+    const next = { ...security, pinHash, pinSalt, pinDigits, dataSalt, failedAttempts: 0, lockUntil: 0 };
+    setSecurity(next);
+    await store.setRaw('aba:security', JSON.stringify(next));
+    dataKey = await deriveDataKey(pin, dataSalt);
+    await persistAll();
+    notify('Code modifié');
+  }
+
+  async function registerFailedAttempt(failedAttempts, lockUntil) {
+    const next = { ...security, failedAttempts, lockUntil };
+    setSecurity(next);
+    await store.setRaw('aba:security', JSON.stringify(next));
+  }
+
   useEffect(() => {
-    if (!loaded) return;
-    store.set('aba:security', JSON.stringify(security));
-  }, [security, loaded]);
+    if (!securityLoaded) return;
+    store.setRaw('aba:security', JSON.stringify(security));
+  }, [security, securityLoaded]);
 
   /* Verrouillage automatique : dès que l'app repasse au premier plan après
      avoir été masquée (écran éteint, changement d'appli), et après un long
@@ -1603,8 +1797,8 @@ export default function App() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION }));
-  }, [students, ateliers, intervenants, guidances, loaded]);
+    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths }));
+  }, [students, ateliers, intervenants, guidances, retentionMonths, loaded]);
   useEffect(() => {
     if (!loaded) return;
     store.set('aba:sessions', JSON.stringify(sessions));
@@ -1785,7 +1979,7 @@ export default function App() {
     notify('Crise supprimée');
   };
 
-  if (!loaded) {
+  if (!securityLoaded) {
     return (
       <div ref={rootRef} className="min-h-screen flex items-center justify-center" style={{ background: PAPER, color: INK_SOFT, fontFamily: F_BODY }}>
         Chargement…
@@ -1797,12 +1991,26 @@ export default function App() {
     return (
       <LockScreen
         security={security}
-        onUnlock={() => setLocked(false)}
-        onSetup={async (pinHash, pinSalt) => {
-          setSecurity({ pinHash, pinSalt });
+        onUnlock={unlockWith}
+        onFailedAttempt={registerFailedAttempt}
+        onSetup={async (pinHash, pinSalt, pinDigits, pin) => {
+          const dataSalt = newSalt();
+          const next = { pinHash, pinSalt, pinDigits, dataSalt, failedAttempts: 0, lockUntil: 0 };
+          setSecurity(next);
+          await store.setRaw('aba:security', JSON.stringify(next));
+          dataKey = await deriveDataKey(pin, dataSalt);
           setLocked(false);
+          await loadData();
         }}
       />
+    );
+  }
+
+  if (!loaded) {
+    return (
+      <div ref={rootRef} className="min-h-screen flex items-center justify-center" style={{ background: PAPER, color: INK_SOFT, fontFamily: F_BODY }}>
+        Chargement…
+      </div>
     );
   }
 
@@ -1863,7 +2071,8 @@ export default function App() {
             addAtelier={addAtelier} removeAtelier={removeAtelier} renameAtelier={renameAtelier}
             addIntervenant={addIntervenant} removeIntervenant={removeIntervenant} renameIntervenant={renameIntervenant}
             onAddGuidance={addGuidance} onRemoveGuidance={removeGuidance} onToggleIndependent={toggleIndependent} onReorderGuidances={setGuidances}
-            security={security} onChangePin={(pinHash, pinSalt) => { setSecurity({ pinHash, pinSalt }); notify('Code modifié'); }}
+            security={security} onChangePin={changePin}
+            retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
             onExportBackup={exportBackup} onImportBackup={importBackup}
           />
         )}
@@ -1953,14 +2162,16 @@ export default function App() {
 /* Modification du code : ré-utilise les mêmes pavés numériques que l'écran de
    verrouillage, mais dans une fenêtre compacte plutôt qu'en plein écran. */
 function ChangePinModal({ security, onSave, onClose }) {
+  const currentDigits = security.pinDigits || 4;
   const [step, setStep] = useState('current');
+  const [newDigits, setNewDigits] = useState(currentDigits);
   const [newPin, setNewPin] = useState('');
   const [error, setError] = useState('');
 
   async function checkCurrent(pin) {
     const hash = await hashPin(pin, security.pinSalt);
     if (hash === security.pinHash) {
-      setStep('new1');
+      setStep('length');
     } else {
       setError('Code actuel incorrect');
       setTimeout(() => setError(''), 1200);
@@ -1980,14 +2191,8 @@ function ChangePinModal({ security, onSave, onClose }) {
     }
     const salt = newSalt();
     const hash = await hashPin(pin, salt);
-    onSave(hash, salt);
+    onSave(hash, salt, newDigits, pin);
   }
-
-  const copy = {
-    current: { title: 'Code actuel', sub: 'Confirmez le code en cours', fn: checkCurrent },
-    new1: { title: 'Nouveau code', sub: 'Choisissez un nouveau code à 4 chiffres', fn: acceptNew },
-    new2: { title: 'Confirmez', sub: 'Ressaisissez le nouveau code', fn: confirmNew },
-  }[step];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
@@ -1995,10 +2200,48 @@ function ChangePinModal({ security, onSave, onClose }) {
         <div className="flex justify-end mb-1">
           <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
         </div>
-        <h2 className="text-lg font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY }}>{copy.title}</h2>
-        <p className="text-sm text-center mb-4" style={{ color: INK_SOFT }}>{copy.sub}</p>
-        {error && <p className="text-sm text-center mb-3" style={{ color: CRISIS }}>{error}</p>}
-        <MiniPinInput onSubmit={copy.fn} />
+
+        {step === 'length' ? (
+          <>
+            <h2 className="text-lg font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY }}>Longueur du code</h2>
+            <p className="text-sm text-center mb-4" style={{ color: INK_SOFT }}>
+              6 chiffres protègent nettement mieux les données en cas de perte de l'appareil.
+            </p>
+            <div className="flex gap-2 mb-4">
+              {[4, 6].map((n) => (
+                <button key={n} onClick={() => setNewDigits(n)} className="flex-1 rounded-xl py-3 border text-sm font-medium"
+                  style={{ fontFamily: F_DISPLAY, borderColor: newDigits === n ? INK : BORDER, backgroundColor: newDigits === n ? INK : 'transparent', color: newDigits === n ? '#fff' : INK_SOFT }}>
+                  {n} chiffres
+                </button>
+              ))}
+            </div>
+            <Btn onClick={() => setStep('new1')} className="w-full">Continuer</Btn>
+          </>
+        ) : (
+          <>
+            <h2 className="text-lg font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY }}>
+              {step === 'current' ? 'Code actuel' : step === 'new1' ? 'Nouveau code' : 'Confirmez'}
+            </h2>
+            <p className="text-sm text-center mb-4" style={{ color: INK_SOFT }}>
+              {step === 'current'
+                ? 'Confirmez le code en cours'
+                : step === 'new1'
+                ? `Choisissez un code à ${newDigits} chiffres`
+                : 'Ressaisissez le nouveau code'}
+            </p>
+            {error && <p className="text-sm text-center mb-3" style={{ color: CRISIS }}>{error}</p>}
+            {step === 'new1' && (
+              <p className="text-xs text-center mb-3" style={{ color: INK_SOFT }}>
+                Les données enregistrées seront rechiffrées avec ce nouveau code.
+              </p>
+            )}
+            <MiniPinInput
+              key={step}
+              digits={step === 'current' ? currentDigits : newDigits}
+              onSubmit={step === 'current' ? checkCurrent : step === 'new1' ? acceptNew : confirmNew}
+            />
+          </>
+        )}
       </div>
     </div>
   );
@@ -2038,7 +2281,7 @@ function MiniPinInput({ onSubmit, digits = 4 }) {
   );
 }
 
-function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onReorderGuidances, onExportBackup, onImportBackup }) {
+function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, retentionMonths, onSetRetention, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onReorderGuidances, onExportBackup, onImportBackup }) {
   const [initials, setInitials] = useState('');
   const [atelier, setAtelier] = useState('');
   const [intervenant, setIntervenant] = useState('');
@@ -2211,7 +2454,9 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Sécurité</span>
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          L'application se verrouille automatiquement à chaque mise en veille et après 10 minutes d'inactivité.
+          Code à {security.pinDigits || 4} chiffres. L'application se verrouille à chaque mise en veille et après
+          10 minutes d'inactivité, et la saisie se suspend après plusieurs codes erronés. Les données enregistrées
+          sur cette tablette sont chiffrées avec ce code.
         </p>
         <Btn variant="outline" onClick={() => setChangingPin(true)} className="w-full text-sm">
           <Lock size={16} /> Modifier le code
@@ -2223,6 +2468,38 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
             onClose={() => setChangingPin(false)}
           />
         )}
+      </Card>
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <CalendarClock size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Durée de conservation</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Les séances et les crises plus anciennes que cette durée sont supprimées automatiquement à l'ouverture
+          de l'application. Exportez et transmettez vos rapports avant l'échéance : la suppression est définitive.
+        </p>
+        <div className="flex gap-1.5 flex-wrap">
+          {[{ v: 0, l: 'Aucune limite' }, { v: 6, l: '6 mois' }, { v: 12, l: '12 mois' }, { v: 24, l: '24 mois' }, { v: 36, l: '36 mois' }].map((o) => {
+            const on = retentionMonths === o.v;
+            return (
+              <button key={o.v} onClick={() => onSetRetention(o.v)} className="rounded-lg px-3 py-2 text-xs border"
+                style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+                {o.l}
+              </button>
+            );
+          })}
+        </div>
+        {retentionMonths > 0 && (() => {
+          const limite = new Date();
+          limite.setMonth(limite.getMonth() - retentionMonths);
+          return (
+            <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
+              Seront conservés les enregistrements postérieurs au{' '}
+              <span style={{ fontFamily: F_MONO }}>{limite.toLocaleDateString('fr-FR')}</span>.
+            </p>
+          );
+        })()}
       </Card>
 
       <Card>
