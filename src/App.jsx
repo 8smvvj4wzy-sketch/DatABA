@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid, ScatterChart, Scatter, Cell } from 'recharts';
 import {
   Plus, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
   Timer as TimerIcon, ListChecks, LayoutGrid, CheckCircle2, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2,
+  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, BarChart3,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -128,6 +128,42 @@ const BALANCE_OUTCOMES = [
   { k: 'guide', label: 'Guidé', short: 'G', color: '#D69A2D' },
   { k: 'erreur', label: 'Mauvaise réponse', short: 'E', color: '#A8402F' },
   { k: 'manque', label: 'Étape manquée', short: 'M', color: '#565E54' },
+];
+
+/* --- Phases d'un objectif ---
+   Distinguer ligne de base et intervention est indispensable pour interpréter
+   une courbe : sans repère, on ne sait pas ce qui a produit un changement. */
+const DEFAULT_PHASES = ['Ligne de base', 'Intervention', 'Maintien', 'Généralisation'];
+
+/* --- Analyse des crises ---
+   Catégories cochables en plus du texte libre. C'est ce qui rend les crises
+   agrégeables : un texte seul ne se compte pas. */
+const CRISIS_ANTECEDENTS = [
+  'Consigne ou demande',
+  'Transition',
+  'Attente',
+  'Refus opposé',
+  'Bruit ou stimulation',
+  'Interaction avec un pair',
+  'Imprévu, changement',
+  'Fin d\'activité appréciée',
+  'Aucun déclencheur identifié',
+];
+const CRISIS_CONSEQUENCES = [
+  'Retrait de la demande',
+  'Attention de l\'adulte',
+  'Accès à un objet ou une activité',
+  'Retrait, mise à l\'écart',
+  'Aide physique',
+  'Ignorance active',
+  'Poursuite de l\'activité',
+];
+const CRISIS_FUNCTIONS = [
+  { k: 'attention', label: 'Attention', color: '#2E6E8E' },
+  { k: 'echappement', label: 'Échappement', color: '#C36A2E' },
+  { k: 'tangible', label: 'Tangible', color: '#7A9A3A' },
+  { k: 'sensoriel', label: 'Sensoriel', color: '#7A6A9A' },
+  { k: 'indetermine', label: 'Indéterminée', color: '#565E54' },
 ];
 
 const DEFAULT_CHAIN_STEPS = [
@@ -924,6 +960,17 @@ function balanceStats(obj, entry) {
   return { reussi, notes, manque, demandes, renforts, nbTrials: trials.length, cotes, pct };
 }
 
+/* --- Phases ---
+   La dernière entrée de l'historique est la phase en cours. */
+function phaseHistory(obj) {
+  if (obj.phaseHistory && obj.phaseHistory.length) return obj.phaseHistory;
+  return [{ id: 'p0', name: DEFAULT_PHASES[0], date: null }];
+}
+function currentPhase(obj) {
+  const h = phaseHistory(obj);
+  return h[h.length - 1];
+}
+
 /* --- Cibles d'un objectif ---
    Un objectif peut être découpé en cibles successives (ex. « rouge », puis
    « bleu », puis « vert »). La cotation porte sur la cible courante ; dès que
@@ -999,7 +1046,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)']];
 
   function base(sess, sid, obj) {
     return [
@@ -1010,6 +1057,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
       studentName(sid),
       obj.name,
       obj.activeTargetName || '—',
+      obj.activePhaseName || currentPhase(obj).name,
     ];
   }
 
@@ -1142,21 +1190,27 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
 
   const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter);
   const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
-  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }];
+  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }];
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
-  const crisisRows = [['Date', 'Heure', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Antécédent', 'Comportement', 'Conséquence', 'Commentaire']];
+  const crisisRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Antécédents', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement', 'Conséquence (libre)', 'Commentaire']];
   crises.forEach((c) => {
     if (studentFilter && c.studentId && !studentFilter.includes(c.studentId)) return;
     const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
+    const f = c.fonction ? CRISIS_FUNCTIONS.find((x) => x.k === c.fonction) : null;
     crisisRows.push([
       new Date(c.date).toLocaleDateString('fr-FR'),
       timeShort(c.date),
+      new Date(c.date).toLocaleDateString('fr-FR', { weekday: 'long' }),
       c.studentId ? studentName(c.studentId) : '—',
       c.atelierId ? atelierName(c.atelierId) : '—',
       ids.map(intervenantName).join(', ') || '—',
       fmtDuration(c.durationMs),
+      Math.round((c.durationMs || 0) / 1000),
+      (c.antecedentTags || []).join(' | '),
+      f ? f.label : '',
+      (c.consequenceTags || []).join(' | '),
       c.antecedent || '',
       c.comportement || '',
       c.consequence || '',
@@ -1164,7 +1218,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
     ]);
   });
   const ws2 = XLSX.utils.aoa_to_sheet(crisisRows);
-  ws2['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 40 }, { wch: 40 }, { wch: 40 }, { wch: 40 }];
+  ws2['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
   XLSX.utils.book_append_sheet(wb, ws2, 'Crises');
 
   const noteRows = [['Date', 'Heure', 'Atelier', 'Personne accompagnée', 'Note']];
@@ -1726,6 +1780,7 @@ function AbaApp() {
   const [ateliers, setAteliers] = useState([]);
   const [intervenants, setIntervenants] = useState([]);
   const [guidances, setGuidances] = useState(DEFAULT_GUIDANCE);
+  const [objectiveTemplates, setObjectiveTemplates] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [crises, setCrises] = useState([]);
 
@@ -1898,7 +1953,7 @@ function AbaApp() {
   /* Réécrit toutes les données avec la clé courante — utilisé après un
      changement de code, puisque l'ancienne clé ne déchiffrerait plus rien. */
   async function persistAll() {
-    await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths }));
+    await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates }));
     await store.set('aba:sessions', JSON.stringify(sessions));
     await store.set('aba:crises', JSON.stringify(crises));
     await store.set('aba:active', JSON.stringify(activeSession));
@@ -1950,8 +2005,8 @@ function AbaApp() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths }));
-  }, [students, ateliers, intervenants, guidances, retentionMonths, loaded]);
+    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates }));
+  }, [students, ateliers, intervenants, guidances, retentionMonths, objectiveTemplates, loaded]);
   useEffect(() => {
     if (!loaded) return;
     store.set('aba:sessions', JSON.stringify(sessions));
@@ -1993,6 +2048,45 @@ function AbaApp() {
   const addGuidance = (g) => setGuidances((l) => [...l, g]);
   const removeGuidance = (code) => setGuidances((l) => (l.length > 1 ? l.filter((x) => x.code !== code) : l));
   const toggleIndependent = (code) => setGuidances((l) => l.map((x) => (x.code === code ? { ...x, independent: !x.independent } : x)));
+
+  const saveTemplate = (obj) => {
+    const { id, favorite, currentTargetId, masteredTargetIds, phaseHistory: ph, trackingResetAt, ...reste } = obj;
+    setObjectiveTemplates((l) => [...l, { ...reste, id: uid() }]);
+    notify('Modèle enregistré');
+  };
+  const removeTemplate = (id) => setObjectiveTemplates((l) => l.filter((t) => t.id !== id));
+
+  /* Export de configuration : ateliers, intervenants, guidances et modèles.
+     Aucune personne, aucune séance, aucune crise — le fichier ne contient donc
+     aucune donnée d'usager et peut circuler librement entre appareils. */
+  function exportConfig() {
+    const payload = {
+      format: 'aba-config',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      ateliers: ateliers.map(({ usualStudentIds, usualObjectives, favoriteObjectiveIds, knownObjectiveIds, ...a }) => a),
+      intervenants,
+      guidances,
+      objectiveTemplates,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    downloadBlob(blob, `configuration-aba-${new Date().toISOString().slice(0, 10)}.json`);
+    notify('Configuration exportée');
+  }
+
+  function importConfig(d) {
+    const nbA = (d.ateliers || []).length;
+    const nbI = (d.intervenants || []).length;
+    const nbT = (d.objectiveTemplates || []).length;
+    if (!window.confirm(
+      `Importer cette configuration ?\n\n${nbA} atelier(s), ${nbI} intervenant(s), ${nbT} modèle(s) d'objectif.\n\nLes éléments existants sont conservés, les nouveaux s'ajoutent.`
+    )) return;
+    setAteliers((cur) => [...cur, ...(d.ateliers || []).filter((a) => !cur.some((x) => x.name === a.name))]);
+    setIntervenants((cur) => [...cur, ...(d.intervenants || []).filter((i) => !cur.some((x) => x.name === i.name))]);
+    setGuidances((cur) => [...cur, ...(d.guidances || []).filter((g) => !cur.some((x) => x.code === g.code))]);
+    setObjectiveTemplates((cur) => [...cur, ...(d.objectiveTemplates || []).filter((t) => !cur.some((x) => x.name === t.name))]);
+    notify('Configuration importée');
+  }
 
   /* --- sauvegarde / restauration --- */
   const [backupPrompt, setBackupPrompt] = useState(null); // { mode: 'export' } | { mode: 'import', envelope, error }
@@ -2038,6 +2132,10 @@ function AbaApp() {
         notify('Fichier illisible');
         return;
       }
+      if (d && d.format === 'aba-config') {
+        importConfig(d);
+        return;
+      }
       if (d && d.format === 'aba-backup-encrypted') {
         setBackupPrompt({ mode: 'import', envelope: d, error: '' });
         return;
@@ -2072,6 +2170,12 @@ function AbaApp() {
     setStudents((s) => s.map((st) => (st.id === studentId
       ? { ...st, objectives: st.objectives.map((o) => (o.id === objId
           ? { ...o, trackingResetAt: new Date().toISOString(), masteredTargetIds: [], currentTargetId: null }
+          : o)) }
+      : st)));
+  const changePhase = (studentId, objId, nom) =>
+    setStudents((s) => s.map((st) => (st.id === studentId
+      ? { ...st, objectives: st.objectives.map((o) => (o.id === objId
+          ? { ...o, phaseHistory: [...phaseHistory(o), { id: uid(), name: nom, date: new Date().toISOString() }] }
           : o)) }
       : st)));
   const toggleFavorite = (studentId, objId) =>
@@ -2232,11 +2336,12 @@ function AbaApp() {
             onAddGuidance={addGuidance} onRemoveGuidance={removeGuidance} onToggleIndependent={toggleIndependent} onReorderGuidances={setGuidances}
             security={security} onChangePin={changePin}
             retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
+            templates={objectiveTemplates} onRemoveTemplate={removeTemplate} onExportConfig={exportConfig}
             onExportBackup={exportBackup} onImportBackup={importBackup}
           />
         )}
         {tab === 'students' && (
-          <StudentsScreen students={students} guidances={guidances} addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective} duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} />
+          <StudentsScreen students={students} guidances={guidances} addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective} duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase} onSaveTemplate={saveTemplate} templates={objectiveTemplates} />
         )}
         {tab === 'session' && (
           <SessionScreen
@@ -2268,7 +2373,7 @@ function AbaApp() {
             }}
           />
         )}
-        {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} onResetTracking={resetTracking} />}
+        {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} crises={crises} ateliers={ateliers} onResetTracking={resetTracking} />}
         {tab === 'export' && (
           <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} onMarkSent={markSent} />
         )}
@@ -2440,7 +2545,7 @@ function MiniPinInput({ onSubmit, digits = 4 }) {
   );
 }
 
-function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, retentionMonths, onSetRetention, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onReorderGuidances, onExportBackup, onImportBackup }) {
+function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, retentionMonths, onSetRetention, templates, onRemoveTemplate, onExportConfig, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onReorderGuidances, onExportBackup, onImportBackup }) {
   const [initials, setInitials] = useState('');
   const [atelier, setAtelier] = useState('');
   const [intervenant, setIntervenant] = useState('');
@@ -2631,6 +2736,35 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
 
       <Card className="mb-4">
         <div className="flex items-center gap-2 mb-2">
+          <BookmarkPlus size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Modèles d'objectifs</span>
+          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{templates.length}</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Objectifs types réutilisables, avec leur mode de cotation, leurs cibles et leur critère.
+          On les enregistre depuis l'écran Personnes, et on les applique à la création d'un objectif.
+        </p>
+        {templates.length === 0 ? (
+          <Empty>Aucun modèle enregistré.</Empty>
+        ) : (
+          <div className="space-y-1.5">
+            {templates.map((t) => {
+              const meta = TYPES[t.type];
+              const Icon = meta.icon;
+              return (
+                <div key={t.id} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+                  <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
+                  <span className="text-sm flex-1 min-w-0 break-words">{t.name}</span>
+                  <button onClick={() => onRemoveTemplate(t.id)} style={{ color: INK_SOFT }}><X size={15} /></button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
           <CalendarClock size={16} style={{ color: INK_SOFT }} />
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Durée de conservation</span>
         </div>
@@ -2681,9 +2815,19 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
             e.target.value = '';
           }}
         />
-        <div className="flex gap-2">
+        <div className="flex gap-2 mb-3">
           <Btn variant="outline" onClick={onExportBackup} className="flex-1 text-sm"><Download size={16} /> Exporter</Btn>
           <Btn variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} className="flex-1 text-sm"><Upload size={16} /> Restaurer</Btn>
+        </div>
+        <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: '0.75rem' }}>
+          <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
+            La <strong>configuration seule</strong> reprend ateliers, intervenants, guidances et modèles,
+            sans aucune personne ni séance : le fichier ne contient donc pas de donnée d'usager et sert à
+            équiper un nouvel appareil sans tout ressaisir. Il se restaure avec le même bouton.
+          </p>
+          <Btn variant="ghost" onClick={onExportConfig} className="w-full text-sm">
+            <Download size={16} /> Exporter la configuration seule
+          </Btn>
         </div>
       </Card>
     </div>
@@ -2691,7 +2835,7 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
 }
 
 /* ==================== Écran 2 : personnes accompagnées et objectifs ==================== */
-function StudentsScreen({ students, guidances, addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite }) {
+function StudentsScreen({ students, guidances, addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate, templates }) {
   const [openId, setOpenId] = useState(null);
   const [editingObj, setEditingObj] = useState(null);
   const [copyingObj, setCopyingObj] = useState(null);
@@ -2749,11 +2893,27 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                             <Icon size={15} style={{ color: meta.color, marginTop: 2 }} />
                             <div>
                               <div className="text-sm">{o.name}</div>
-                            {currentTarget(o) && (
-                              <div className="text-xs mt-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5" style={{ backgroundColor: CARD, color: INK }}>
-                                <Target size={11} /> cible en cours : {currentTarget(o).name}
-                              </div>
-                            )}
+                            <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                              <button
+                                onClick={() => {
+                                  const actuelle = currentPhase(o).name;
+                                  const suivante = DEFAULT_PHASES[(DEFAULT_PHASES.indexOf(actuelle) + 1) % DEFAULT_PHASES.length];
+                                  if (window.confirm(`Passer « ${o.name} » en phase « ${suivante} » ?\n\nUn repère daté sera tracé sur la courbe de suivi.`)) {
+                                    changePhase(s.id, o.id, suivante);
+                                  }
+                                }}
+                                className="text-xs inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border"
+                                style={{ borderColor: BORDER, color: INK }}
+                                title="Changer de phase"
+                              >
+                                <Flag size={11} /> {currentPhase(o).name}
+                              </button>
+                              {currentTarget(o) && (
+                                <span className="text-xs inline-flex items-center gap-1 rounded-md px-1.5 py-0.5" style={{ backgroundColor: CARD, color: INK }}>
+                                  <Target size={11} /> cible en cours : {currentTarget(o).name}
+                                </span>
+                              )}
+                            </div>
                               <div className="text-xs" style={{ color: INK_SOFT }}>
                                 {meta.short}
                                 {o.type === 'trials' && (o.config.trialCount ? ` · ${o.config.trialCount} essais prévus` : ' · essais sans limite')}
@@ -2774,6 +2934,10 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                             <button onClick={() => toggleFavorite(s.id, o.id)} style={{ color: o.favorite ? '#D69A2D' : INK_SOFT }} title="Objectif prioritaire">
                               <Star size={15} fill={o.favorite ? '#D69A2D' : 'none'} />
                             </button>
+                            <button
+                              onClick={() => { if (window.confirm(`Enregistrer « ${o.name} » comme modèle réutilisable ?`)) onSaveTemplate(o); }}
+                              style={{ color: INK_SOFT }} title="Enregistrer comme modèle"
+                            ><BookmarkPlus size={15} /></button>
                             <button onClick={() => { setCopyingObj(copyingObj === o.id ? null : o.id); setCopyTargets([]); }} style={{ color: INK_SOFT }} title="Copier vers d'autres personnes"><Copy size={15} /></button>
                             <button onClick={() => setEditingObj(o.id)} style={{ color: INK_SOFT }} title="Modifier"><Pencil size={15} /></button>
                             <button
@@ -2816,7 +2980,7 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                     );
                   })}
                 </div>
-                <ObjectiveEditor guidances={guidances} onAdd={(o) => addObjective(s.id, o)} />
+                <ObjectiveEditor guidances={guidances} templates={templates} onAdd={(o) => addObjective(s.id, o)} />
               </div>
             )}
           </Card>
@@ -2826,16 +2990,58 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
   );
 }
 
-function ObjectiveEditor({ guidances, onAdd }) {
+function ObjectiveEditor({ guidances, templates, onAdd }) {
   const [open, setOpen] = useState(false);
+  const [depuisModele, setDepuisModele] = useState(false);
+  const [base, setBase] = useState(null);
+
   if (!open) {
     return (
-      <Btn variant="ghost" onClick={() => setOpen(true)} className="w-full text-sm">
-        <Plus size={16} /> Ajouter un objectif
-      </Btn>
+      <div className="flex gap-2">
+        <Btn variant="ghost" onClick={() => { setBase(null); setOpen(true); }} className="flex-1 text-sm">
+          <Plus size={16} /> Ajouter un objectif
+        </Btn>
+        {templates && templates.length > 0 && (
+          <Btn variant="ghost" onClick={() => setDepuisModele(true)} className="text-sm px-4" title="Depuis un modèle">
+            <BookmarkPlus size={16} />
+          </Btn>
+        )}
+        {depuisModele && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+            <div className="rounded-2xl p-4 max-w-sm w-full max-h-[80vh] overflow-y-auto" style={{ backgroundColor: CARD }}>
+              <div className="flex items-center justify-between mb-3">
+                <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Partir d'un modèle</span>
+                <button onClick={() => setDepuisModele(false)} style={{ color: INK_SOFT }}><X size={18} /></button>
+              </div>
+              <div className="space-y-1.5">
+                {templates.map((t) => {
+                  const meta = TYPES[t.type];
+                  const Icon = meta.icon;
+                  return (
+                    <button key={t.id}
+                      onClick={() => { setBase(t); setDepuisModele(false); setOpen(true); }}
+                      className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 text-left border text-sm"
+                      style={{ borderColor: BORDER }}>
+                      <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
+                      <span className="flex-1 min-w-0 break-words">{t.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     );
   }
-  return <ObjectiveForm guidances={guidances} onSubmit={(o) => { onAdd(o); setOpen(false); }} onCancel={() => setOpen(false)} />;
+  return (
+    <ObjectiveForm
+      guidances={guidances}
+      initial={base ? { ...base, id: null } : undefined}
+      onSubmit={(o) => { onAdd({ ...o, id: uid() }); setOpen(false); setBase(null); }}
+      onCancel={() => { setOpen(false); setBase(null); }}
+    />
+  );
 }
 
 function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
@@ -2869,6 +3075,9 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const [rColor, setRColor] = useState(GUIDANCE_PALETTE[0]);
   const [rIndep, setRIndep] = useState(false);
   const [useGuidance, setUseGuidance] = useState(!!initConfig.useGuidance);
+  const [phaseName, setPhaseName] = useState(
+    init.phaseHistory && init.phaseHistory.length ? init.phaseHistory[init.phaseHistory.length - 1].name : DEFAULT_PHASES[0]
+  );
   const [withTimer, setWithTimer] = useState(!!initConfig.withTimer);
   const [timerMode, setTimerMode] = useState(initConfig.timerMode || 'chrono');
   const [timerMin, setTimerMin] = useState(initConfig.timerSeconds ? Math.floor(initConfig.timerSeconds / 60) : 5);
@@ -2920,6 +3129,13 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
       };
       if (targets.length) config.targets = targets;
     }
+    /* Une phase renommée à la création remplace la première entrée ; un
+       changement de phase en cours de suivi passe par le bouton dédié, qui
+       ajoute une entrée datée et trace un repère sur la courbe. */
+    const histo = init.phaseHistory && init.phaseHistory.length
+      ? init.phaseHistory.map((ph, i) => (i === init.phaseHistory.length - 1 ? { ...ph, name: phaseName } : ph))
+      : [{ id: uid(), name: phaseName, date: null }];
+
     onSubmit({
       id: init.id || uid(),
       name: name.trim(),
@@ -2928,12 +3144,25 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
       favorite: !!init.favorite,
       currentTargetId: init.currentTargetId || null,
       masteredTargetIds: init.masteredTargetIds || [],
+      phaseHistory: histo,
     });
   }
 
   return (
     <div className="rounded-xl border p-3 space-y-3" style={{ borderColor: BORDER }}>
       <Field autoFocus value={name} onChange={setName} placeholder="Intitulé de l'objectif" />
+
+      <div>
+        <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Phase en cours</div>
+        <div className="flex gap-1.5 flex-wrap">
+          {DEFAULT_PHASES.map((ph) => (
+            <button key={ph} onClick={() => setPhaseName(ph)} className="rounded-lg px-3 py-2 text-xs border"
+              style={{ borderColor: phaseName === ph ? INK : BORDER, backgroundColor: phaseName === ph ? INK : 'transparent', color: phaseName === ph ? '#fff' : INK_SOFT }}>
+              {ph}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div>
         <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Mode de cotation</div>
@@ -3508,7 +3737,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
         const cible = currentTarget(obj);
         // Prioritaire si l'objectif l'est en soi, ou s'il l'est pour cet atelier
         const favorite = !!obj.favorite || (mode === 'atelier' && atelierFavorites.includes(oid));
-        snapshot[oid] = { ...obj, favorite, activeTargetName: cible ? cible.name : null };
+        snapshot[oid] = { ...obj, favorite, activeTargetName: cible ? cible.name : null, activePhaseName: currentPhase(obj).name };
         data[sid][oid] = { ...emptyEntry(obj), targetId: cible ? cible.id : null };
       });
     });
@@ -4998,7 +5227,8 @@ function LatencyWidget({ entry, now, onChange }) {
 }
 
 /* ==================== Écran suivi : progression et maîtrise ==================== */
-function SuiviScreen({ students, sessions, guidances, onResetTracking }) {
+function SuiviScreen({ students, sessions, guidances, crises, ateliers, onResetTracking }) {
+  const [vue, setVue] = useState('objectifs');
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
 
   if (students.length === 0) {
@@ -5014,7 +5244,28 @@ function SuiviScreen({ students, sessions, guidances, onResetTracking }) {
 
   return (
     <div>
-      <SectionTitle sub="Évolution de chaque objectif au fil des séances enregistrées.">Suivi</SectionTitle>
+      <SectionTitle sub="Évolution des objectifs et analyse des crises consignées.">Suivi</SectionTitle>
+
+      <div className="flex gap-1.5 mb-4">
+        {[
+          { k: 'objectifs', label: 'Objectifs', icon: TrendingUp },
+          { k: 'crises', label: 'Crises', icon: BarChart3 },
+        ].map((v) => {
+          const Icon = v.icon;
+          const on = vue === v.k;
+          return (
+            <button key={v.k} onClick={() => setVue(v.k)}
+              className="flex-1 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-1.5 border"
+              style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+              <Icon size={15} /> {v.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {vue === 'crises' && <CrisisAnalysis crises={crises} students={students} ateliers={ateliers} />}
+      {vue === 'objectifs' && (
+      <>
       <div className="space-y-3">
         {students.map((s) => {
           const open = openId === s.id;
@@ -5042,6 +5293,144 @@ function SuiviScreen({ students, sessions, guidances, onResetTracking }) {
           );
         })}
       </div>
+      </>
+      )}
+    </div>
+  );
+}
+
+/* ==================== Analyse des crises ==================== */
+function CrisisAnalysis({ crises, students, ateliers }) {
+  const [personne, setPersonne] = useState(null);
+  const retenues = crises.filter((c) => !personne || c.studentId === personne);
+
+  if (crises.length === 0) {
+    return <Empty>Aucune crise consignée pour le moment.</Empty>;
+  }
+
+  /* Un point par crise : le jour en abscisse, l'heure en ordonnée. C'est la
+     représentation qui fait apparaître les motifs horaires ou hebdomadaires. */
+  const points = retenues.map((c) => {
+    const d = new Date(c.date);
+    const jour = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    return {
+      jour,
+      heure: d.getHours() + d.getMinutes() / 60,
+      duree: Math.round((c.durationMs || 0) / 60000),
+      fonction: c.fonction || 'indetermine',
+      label: `${d.toLocaleDateString('fr-FR')} ${timeShort(c.date)}`,
+    };
+  });
+
+  function compter(liste) {
+    const m = new Map();
+    liste.forEach((v) => m.set(v, (m.get(v) || 0) + 1));
+    return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
+  }
+  const parAntecedent = compter(retenues.flatMap((c) => c.antecedentTags || []));
+  const parConsequence = compter(retenues.flatMap((c) => c.consequenceTags || []));
+  const parFonction = compter(retenues.map((c) => c.fonction).filter(Boolean));
+  const parJour = compter(retenues.map((c) => new Date(c.date).toLocaleDateString('fr-FR', { weekday: 'long' })));
+
+  const dureeMoy = retenues.length
+    ? Math.round(retenues.reduce((a, c) => a + (c.durationMs || 0), 0) / retenues.length / 60000)
+    : 0;
+
+  const Barres = ({ titre, donnees, total }) => (
+    donnees.length === 0 ? null : (
+      <Card className="mb-3">
+        <div className="text-xs mb-2" style={{ color: INK_SOFT }}>{titre}</div>
+        <div className="space-y-1.5">
+          {donnees.slice(0, 8).map(([nom, n]) => (
+            <div key={nom}>
+              <div className="flex items-center justify-between text-xs mb-0.5">
+                <span className="min-w-0 break-words pr-2">{nom}</span>
+                <span className="shrink-0" style={{ fontFamily: F_MONO, color: INK_SOFT }}>
+                  {n} · {Math.round((n / total) * 100)} %
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full" style={{ backgroundColor: PAPER }}>
+                <div style={{ width: `${(n / donnees[0][1]) * 100}%`, height: '100%', borderRadius: 999, backgroundColor: CRISIS }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    )
+  );
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-3">
+        <Chip label="Toutes" on={!personne} onClick={() => setPersonne(null)} />
+        {students.filter((st) => crises.some((c) => c.studentId === st.id)).map((st) => (
+          <Chip key={st.id} label={st.initials} on={personne === st.id} onClick={() => setPersonne(personne === st.id ? null : st.id)} />
+        ))}
+      </div>
+
+      <Card className="mb-3">
+        <div className="flex flex-wrap gap-4 text-sm">
+          <span><span style={{ fontFamily: F_MONO, fontSize: '1.25rem' }}>{retenues.length}</span> crise{retenues.length !== 1 ? 's' : ''}</span>
+          <span><span style={{ fontFamily: F_MONO, fontSize: '1.25rem' }}>{dureeMoy}</span> min en moyenne</span>
+        </div>
+      </Card>
+
+      {points.length > 0 && (
+        <Card className="mb-3">
+          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
+            Répartition dans le temps — chaque point est une crise, la couleur indique la fonction supposée
+          </div>
+          <div style={{ height: 240 }} data-no-swipe>
+            <ResponsiveContainer width="100%" height="100%">
+              <ScatterChart margin={{ top: 8, right: 12, bottom: 4, left: -18 }}>
+                <CartesianGrid stroke={BORDER} />
+                <XAxis
+                  type="number" dataKey="jour" name="Date"
+                  domain={['dataMin', 'dataMax']}
+                  tickFormatter={(v) => new Date(v).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
+                  tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }}
+                  axisLine={{ stroke: BORDER }} tickLine={false}
+                />
+                <YAxis
+                  type="number" dataKey="heure" name="Heure"
+                  domain={[6, 20]} ticks={[8, 10, 12, 14, 16, 18]}
+                  tickFormatter={(v) => `${String(Math.floor(v)).padStart(2, '0')}h`}
+                  tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }}
+                  axisLine={false} tickLine={false} width={44}
+                />
+                <Tooltip
+                  cursor={{ strokeDasharray: '3 3' }}
+                  contentStyle={{ borderRadius: 12, border: `1px solid ${BORDER}`, fontFamily: 'IBM Plex Sans', fontSize: 12 }}
+                  formatter={(v, n, p) => [p.payload.label, `${p.payload.duree} min`]}
+                />
+                <Scatter data={points} isAnimationActive={false}>
+                  {points.map((pt, i) => {
+                    const f = CRISIS_FUNCTIONS.find((x) => x.k === pt.fonction) || CRISIS_FUNCTIONS[4];
+                    return <Cell key={i} fill={f.color} />;
+                  })}
+                </Scatter>
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex flex-wrap gap-2 mt-2">
+            {CRISIS_FUNCTIONS.map((f) => (
+              <span key={f.k} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: f.color }} /> {f.label}
+              </span>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Barres titre="Antécédents les plus fréquents" donnees={parAntecedent} total={retenues.length} />
+      <Barres titre="Fonctions supposées" donnees={parFonction.map(([k, n]) => [(CRISIS_FUNCTIONS.find((x) => x.k === k) || {}).label || k, n])} total={retenues.length} />
+      <Barres titre="Conséquences observées" donnees={parConsequence} total={retenues.length} />
+      <Barres titre="Répartition par jour de la semaine" donnees={parJour} total={retenues.length} />
+
+      <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
+        Ces répartitions décrivent ce qui a été observé et coché. Elles orientent une hypothèse,
+        elles ne l'établissent pas : une analyse fonctionnelle reste du ressort du professionnel.
+      </p>
     </div>
   );
 }
@@ -5049,6 +5438,10 @@ function SuiviScreen({ students, sessions, guidances, onResetTracking }) {
 function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
   const meta = TYPES[obj.type];
   const Icon = meta.icon;
+
+  /* Repères de phase : on place la ligne sur la première séance postérieure au
+     changement, seul point de la courbe où il devient lisible. */
+  const phases = phaseHistory(obj).filter((ph) => ph.date);
 
   const targets = objectiveTargets(obj);
   const cible = currentTarget(obj);
@@ -5069,7 +5462,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
           <div className="min-w-0">
             <div className="text-sm font-medium leading-snug">{obj.name}</div>
             <div className="text-xs" style={{ color: INK_SOFT }}>
-              {points.length} séance{points.length !== 1 ? 's' : ''}
+              {currentPhase(obj).name} · {points.length} séance{points.length !== 1 ? 's' : ''}
               {last && <> · dernier : <span style={{ fontFamily: F_MONO }}>{last.value}{percent ? ' %' : ` ${last.unit}`}</span></>}
             </div>
           </div>
@@ -5133,6 +5526,20 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
               {mastery && (
                 <ReferenceLine y={mastery.threshold} stroke="#0F8B6C" strokeDasharray="4 4" strokeWidth={1.5} />
               )}
+              {phases.map((ph) => {
+                const pt = points.find((x) => new Date(x.date) >= new Date(ph.date));
+                if (!pt) return null;
+                return (
+                  <ReferenceLine
+                    key={ph.id}
+                    x={pt.label}
+                    stroke={INK}
+                    strokeDasharray="3 3"
+                    strokeWidth={1.5}
+                    label={{ value: ph.name, position: 'top', fontSize: 10, fill: INK_SOFT }}
+                  />
+                );
+              })}
               <Line type="monotone" dataKey="value" stroke={meta.color} strokeWidth={2.5} dot={{ r: 3.5, fill: meta.color }} activeDot={{ r: 5 }} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
@@ -5498,8 +5905,52 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, on
           )}
         </div>
 
+        <div>
+          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
+            Antécédents — plusieurs choix possibles, c'est ce qui permet de repérer des motifs
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {CRISIS_ANTECEDENTS.map((a) => {
+              const on = (crisis.antecedentTags || []).includes(a);
+              return (
+                <Chip key={a} label={a} color={CRISIS} on={on}
+                  onClick={() => set({ antecedentTags: on ? (crisis.antecedentTags || []).filter((x) => x !== a) : [...(crisis.antecedentTags || []), a] })} />
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Conséquences observées</div>
+          <div className="flex flex-wrap gap-2">
+            {CRISIS_CONSEQUENCES.map((c) => {
+              const on = (crisis.consequenceTags || []).includes(c);
+              return (
+                <Chip key={c} label={c} color={CRISIS} on={on}
+                  onClick={() => set({ consequenceTags: on ? (crisis.consequenceTags || []).filter((x) => x !== c) : [...(crisis.consequenceTags || []), c] })} />
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Fonction supposée</div>
+          <div className="flex flex-wrap gap-2">
+            {CRISIS_FUNCTIONS.map((f) => {
+              const on = crisis.fonction === f.k;
+              return (
+                <button key={f.k} onClick={() => set({ fonction: on ? null : f.k })}
+                  className="rounded-xl px-4 py-2.5 border text-sm"
+                  style={{ fontFamily: F_DISPLAY, borderColor: f.color, backgroundColor: on ? f.color : 'transparent', color: on ? '#fff' : f.color }}>
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {[
-          { k: 'antecedent', label: 'A — Antécédent', hint: 'Ce qui se passait juste avant' },
+          { k: 'antecedent', label: 'A — Antécédent', hint: 'Précisions libres sur ce qui se passait juste avant' },
           { k: 'comportement', label: 'B — Comportement', hint: 'Ce qui a été observé, de façon factuelle' },
           { k: 'consequence', label: 'C — Conséquence', hint: "Ce qui a suivi, réaction de l'environnement" },
           { k: 'commentaire', label: 'Commentaire', hint: 'Contexte, hypothèses, suites à donner' },
