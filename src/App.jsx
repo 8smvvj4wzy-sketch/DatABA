@@ -29,6 +29,9 @@ function useFonts() {
       link.rel = 'stylesheet';
       link.href =
         'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap';
+      // Chargement non bloquant : l'affichage ne dépend jamais du réseau
+      link.media = 'print';
+      link.onload = () => { link.media = 'all'; link.onload = null; };
       document.head.appendChild(link);
     }
     if (!document.getElementById('aba-anim')) {
@@ -307,6 +310,7 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
   const [firstPin, setFirstPin] = useState('');
   const [error, setError] = useState('');
   const [showReset, setShowReset] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(Date.now());
 
   const lockedUntil = security.lockUntil || 0;
@@ -319,12 +323,14 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
   }, [waiting]);
 
   async function handleEnter(pin) {
-    if (waiting) return;
+    if (waiting || busy) return;
+    setBusy(true);
     const hash = await hashPin(pin, security.pinSalt);
     if (hash === security.pinHash) {
       onUnlock(pin);
-      return;
+      return; // busy reste actif : l'écran laisse place à l'application
     }
+    setBusy(false);
     const failed = (security.failedAttempts || 0) + 1;
     const delay = lockDelayMs(failed);
     onFailedAttempt(failed, delay ? Date.now() + delay : 0);
@@ -380,16 +386,18 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
     return (
       <div>
         <PinPad
-          title={waiting ? 'Saisie suspendue' : 'Code verrouillé'}
+          title={waiting ? 'Saisie suspendue' : busy ? 'Ouverture…' : 'Code verrouillé'}
           subtitle={waiting
             ? `Trop de codes erronés. Nouvel essai possible dans ${fmtClock(reste * 1000)}.`
+            : busy
+            ? 'Déchiffrement des données en cours'
             : digits
             ? `Saisissez votre code à ${digits} chiffres`
             : 'Saisissez votre code, puis validez'}
           onSubmit={handleEnter}
           error={error}
           digits={digits}
-          disabled={waiting}
+          disabled={waiting || busy}
         />
         <div className="fixed bottom-8 left-0 right-0 text-center">
           <button onClick={() => setShowReset(true)} className="text-xs underline" style={{ color: INK_SOFT }}>Code oublié ?</button>
@@ -1637,7 +1645,7 @@ function PassphraseModal({ mode, error, onSubmit, onClose }) {
 }
 
 /* ==================== Application ==================== */
-export default function App() {
+function AbaApp() {
   useFonts();
   const [tab, setTab] = useState('admin');
   const [loaded, setLoaded] = useState(false);
@@ -5204,5 +5212,63 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, on
         )}
       </div>
     </div>
+  );
+}
+
+/* ==================== Garde-fou d'affichage ====================
+   Sans lui, la moindre erreur au rendu laisse un écran blanc, impossible à
+   diagnostiquer. Ici le message est affiché, et les données restent intactes :
+   rien n'est effacé, l'erreur concerne l'affichage, pas le contenu. */
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    this.setState({ info });
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    const message = String((this.state.error && this.state.error.message) || this.state.error);
+    const pile = (this.state.info && this.state.info.componentStack) || '';
+    return (
+      <div className="min-h-screen px-5 py-8" style={{ background: PAPER, color: INK, fontFamily: F_BODY }}>
+        <div className="max-w-md mx-auto">
+          <h1 className="text-xl font-semibold mb-2" style={{ fontFamily: F_DISPLAY }}>L'affichage a rencontré une erreur</h1>
+          <p className="text-sm mb-4" style={{ color: INK_SOFT }}>
+            Vos données ne sont pas touchées : elles restent enregistrées et chiffrées sur cet appareil.
+            Recopiez le message ci-dessous, il indique précisément l'origine du problème.
+          </p>
+          <div className="rounded-xl border p-3 mb-4 text-xs overflow-auto"
+            style={{ borderColor: BORDER, backgroundColor: CARD, fontFamily: F_MONO, maxHeight: '40vh', whiteSpace: 'pre-wrap' }}>
+            {message}
+            {pile ? `\n${pile.split('\n').slice(0, 8).join('\n')}` : ''}
+          </div>
+          <div className="flex gap-2">
+            <Btn onClick={() => window.location.reload()} className="flex-1 text-sm">Recharger</Btn>
+            <Btn
+              variant="ghost"
+              onClick={() => {
+                if (navigator.clipboard) navigator.clipboard.writeText(`${message}\n${pile}`);
+              }}
+              className="text-sm"
+            >
+              Copier
+            </Btn>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AbaApp />
+    </ErrorBoundary>
   );
 }
