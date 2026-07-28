@@ -6,7 +6,7 @@ import {
   Timer as TimerIcon, ListChecks, LayoutGrid, CheckCircle2, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock,
+  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -118,13 +118,6 @@ const BALANCE_OUTCOMES = [
   { k: 'guide', label: 'Guidé', short: 'G', color: '#D69A2D' },
   { k: 'erreur', label: 'Mauvaise réponse', short: 'E', color: '#A8402F' },
   { k: 'manque', label: 'Étape manquée', short: 'M', color: '#565E54' },
-];
-
-/* Cotation facultative en fin de temps, pour les objectifs chronométrés */
-const TIMER_OUTCOMES = [
-  { k: 'reussi', label: 'Réussite', short: 'R', color: '#0F8B6C' },
-  { k: 'guide', label: 'Guidé', short: 'G', color: '#D69A2D' },
-  { k: 'echec', label: 'Échec', short: 'E', color: '#A8402F' },
 ];
 
 const DEFAULT_CHAIN_STEPS = [
@@ -597,15 +590,25 @@ function fromLocalInput(value) {
 }
 
 function emptyEntry(obj) {
-  if (obj.type === 'trials') return { trials: obj.config.trialCount ? Array(obj.config.trialCount).fill(null) : [] };
+  if (obj.type === 'trials') return { trials: obj.config.trialCount ? Array(obj.config.trialCount).fill(null) : [], running: false, startedAt: null, pendingMs: 0 };
   if (obj.type === 'probe') return { value: null, guidance: null };
   if (obj.type === 'occurrence') return { count: 0 };
-  if (obj.type === 'timer') return { elapsedMs: 0, running: false, startedAt: null, finalOutcome: null };
+  if (obj.type === 'timer') return { elapsedMs: 0, running: false, startedAt: null };
   if (obj.type === 'interval') return { marks: {}, segments: [] };
   if (obj.type === 'chaining') return { steps: {} };
   if (obj.type === 'latency') return { latencies: [], running: false, startedAt: null };
   if (obj.type === 'balance') return { trials: [{ steps: {} }] };
   return {};
+}
+
+/* Un essai est enregistré soit comme un simple code (format d'origine), soit
+   comme { code, ms } lorsque l'objectif chronomètre chaque essai. Ces deux
+   accesseurs permettent de lire les deux sans distinction. */
+function trialCode(t) {
+  return t && typeof t === 'object' ? t.code : t;
+}
+function trialMs(t) {
+  return t && typeof t === 'object' && typeof t.ms === 'number' ? t.ms : null;
 }
 
 /* Une cotation peut dater d'avant un changement de type d'objectif : on vérifie qu'elle correspond */
@@ -696,12 +699,24 @@ function summarize(obj, entry, guidances) {
   if (!entryMatches(obj, entry)) return { result: '—', detail: '' };
   const gList = objectiveGuidances(obj, guidances);
   if (obj.type === 'trials') {
-    const done = entry.trials.filter(Boolean);
-    const indep = done.filter((c) => isIndependentCode(gList, c)).length;
+    const done = entry.trials.filter((t) => trialCode(t));
+    const indep = done.filter((t) => isIndependentCode(gList, trialCode(t))).length;
     const pct = done.length ? Math.round((indep / done.length) * 100) : 0;
+    const durees = done.map(trialMs).filter((m) => m != null);
+    const moyenne = durees.length ? durees.reduce((a, b) => a + b, 0) / durees.length : null;
     return {
-      result: done.length ? `${indep}/${done.length} indépendant (${pct} %)` : 'Non coté',
-      detail: entry.trials.map((c, i) => (c ? `E${i + 1}:${c}` : '')).filter(Boolean).join(' '),
+      result: done.length
+        ? `${indep}/${done.length} indépendant (${pct} %)${moyenne != null ? ` · ${(moyenne / 1000).toFixed(1)} s en moyenne` : ''}`
+        : 'Non coté',
+      detail: entry.trials
+        .map((t, i) => {
+          const c = trialCode(t);
+          if (!c) return '';
+          const ms = trialMs(t);
+          return `E${i + 1}:${c}${ms != null ? `(${(ms / 1000).toFixed(1)}s)` : ''}`;
+        })
+        .filter(Boolean)
+        .join(' '),
     };
   }
   if (obj.type === 'probe') {
@@ -716,15 +731,11 @@ function summarize(obj, entry, guidances) {
     return { result: `${entry.count} occurrence${entry.count !== 1 ? 's' : ''}`, detail: '' };
   }
   if (obj.type === 'timer') {
-    const o = entry.finalOutcome ? TIMER_OUTCOMES.find((x) => x.k === entry.finalOutcome) : null;
     const base = entry.elapsedMs ? fmtDuration(entry.elapsedMs) : 'Non démarré';
     const cible = obj.config && obj.config.timerMode === 'countdown' && obj.config.timerSeconds
       ? ` / ${fmtDuration(obj.config.timerSeconds * 1000)}`
       : '';
-    return {
-      result: `${base}${cible}${o ? ` · ${o.label}` : ''}`,
-      detail: `${Math.round((entry.elapsedMs || 0) / 1000)} s${o ? ` | ${o.label}` : ''}`,
-    };
+    return { result: `${base}${cible}`, detail: `${Math.round((entry.elapsedMs || 0) / 1000)} s` };
   }
   if (obj.type === 'interval') {
     const levels = obj.config.levels || [];
@@ -792,9 +803,9 @@ function objectiveScore(obj, entry, guidances) {
   if (!entryMatches(obj, entry)) return null;
   const gList = objectiveGuidances(obj, guidances);
   if (obj.type === 'trials') {
-    const done = entry.trials.filter(Boolean);
+    const done = entry.trials.filter((t) => trialCode(t));
     if (!done.length) return null;
-    return { value: Math.round((done.filter((c) => isIndependentCode(gList, c)).length / done.length) * 100), percent: true, unit: '%' };
+    return { value: Math.round((done.filter((t) => isIndependentCode(gList, trialCode(t))).length / done.length) * 100), percent: true, unit: '%' };
   }
   if (obj.type === 'probe') {
     if (obj.config && obj.config.useGuidance) {
@@ -978,7 +989,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)']];
 
   function base(sess, sid, obj) {
     return [
@@ -1005,10 +1016,16 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
         const gl = objectiveGuidances(obj, guidances);
 
         if (obj.type === 'trials') {
-          (entry.trials || []).forEach((code, i) => {
+          (entry.trials || []).forEach((t, i) => {
+            const code = trialCode(t);
             if (!code) return;
             const g = guidanceByCode(gl, code);
-            rows.push([...b, 'Essai par essai', i + 1, '', g ? g.label : code, isIndependentCode(gl, code) ? 1 : 0, '', '']);
+            const ms = trialMs(t);
+            rows.push([
+              ...b, 'Essai par essai', i + 1, '', g ? g.label : code,
+              isIndependentCode(gl, code) ? 1 : 0, '', '',
+              ms == null ? '' : Math.round(ms / 100) / 10,
+            ]);
           });
         }
 
@@ -1017,7 +1034,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
             const code = entry.steps && entry.steps[st.id];
             if (!code) return;
             const g = guidanceByCode(gl, code);
-            rows.push([...b, 'Chaînage', i + 1, st.name, g ? g.label : code, isIndependentCode(gl, code) ? 1 : 0, '', '']);
+            rows.push([...b, 'Chaînage', i + 1, st.name, g ? g.label : code, isIndependentCode(gl, code) ? 1 : 0, '', '', '']);
           });
         }
 
@@ -1030,32 +1047,32 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
               rows.push([
                 ...b, 'Balance Program', ti + 1, st.name, o ? o.label : e.outcome,
                 e.outcome === 'manque' ? '' : e.outcome === 'reussi' ? 1 : 0,
-                e.demande ? 'Oui' : 'Non', e.renforce ? 'Oui' : 'Non',
+                e.demande ? 'Oui' : 'Non', e.renforce ? 'Oui' : 'Non', '',
               ]);
             });
           });
         }
 
-        if (obj.type === 'timer' && ((entry.elapsedMs || 0) > 0 || entry.finalOutcome)) {
-          const o = entry.finalOutcome ? TIMER_OUTCOMES.find((x) => x.k === entry.finalOutcome) : null;
+        if (obj.type === 'timer' && (entry.elapsedMs || 0) > 0) {
           const secondes = Math.round((entry.elapsedMs || 0) / 1000);
-          rows.push([
-            ...b, 'Timer', 1, '',
-            `${secondes} s${o ? ` · ${o.label}` : ''}`,
-            o ? (o.k === 'reussi' ? 1 : 0) : '',
-            '', '',
-          ]);
+          rows.push([...b, 'Timer', 1, '', `${secondes} s`, '', '', '', secondes]);
+        }
+
+        if (obj.type === 'latency') {
+          (entry.latencies || []).forEach((ms, i) => {
+            rows.push([...b, 'Latence', i + 1, '', `${(ms / 1000).toFixed(1)} s`, '', '', '', Math.round(ms / 1000)]);
+          });
         }
 
         if (obj.type === 'interval') {
           const levels = obj.config.levels || [];
           Object.entries(entry.marks || {}).forEach(([n, lid]) => {
             const lv = levels.find((l) => l.id === lid);
-            if (lv) rows.push([...b, 'Intervalle', Number(n), '', lv.name, '', '', '']);
+            if (lv) rows.push([...b, 'Intervalle', Number(n), '', lv.name, '', '', '', '']);
           });
           (entry.segments || []).forEach((seg) => {
             const lv = levels.find((l) => l.id === seg.levelId);
-            if (lv) rows.push([...b, 'Intervalle (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '']);
+            if (lv) rows.push([...b, 'Intervalle (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '', segmentMinutes(seg) * 60]);
           });
         }
       });
@@ -1115,7 +1132,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
 
   const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter);
   const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
-  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }];
+  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }];
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
@@ -1373,14 +1390,26 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '' }) {
       const row = list.find((r) => r.contains(target));
       return row ? list.indexOf(row) : -1;
     }
-    function indexFromY(clientY) {
+    /* Repère l'élément sous le doigt. On teste d'abord le survol exact, ce qui
+       fonctionne aussi bien pour une liste verticale que pour une grille ;
+       à défaut on retient le plus proche par le centre. */
+    function indexFromPoint(clientX, clientY) {
       const list = rows();
       if (!list.length) return -1;
       for (let i = 0; i < list.length; i++) {
         const r = list[i].getBoundingClientRect();
-        if (clientY >= r.top && clientY <= r.bottom) return i;
+        if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) return i;
       }
-      return clientY < list[0].getBoundingClientRect().top ? 0 : list.length - 1;
+      let best = 0;
+      let bestDist = Infinity;
+      list.forEach((el2, i) => {
+        const r = el2.getBoundingClientRect();
+        const dx = clientX - (r.left + r.width / 2);
+        const dy = clientY - (r.top + r.height / 2);
+        const d = dx * dx + dy * dy;
+        if (d < bestDist) { bestDist = d; best = i; }
+      });
+      return best;
     }
 
     function start(e) {
@@ -1388,6 +1417,7 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '' }) {
       const i = indexFromTarget(e.target);
       if (i < 0) return;
       s.startY = t.clientY;
+      s.startX = t.clientX;
       s.from = i;
       s.dragging = false;
       clearTimeout(s.timer);
@@ -1404,11 +1434,14 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '' }) {
       const t = e.touches ? e.touches[0] : e;
       if (!s.dragging) {
         // Un mouvement franc avant la fin du délai = défilement, pas un déplacement
-        if (s.timer && Math.abs(t.clientY - s.startY) > 8) { clearTimeout(s.timer); s.timer = null; }
+        if (s.timer && (Math.abs(t.clientY - s.startY) > 8 || Math.abs(t.clientX - s.startX) > 8)) {
+          clearTimeout(s.timer);
+          s.timer = null;
+        }
         return;
       }
       if (e.cancelable) e.preventDefault();
-      const i = indexFromY(t.clientY);
+      const i = indexFromPoint(t.clientX, t.clientY);
       if (i >= 0 && i !== s.over) { s.over = i; setOverIndex(i); }
     }
 
@@ -1466,7 +1499,9 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '' }) {
             key={k}
             style={{
               opacity: isDragging ? 0.45 : 1,
-              borderTop: isOver ? `2px solid ${INK}` : '2px solid transparent',
+              outline: isOver ? `2px solid ${INK}` : 'none',
+              outlineOffset: '2px',
+              borderRadius: isOver ? '1rem' : undefined,
               transition: 'opacity .15s',
               touchAction: dragKey !== null ? 'none' : 'auto',
             }}
@@ -2683,12 +2718,14 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                               <div className="text-xs" style={{ color: INK_SOFT }}>
                                 {meta.short}
                                 {o.type === 'trials' && (o.config.trialCount ? ` · ${o.config.trialCount} essais prévus` : ' · essais sans limite')}
+                                {o.type === 'trials' && o.config.withTimer && (o.config.timerMode === 'countdown' && o.config.timerSeconds
+                                  ? ` · limite ${fmtDuration(o.config.timerSeconds * 1000)}`
+                                  : ' · chronométré')}
                                 {o.type === 'interval' && ` · toutes les ${o.config.intervalMinutes} min · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
                                 {(o.type === 'chaining' || o.type === 'balance') && ` · ${(o.config.steps || []).length} étapes`}
                                 {o.type === 'timer' && (o.config.timerMode === 'countdown' && o.config.timerSeconds
                                   ? ` · ${fmtDuration(o.config.timerSeconds * 1000)}`
                                   : ' · chronomètre')}
-                                {o.type === 'timer' && o.config.finalRating && ' · cotation finale'}
                                 {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions} ${o.config.mastery.unit === 'days' ? 'jours' : 'séances'}`}
                                 {objectiveTargets(o).length > 0 && ` · ${(o.masteredTargetIds || []).length}/${objectiveTargets(o).length} cibles acquises`}
                               </div>
@@ -2793,10 +2830,10 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const [rColor, setRColor] = useState(GUIDANCE_PALETTE[0]);
   const [rIndep, setRIndep] = useState(false);
   const [useGuidance, setUseGuidance] = useState(!!initConfig.useGuidance);
+  const [withTimer, setWithTimer] = useState(!!initConfig.withTimer);
   const [timerMode, setTimerMode] = useState(initConfig.timerMode || 'chrono');
   const [timerMin, setTimerMin] = useState(initConfig.timerSeconds ? Math.floor(initConfig.timerSeconds / 60) : 5);
   const [timerSec, setTimerSec] = useState(initConfig.timerSeconds ? initConfig.timerSeconds % 60 : 0);
-  const [finalRating, setFinalRating] = useState(!!initConfig.finalRating);
   const [levels, setLevels] = useState(initConfig.levels || DEFAULT_INTERVAL_LEVELS);
   const [newLevel, setNewLevel] = useState('');
   const [targetLevelId, setTargetLevelId] = useState(
@@ -2809,7 +2846,16 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   function submit() {
     if (!name.trim()) return;
     const config = {};
-    if (type === 'trials') config.trialCount = trialCount;
+    if (type === 'trials') {
+      config.trialCount = trialCount;
+      config.withTimer = withTimer;
+      if (withTimer) {
+        config.timerMode = timerMode;
+        if (timerMode === 'countdown') {
+          config.timerSeconds = Math.min(3600, Math.max(5, (Number(timerMin) || 0) * 60 + (Number(timerSec) || 0)));
+        }
+      }
+    }
     if (type === 'interval') {
       config.intervalMinutes = intervalMinutes;
       config.intervalMode = intervalMode;
@@ -2825,7 +2871,6 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
         const sec = Number(timerSec) || 0;
         config.timerSeconds = Math.min(3600, Math.max(5, m * 60 + sec));
       }
-      config.finalRating = finalRating;
     }
     if (USES_GUIDANCE.includes(type) && guidanceSet.length) config.guidanceSet = guidanceSet;
     if (PERCENT_TYPES.includes(type)) {
@@ -2897,9 +2942,53 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
               style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
             />
           </div>
-          <p className="text-xs mt-1.5" style={{ color: INK_SOFT }}>
+          <p className="text-xs mt-1.5 mb-3" style={{ color: INK_SOFT }}>
             Un nombre prévu sert de repère pendant la cotation, mais n'empêche jamais d'ajouter des essais supplémentaires.
           </p>
+
+          <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
+            <button onClick={() => setWithTimer((v) => !v)} className="flex items-center gap-1.5 text-sm">
+              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: withTimer ? INK : BORDER }}>
+                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: withTimer ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+              </span>
+              Chronométrer chaque essai
+            </button>
+            {withTimer && (
+              <div className="mt-3 space-y-3">
+                <p className="text-xs" style={{ color: INK_SOFT }}>
+                  Le temps court à partir de la consigne et se fige dès que l'essai est coté. Chaque essai
+                  conserve sa durée, reprise dans les rapports.
+                </p>
+                <div className="flex gap-1.5">
+                  {[{ k: 'chrono', l: 'Chronomètre' }, { k: 'countdown', l: 'Temps limite' }].map((m) => (
+                    <button key={m.k} onClick={() => setTimerMode(m.k)} className="flex-1 rounded-lg py-2.5 text-sm border"
+                      style={{ borderColor: timerMode === m.k ? INK : BORDER, backgroundColor: timerMode === m.k ? INK : 'transparent', color: timerMode === m.k ? '#fff' : INK_SOFT }}>
+                      {m.l}
+                    </button>
+                  ))}
+                </div>
+                {timerMode === 'countdown' && (
+                  <div className="flex gap-2 items-center">
+                    <input type="number" inputMode="numeric" min="0" max="60" value={timerMin}
+                      onChange={(e) => setTimerMin(e.target.value === '' ? '' : Number(e.target.value))}
+                      onBlur={() => setTimerMin((v) => (v === '' || v === null ? 0 : Math.min(60, Math.max(0, Number(v)))))}
+                      className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
+                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
+                    <span className="text-xs" style={{ color: INK_SOFT }}>min</span>
+                    <input type="number" inputMode="numeric" min="0" max="59" value={timerSec}
+                      onChange={(e) => setTimerSec(e.target.value === '' ? '' : Number(e.target.value))}
+                      onBlur={() => setTimerSec((v) => (v === '' || v === null ? 0 : Math.min(59, Math.max(0, Number(v)))))}
+                      className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
+                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
+                    <span className="text-xs" style={{ color: INK_SOFT }}>s</span>
+                    <span className="text-xs ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
+                      = {fmtDuration(Math.min(3600, Math.max(5, (Number(timerMin) || 0) * 60 + (Number(timerSec) || 0))) * 1000)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -3018,12 +3107,6 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
             </div>
           )}
 
-          <button onClick={() => setFinalRating((v) => !v)} className="flex items-center gap-1.5 text-sm">
-            <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: finalRating ? INK : BORDER }}>
-              <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: finalRating ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-            </span>
-            Cotation en fin de temps (réussite / guidé / échec)
-          </button>
         </div>
       )}
 
@@ -3598,7 +3681,22 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const [vibrateOn, setVibrateOn] = useState(true);
   const [wakeOk, setWakeOk] = useState(false);
   const stepsRef = useRef({});
+  const [expanded, setExpanded] = useState(null); // { sid, oid } de l'objectif agrandi
   const cotationRef = useRef(null);
+
+  /* Réordonne les objectifs d'une personne. En vue Prioritaires on ne déplace
+     qu'un sous-ensemble : les positions occupées par ce sous-ensemble dans la
+     liste complète sont réutilisées, l'ordre des autres reste intact. */
+  function reorderObjectives(sid, nouvelOrdre) {
+    setSession((s0) => {
+      const complet = s0.selectedObjectives[sid] || [];
+      const positions = [];
+      complet.forEach((oid, i) => { if (nouvelOrdre.includes(oid)) positions.push(i); });
+      const suite = complet.slice();
+      positions.forEach((pos, k) => { suite[pos] = nouvelOrdre[k]; });
+      return { ...s0, selectedObjectives: { ...s0.selectedObjectives, [sid]: suite } };
+    });
+  }
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -3831,14 +3929,17 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           transition: cotationSwipe.dragging ? 'none' : 'transform .2s ease-out',
         }}
       >
-        {/* Contenu : tous les prioritaires, ou la personne courante */}
+        {/* Contenu : tous les prioritaires, ou la personne courante.
+            En paysage, les objectifs s'affichent en deux colonnes — six tiennent
+            alors à l'écran sans défilement. */}
         <div className="flex-1 min-w-0">
           {viewMode === 'priority' ? (
             <div className="space-y-5">
               {session.studentIds.map((sid) => {
                 const st = students.find((s) => s.id === sid);
                 if (!st) return null;
-                const ids = (session.selectedObjectives[sid] || []).filter((oid) => {
+                const ordre = session.selectedObjectives[sid] || [];
+                const ids = ordre.filter((oid) => {
                   const o = session.objectiveSnapshot[oid];
                   return o && o.favorite;
                 });
@@ -3859,20 +3960,24 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                         Aucun objectif prioritaire pour cette personne.
                       </div>
                     ) : (
-                      <div className="space-y-3">
-                        {ids.map((oid) => (
+                      <ReorderList
+                        items={ids}
+                        keyOf={(oid) => oid}
+                        onReorder={(next) => reorderObjectives(sid, next)}
+                        className="grid gap-3 landscape:grid-cols-2 xl:landscape:grid-cols-3 items-start"
+                        renderItem={(oid) => (
                           <ObjectiveCard
-                            key={oid}
                             obj={session.objectiveSnapshot[oid]}
                             entry={session.data[sid][oid]}
                             now={now} elapsed={elapsed}
                             session={session} crises={crises} studentId={sid} guidances={guidances}
                             hidden={hiddenFor(sid).includes(oid)}
                             onToggleHidden={() => toggleHidden(sid, oid)}
+                            onExpand={() => setExpanded({ sid, oid })}
                             onChange={(p) => updateEntry(sid, oid, p)}
                           />
-                        ))}
-                      </div>
+                        )}
+                      />
                     )}
                   </div>
                 );
@@ -3883,45 +3988,82 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               <div className="mb-3">
                 <span className="text-2xl font-semibold" style={{ fontFamily: F_DISPLAY }}>{student ? student.initials : ''}</span>
               </div>
-              <div className="space-y-3">
-                {objIds.map((oid) => {
+
+              <ReorderList
+                items={objIds}
+                keyOf={(oid) => oid}
+                onReorder={(next) => reorderObjectives(currentId, next)}
+                className="grid gap-3 landscape:grid-cols-2 xl:landscape:grid-cols-3 items-start"
+                renderItem={(oid) => {
                   const obj = session.objectiveSnapshot[oid];
                   if (!obj) return null;
                   return (
                     <ObjectiveCard
-                      key={oid}
                       obj={obj}
                       entry={session.data[currentId][oid]}
                       now={now} elapsed={elapsed}
                       session={session} crises={crises} studentId={currentId} guidances={guidances}
                       hidden={hiddenFor(currentId).includes(oid)}
                       onToggleHidden={() => toggleHidden(currentId, oid)}
+                      onExpand={() => setExpanded({ sid: currentId, oid })}
                       onChange={(p) => updateEntry(currentId, oid, p)}
                     />
                   );
-                })}
+                }}
+              />
 
-                <Card>
-                  <div className="flex items-center gap-2 mb-2">
-                    <StickyNote size={15} style={{ color: INK_SOFT }} />
-                    <span className="text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Note d'observation</span>
-                  </div>
-                  <textarea
-                    value={(session.notes && session.notes[currentId]) || ''}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setSession((s) => ({ ...s, notes: { ...(s.notes || {}), [currentId]: v } }));
-                    }}
-                    rows={3}
-                    placeholder="Ce qui ne rentre dans aucune case : contexte, réaction, élément à signaler."
-                    className="w-full rounded-xl border px-3 py-2.5 text-base bg-transparent"
-                    style={{ borderColor: BORDER, fontFamily: F_BODY, color: INK }}
-                  />
-                </Card>
-              </div>
+              <Card className="mt-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <StickyNote size={15} style={{ color: INK_SOFT }} />
+                  <span className="text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Note d'observation</span>
+                </div>
+                <textarea
+                  value={(session.notes && session.notes[currentId]) || ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSession((s) => ({ ...s, notes: { ...(s.notes || {}), [currentId]: v } }));
+                  }}
+                  rows={3}
+                  placeholder="Ce qui ne rentre dans aucune case : contexte, réaction, élément à signaler."
+                  className="w-full rounded-xl border px-3 py-2.5 text-base bg-transparent"
+                  style={{ borderColor: BORDER, fontFamily: F_BODY, color: INK }}
+                />
+              </Card>
             </div>
           )}
         </div>
+
+        {/* Fenêtre agrandie : la même fiche, en plein écran */}
+        {expanded && session.objectiveSnapshot[expanded.oid] && (
+          <div className="fixed inset-0 z-40 overflow-y-auto" style={{ backgroundColor: PAPER }}>
+            <div
+              className="max-w-3xl mx-auto px-4 pb-10"
+              style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-lg font-semibold" style={{ fontFamily: F_DISPLAY }}>
+                  {(students.find((x) => x.id === expanded.sid) || {}).initials || ''}
+                </span>
+                <button
+                  onClick={() => setExpanded(null)}
+                  className="rounded-xl px-3 py-2 border flex items-center gap-1.5 text-sm"
+                  style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
+                >
+                  <Minimize2 size={15} /> Réduire
+                </button>
+              </div>
+              <ObjectiveCard
+                obj={session.objectiveSnapshot[expanded.oid]}
+                entry={session.data[expanded.sid][expanded.oid]}
+                now={now} elapsed={elapsed}
+                session={session} crises={crises} studentId={expanded.sid} guidances={guidances}
+                expandedView
+                onExpand={() => setExpanded(null)}
+                onChange={(p) => updateEntry(expanded.sid, expanded.oid, p)}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Rail de navigation entre personnes */}
         <div className="shrink-0 flex flex-col gap-2 sticky top-20 self-start">
@@ -3951,7 +4093,21 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   );
 }
 
-function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onChange }) {
+function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView }) {
+  /* Double-appui sur l'intitulé : agrandit la fiche. On le détecte à la main,
+     l'événement natif de double-clic étant peu fiable au toucher sur iOS. */
+  const dernierAppui = useRef(0);
+  function handleHeaderTap() {
+    if (!onExpand) return;
+    const t = Date.now();
+    if (t - dernierAppui.current < 320) {
+      dernierAppui.current = 0;
+      onExpand();
+      return;
+    }
+    dernierAppui.current = t;
+  }
+
   if (!obj) return null;
   const crisisSet =
     obj.type === 'interval' ? crisisIntervals(session, crises, obj.config.intervalMinutes, studentId) : null;
@@ -3975,17 +4131,22 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
   return (
     <Card>
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 cursor-pointer" onClick={handleHeaderTap}>
           <ObjectiveHeader obj={obj} entry={entry} guidances={guidances} />
         </div>
-        {onToggleHidden && (
+        {onExpand && !expandedView && (
+          <button onClick={onExpand} style={{ color: INK_SOFT }} title="Agrandir" className="shrink-0">
+            <Maximize2 size={15} />
+          </button>
+        )}
+        {onToggleHidden && !expandedView && (
           <button onClick={onToggleHidden} style={{ color: INK_SOFT }} title="Masquer cet objectif" className="shrink-0">
             <EyeOff size={15} />
           </button>
         )}
       </div>
       <div className="mt-3">
-        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
+        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} now={now} onChange={onChange} />}
         {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
         {obj.type === 'timer' && <TimerWidget obj={obj} entry={entry} now={now} onChange={onChange} />}
@@ -4022,37 +4183,60 @@ function ObjectiveHeader({ obj, entry, guidances }) {
 }
 
 /* --- Widgets de cotation --- */
-function TrialsWidget({ obj, entry, guidances, onChange }) {
+function TrialsWidget({ obj, entry, guidances, now, onChange }) {
   const list = objectiveGuidances(obj, guidances);
   const trials = entry.trials || [];
   const planned = obj.config.trialCount || 0; // 0 = pas de limite
-  const done = trials.filter(Boolean).length;
+  const done = trials.filter((t) => trialCode(t)).length;
   const unlimited = !planned;
 
-  /* Sans limite, on affiche toujours une case vide à la suite pour montrer
-     où l'essai suivant va tomber. Avec un nombre planifié, on garde la
-     grille complète, et on peut tout de même dépasser si besoin. */
-  const cells = unlimited ? [...trials.filter(Boolean), null] : trials;
+  /* Chronométrage : le temps court à partir de la consigne et se fige dès que
+     l'essai est coté. Chaque essai garde ainsi sa propre durée. */
+  const withTimer = !!obj.config.withTimer;
+  const countdown = withTimer && obj.config.timerMode === 'countdown' && obj.config.timerSeconds > 0;
+  const targetMs = (obj.config.timerSeconds || 0) * 1000;
+  const enCours = !!entry.running;
+  const chrono = enCours ? (entry.pendingMs || 0) + (now - entry.startedAt) : (entry.pendingMs || 0);
+  const ecoule = countdown && chrono >= targetMs;
+  const sonne = useRef(false);
+
+  useEffect(() => {
+    if (!countdown || !enCours || sonne.current) return;
+    if (chrono >= targetMs) {
+      sonne.current = true;
+      alertInterval({ soundOn: true, vibrateOn: true });
+      onChange({ running: false, pendingMs: targetMs, startedAt: null });
+    }
+  });
+  useEffect(() => {
+    if (!enCours) sonne.current = false;
+  }, [enCours]);
+
+  const cells = unlimited ? [...trials.filter((t) => trialCode(t)), null] : trials;
 
   function record(code) {
+    const ms = withTimer ? chrono : null;
+    const valeur = withTimer ? { code, ms } : code;
+    const reset = withTimer ? { running: false, startedAt: null, pendingMs: 0 } : {};
+
     if (unlimited) {
-      onChange({ trials: [...trials.filter(Boolean), code] });
+      onChange({ trials: [...trials.filter((t) => trialCode(t)), valeur], ...reset });
       return;
     }
-    const idx = trials.findIndex((t) => t === null);
+    const idx = trials.findIndex((t) => !trialCode(t));
     if (idx === -1) {
-      onChange({ trials: [...trials, code] }); // dépassement autorisé
+      onChange({ trials: [...trials, valeur], ...reset });
       return;
     }
     const next = trials.slice();
-    next[idx] = code;
-    onChange({ trials: next });
+    next[idx] = valeur;
+    onChange({ trials: next, ...reset });
   }
 
   function undo() {
     if (!done) return;
     if (unlimited || done > planned) {
-      const kept = trials.filter(Boolean);
+      const kept = trials.filter((t) => trialCode(t));
       kept.pop();
       onChange({ trials: unlimited ? kept : [...kept, ...Array(Math.max(0, planned - kept.length)).fill(null)] });
       return;
@@ -4062,31 +4246,74 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
     onChange({ trials: next });
   }
 
-  const cursor = unlimited ? done : trials.findIndex((t) => t === null);
+  function toggleChrono() {
+    if (enCours) {
+      onChange({ running: false, pendingMs: (entry.pendingMs || 0) + (Date.now() - entry.startedAt), startedAt: null });
+      return;
+    }
+    if (countdown && (entry.pendingMs || 0) >= targetMs) {
+      sonne.current = false;
+      onChange({ running: true, startedAt: Date.now(), pendingMs: 0 });
+      return;
+    }
+    onChange({ running: true, startedAt: Date.now() });
+  }
+
+  const cursor = unlimited ? done : trials.findIndex((t) => !trialCode(t));
 
   return (
     <div>
+      {withTimer && (
+        <div className="flex items-center gap-2 mb-2.5 rounded-xl px-3 py-2" style={{ backgroundColor: PAPER }}>
+          <span className="text-xl font-semibold tabular-nums" style={{ fontFamily: F_MONO, color: ecoule ? TYPES.timer.color : INK }}>
+            {fmtClock(countdown ? Math.max(0, targetMs - chrono) : chrono)}
+          </span>
+          <span className="text-xs" style={{ color: INK_SOFT }}>
+            {countdown ? (ecoule ? 'temps écoulé' : `sur ${fmtDuration(targetMs)}`) : 'cet essai'}
+          </span>
+          <button
+            onClick={toggleChrono}
+            className="ml-auto rounded-lg px-3 py-2 text-white text-sm flex items-center gap-1.5 active:scale-95 transition-transform"
+            style={{ backgroundColor: enCours ? '#A8402F' : TYPES.timer.color, fontFamily: F_DISPLAY }}
+          >
+            {enCours ? <><Pause size={15} /> Arrêter</> : <><Play size={15} /> {chrono > 0 ? 'Reprendre' : 'Consigne'}</>}
+          </button>
+          {chrono > 0 && (
+            <button onClick={() => { sonne.current = false; onChange({ running: false, startedAt: null, pendingMs: 0 }); }} style={{ color: INK_SOFT }}>
+              <RotateCcw size={15} />
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-1.5 mb-2.5 overflow-x-auto pb-1">
         {cells.map((t, i) => {
-          const g = t ? guidanceByCode(list, t) : null;
-          const isNext = !t && (unlimited ? i === cells.length - 1 : i === cursor);
+          const code = trialCode(t);
+          const g = code ? guidanceByCode(list, code) : null;
+          const isNext = !code && (unlimited ? i === cells.length - 1 : i === cursor);
+          const ms = trialMs(t);
           return (
-            <div
-              key={i}
-              className="w-9 h-9 shrink-0 rounded-lg flex items-center justify-center text-xs font-semibold border"
-              style={{
-                fontFamily: F_MONO,
-                backgroundColor: g ? g.color : CARD,
-                color: g ? '#fff' : INK_SOFT,
-                borderColor: g ? g.color : BORDER,
-                boxShadow: isNext ? `0 0 0 2px ${TYPES.trials.color}66` : 'none',
-              }}
-            >
-              {t || i + 1}
+            <div key={i} className="shrink-0 text-center">
+              <div
+                className="w-9 h-9 rounded-lg flex items-center justify-center text-xs font-semibold border"
+                style={{
+                  fontFamily: F_MONO,
+                  backgroundColor: g ? g.color : CARD,
+                  color: g ? '#fff' : INK_SOFT,
+                  borderColor: g ? g.color : BORDER,
+                  boxShadow: isNext ? `0 0 0 2px ${TYPES.trials.color}66` : 'none',
+                }}
+              >
+                {code || i + 1}
+              </div>
+              {ms != null && (
+                <div className="text-[10px] mt-0.5" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{(ms / 1000).toFixed(1)}s</div>
+              )}
             </div>
           );
         })}
       </div>
+
       <div className="flex flex-wrap gap-1.5">
         {list.map((g) => (
           <button
@@ -4246,24 +4473,6 @@ function TimerWidget({ obj, entry, now, onChange }) {
         </div>
       )}
 
-      {cfg.finalRating && (
-        <div className="mt-3">
-          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Cotation en fin de temps</div>
-          <div className="flex gap-1.5">
-            {TIMER_OUTCOMES.map((o) => {
-              const on = entry.finalOutcome === o.k;
-              return (
-                <button key={o.k}
-                  onClick={() => onChange({ finalOutcome: on ? null : o.k })}
-                  className="flex-1 rounded-xl py-2.5 text-sm font-medium border-2 active:scale-95 transition-transform"
-                  style={{ fontFamily: F_DISPLAY, borderColor: o.color, backgroundColor: on ? o.color : 'transparent', color: on ? '#fff' : o.color }}>
-                  {o.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
