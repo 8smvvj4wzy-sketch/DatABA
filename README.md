@@ -412,14 +412,27 @@ fiche avec **un chronomètre qui démarre seul**.
 
 - **Personne concernée**, **atelier**, **intervenants présents** — pré-remplis
   si une séance est en cours ;
-- **Antécédents**, **conséquences observées** et **fonction supposée**
-  (attention, échappement, tangible, sensoriel, indéterminée) — cochables,
-  plusieurs choix possibles. Ce sont ces catégories qui rendent les crises
-  comptables : un texte seul ne s'agrège pas ;
-- **A — Antécédent** : précisions libres sur ce qui se passait juste avant ;
+- **A — Antécédent** : ce qui se passait juste avant ;
 - **B — Comportement** : ce qui a été observé, de façon factuelle ;
 - **C — Conséquence** : ce qui a suivi, réaction de l'environnement ;
+- **Fonction supposée** : attention, échappement, tangible, sensoriel ou
+  indéterminée ;
 - **Commentaire** : contexte, hypothèses, suites à donner.
+
+Chaque zone A, B et C porte un bouton **+** qui déplie des catégories à cocher,
+plusieurs par zone :
+
+| Zone | Catégories proposées |
+|---|---|
+| **A** | Consigne, transition, attente, refus opposé, bruit, interaction avec un pair, imprévu, fin d'activité appréciée, aucun déclencheur identifié |
+| **B** | Auto-agression, hétéro-agression, morsure, mise au sol, cris, jet d'objet, destruction de matériel, fuite, refus |
+| **C** | Retrait de la demande, attention de l'adulte, accès à un objet, mise à l'écart, aide physique, ignorance active, poursuite de l'activité |
+
+Les catégories retenues s'affichent en pastilles ; un appui dessus les retire.
+Le champ de texte libre reste disponible sous chaque zone pour les précisions.
+
+> Ce sont ces catégories qui rendent les crises comptables : un texte seul ne
+> s'agrège pas. Sans elles, l'écran Suivi n'a rien à analyser.
 
 « Terminer et enregistrer » clôt le chronomètre.
 
@@ -457,8 +470,8 @@ Une analyse d'ensemble des crises consignées, filtrable par personne :
   une couleur par fonction supposée. C'est la représentation qui fait
   apparaître les motifs : les crises de fin de matinée, celles d'un jour
   précis, celles qui suivent un même moment de la journée ;
-- le **classement des antécédents**, des **fonctions supposées** et des
-  **conséquences observées**, en nombre et en pourcentage ;
+- le **classement des antécédents**, des **comportements observés**, des
+  **fonctions supposées** et des **conséquences**, en nombre et en pourcentage ;
 - la **répartition par jour de la semaine** ;
 - le nombre de crises et leur durée moyenne.
 
