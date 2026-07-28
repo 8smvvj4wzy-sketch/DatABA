@@ -361,10 +361,39 @@ function lockDelayMs(failed) {
   return 15 * 60 * 1000;
 }
 
+function PasswordScreen({ title, subtitle, onSubmit, error, disabled, label }) {
+  const [value, setValue] = useState('');
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{ background: PAPER, fontFamily: F_BODY }}>
+      <div className="w-full max-w-xs">
+        <h1 className="text-xl font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY, color: INK }}>{title}</h1>
+        {subtitle && <p className="text-sm text-center mb-5" style={{ color: INK_SOFT }}>{subtitle}</p>}
+        {error && <p className="text-sm text-center mb-3" style={{ color: CRISIS }}>{error}</p>}
+        <input
+          type="password"
+          value={value}
+          autoFocus
+          disabled={disabled}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && value.length >= 4) { onSubmit(value); setValue(''); } }}
+          placeholder="Mot de passe"
+          className="w-full rounded-xl border px-3 py-3 text-base bg-transparent mb-3"
+          style={{ borderColor: BORDER, color: INK }}
+        />
+        <Btn onClick={() => { onSubmit(value); setValue(''); }} disabled={disabled || value.length < 4} className="w-full">
+          {label || 'Valider'}
+        </Btn>
+        <p className="text-xs text-center mt-3" style={{ color: INK_SOFT }}>Au moins 4 caractères.</p>
+      </div>
+    </div>
+  );
+}
+
 function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
   const digits = security.pinDigits || null; // null : longueur inconnue, saisie libre
   const [step, setStep] = useState(security.pinHash ? 'enter' : 'choose');
   const [newDigits, setNewDigits] = useState(4);
+  const [newMode, setNewMode] = useState('pin');
   const [firstPin, setFirstPin] = useState('');
   const [error, setError] = useState('');
   const [showReset, setShowReset] = useState(false);
@@ -410,7 +439,7 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
     }
     const salt = newSalt();
     const hash = await hashPin(pin, salt);
-    await onSetup(hash, salt, newDigits, pin);
+    await onSetup(hash, salt, newDigits, pin, newMode);
   }
 
   /* Choix de la longueur, à la toute première ouverture */
@@ -423,15 +452,27 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
             Ce code verrouille l'accès et sert à chiffrer les données enregistrées sur cet appareil.
           </p>
           <div className="flex gap-2 mb-3">
-            {[4, 6].map((n) => (
-              <button key={n} onClick={() => setNewDigits(n)} className="flex-1 rounded-xl py-3 border text-sm font-medium"
-                style={{ fontFamily: F_DISPLAY, borderColor: newDigits === n ? INK : BORDER, backgroundColor: newDigits === n ? INK : 'transparent', color: newDigits === n ? '#fff' : INK_SOFT }}>
-                {n} chiffres
+            {[{ k: 'pin', l: 'Code chiffré' }, { k: 'password', l: 'Mot de passe' }].map((m) => (
+              <button key={m.k} onClick={() => setNewMode(m.k)} className="flex-1 rounded-xl py-3 border text-sm font-medium"
+                style={{ fontFamily: F_DISPLAY, borderColor: newMode === m.k ? INK : BORDER, backgroundColor: newMode === m.k ? INK : 'transparent', color: newMode === m.k ? '#fff' : INK_SOFT }}>
+                {m.l}
               </button>
             ))}
           </div>
+          {newMode === 'pin' && (
+            <div className="flex gap-2 mb-3">
+              {[4, 6].map((n) => (
+                <button key={n} onClick={() => setNewDigits(n)} className="flex-1 rounded-xl py-3 border text-sm font-medium"
+                  style={{ fontFamily: F_DISPLAY, borderColor: newDigits === n ? INK : BORDER, backgroundColor: newDigits === n ? INK : 'transparent', color: newDigits === n ? '#fff' : INK_SOFT }}>
+                  {n} chiffres
+                </button>
+              ))}
+            </div>
+          )}
           <p className="text-xs text-center mb-5" style={{ color: INK_SOFT }}>
-            6 chiffres protègent nettement mieux les données en cas de perte de l'appareil.
+            {newMode === 'pin'
+              ? '6 chiffres protègent nettement mieux les données que 4 en cas de perte de l\'appareil.'
+              : 'Un mot de passe écrit protège mieux qu\'un code chiffré, mais se saisit plus lentement à chaque ouverture.'}
           </p>
           <Btn onClick={() => setStep('create1')} className="w-full">Continuer</Btn>
         </div>
@@ -441,6 +482,43 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
 
   if (step === 'enter') {
     const reste = Math.max(0, Math.ceil((lockedUntil - now) / 1000));
+    if (security.mode === 'password') {
+      return (
+        <div>
+          <PasswordScreen
+            title={waiting ? 'Saisie suspendue' : 'Application verrouillée'}
+            subtitle={waiting
+              ? `Trop d'essais. Nouvel essai possible dans ${fmtClock(reste * 1000)}.`
+              : 'Saisissez votre mot de passe'}
+            onSubmit={handleEnter}
+            error={error}
+            disabled={waiting}
+            label="Déverrouiller"
+          />
+          <div className="fixed bottom-8 left-0 right-0 text-center">
+            <button onClick={() => setShowReset(true)} className="text-xs underline" style={{ color: INK_SOFT }}>Mot de passe oublié ?</button>
+          </div>
+          {showReset && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+              <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
+                <h2 className="font-semibold mb-2" style={{ fontFamily: F_DISPLAY }}>Réinitialiser</h2>
+                <p className="text-sm mb-4" style={{ color: INK_SOFT }}>
+                  Les données étant chiffrées avec ce mot de passe, il n'existe aucun moyen de les
+                  récupérer sans lui. La seule solution est de tout effacer, puis de restaurer une
+                  sauvegarde chiffrée si vous en avez une.
+                </p>
+                <div className="flex gap-2">
+                  <Btn onClick={async () => { await store.clearAll(); window.location.reload(); }} className="flex-1 text-sm" style={{ backgroundColor: CRISIS }}>
+                    Effacer et recommencer
+                  </Btn>
+                  <Btn variant="ghost" onClick={() => setShowReset(false)} className="text-sm">Annuler</Btn>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
     return (
       <div>
         <PinPad
@@ -483,6 +561,19 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
           </div>
         )}
       </div>
+    );
+  }
+
+  if (newMode === 'password') {
+    return (
+      <PasswordScreen
+        key={step}
+        title={step === 'create1' ? 'Créer un mot de passe' : 'Confirmez'}
+        subtitle={step === 'create1' ? 'Il servira aussi à chiffrer les données' : 'Ressaisissez le même mot de passe'}
+        onSubmit={step === 'create1' ? handleCreate1 : handleCreate2}
+        error={error}
+        label={step === 'create1' ? 'Continuer' : 'Valider'}
+      />
     );
   }
 
@@ -703,7 +794,13 @@ function finalizeSession(session) {
           : entry;
     });
   });
-  return { ...session, data, endedAt: session.isEdit ? session.endedAt || stamp : stamp };
+  const reinforcement = {};
+  Object.entries(session.reinforcement || {}).forEach(([sid, r]) => {
+    reinforcement[sid] = r && r.running && r.startedAt
+      ? { running: false, startedAt: null, totalMs: (r.totalMs || 0) + (stamp - r.startedAt) }
+      : r;
+  });
+  return { ...session, data, reinforcement, endedAt: session.isEdit ? session.endedAt || stamp : stamp };
 }
 
 /* --- Cotation par intervalle : relevés en direct + périodes saisies à la main ---
@@ -1235,6 +1332,23 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   }
 
   sessions.forEach((sess) => {
+    // Temps de renforcement et temps d'activité, par personne
+    const dureeSeance = sess.endedAt && sess.startedAt
+      ? Math.max(0, sess.endedAt - sess.startedAt - (sess.pausedMs || 0))
+      : 0;
+    Object.entries(sess.reinforcement || {}).forEach(([sid, r]) => {
+      if (studentFilter && !studentFilter.includes(sid)) return;
+      const renfo = Math.round((r.totalMs || 0) / 1000);
+      if (!renfo) return;
+      const activite = Math.max(0, Math.round(dureeSeance / 1000) - renfo);
+      rows.push([
+        ...base(sess, sid, { name: 'Temps de renforcement', activeTargetName: null, activePhaseName: '—', config: {} }),
+        'Renforcement', 1, '',
+        `${Math.round(renfo / 60)} min de renforcement · ${Math.round(activite / 60)} min d'activité`,
+        '', '', '', renfo,
+      ]);
+    });
+
     (sess.studentIds || []).forEach((sid) => {
       if (studentFilter && !studentFilter.includes(sid)) return;
       const objIds = (sess.selectedObjectives && sess.selectedObjectives[sid]) || [];
@@ -2002,6 +2116,13 @@ function AbaApp() {
 
   const [activeSession, setActiveSession] = useState(null);
   const [crisis, setCrisis] = useState(null);
+  const [crisisMinimized, setCrisisMinimized] = useState(false);
+  const [crisisTick, setCrisisTick] = useState(Date.now());
+  useEffect(() => {
+    if (!crisis || !crisisMinimized) return undefined;
+    const id = setInterval(() => setCrisisTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [crisis, crisisMinimized]);
   const [toast, setToast] = useState(null);
   const rootRef = useRef(null);
   const contentRef = useRef(null);
@@ -2043,6 +2164,15 @@ function AbaApp() {
       setSecurityLoaded(true);
     })();
   }, []);
+
+  /* Protection désactivée : rien à déverrouiller, on charge tout de suite. */
+  useEffect(() => {
+    if (!securityLoaded || loaded || !security.disabled) return;
+    dataKey = null;
+    setLocked(false);
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [securityLoaded, security.disabled]);
 
   async function loadData() {
     const config = await store.get('aba:config');
@@ -2175,14 +2305,33 @@ function AbaApp() {
     await store.set('aba:active', JSON.stringify(activeSession));
   }
 
-  async function changePin(pinHash, pinSalt, pinDigits, pin) {
+  async function changePin(pinHash, pinSalt, pinDigits, pin, mode) {
     const dataSalt = newSalt();
-    const next = { ...security, pinHash, pinSalt, pinDigits, dataSalt, failedAttempts: 0, lockUntil: 0 };
+    const next = { ...security, pinHash, pinSalt, pinDigits, mode: mode || security.mode || 'pin', dataSalt, failedAttempts: 0, lockUntil: 0 };
     setSecurity(next);
     await store.setRaw('aba:security', JSON.stringify(next));
     dataKey = await deriveDataKey(pin, dataSalt);
     await persistAll();
     notify('Code modifié');
+  }
+
+  /* Désactivation : les données sont déchiffrées et réécrites en clair.
+     C'est un vrai recul de protection, la confirmation le dit sans détour. */
+  async function disableProtection() {
+    const cle = dataKey;
+    if (cle) {
+      for (const k of ['aba:config', 'aba:sessions', 'aba:crises', 'aba:active']) {
+        const raw = await store.getRaw(k);
+        if (raw == null) continue;
+        try { await store.setRaw(k, await decryptValue(raw, cle)); } catch (e) { /* déjà en clair */ }
+      }
+    }
+    dataKey = null;
+    const next = { disabled: true, pinHash: null, pinSalt: null, dataSalt: null, pinDigits: null, mode: null, failedAttempts: 0, lockUntil: 0 };
+    setSecurity(next);
+    await store.setRaw('aba:security', JSON.stringify(next));
+    setLocked(false);
+    notify('Protection désactivée, données déchiffrées');
   }
 
   async function registerFailedAttempt(failedAttempts, lockUntil) {
@@ -2200,7 +2349,7 @@ function AbaApp() {
      avoir été masquée (écran éteint, changement d'appli), et après un long
      moment sans interaction pendant qu'elle reste affichée. */
   useEffect(() => {
-    if (!security.pinHash) return undefined;
+    if (!security.pinHash || security.disabled) return undefined;
     let idleTimer = null;
     const IDLE_MS = 10 * 60 * 1000;
     const resetIdle = () => {
@@ -2442,13 +2591,28 @@ function AbaApp() {
   const markSent = (ids, sent = true) =>
     setSessions((list) => list.map((s) => (ids.includes(s.id) ? { ...s, sentAt: sent ? new Date().toISOString() : null } : s)));
 
+  const deleteAllSessions = () => {
+    if (!window.confirm(
+      `Supprimer les ${sessions.length} séance(s) enregistrée(s) ?\n\nLes cotations seront définitivement perdues. Les crises et observations sont conservées.\n\nExportez une sauvegarde avant si vous voulez pouvoir revenir en arrière.`
+    )) return;
+    if (!window.confirm('Confirmation définitive : supprimer toutes les séances ?')) return;
+    setSessions([]);
+    notify('Toutes les séances ont été supprimées');
+  };
+
+  const deleteAllSessions = () => {
+    setSessions([]);
+    notify('Toutes les séances ont été supprimées');
+  };
+
   const deleteSession = (id) => {
     setSessions((list) => list.filter((s) => s.id !== id));
     notify('Séance supprimée');
   };
 
   /* --- crise --- */
-  const openObservation = () =>
+  const openObservation = () => {
+    setCrisisMinimized(false);
     setCrisis({
       id: uid(),
       date: new Date().toISOString(),
@@ -2467,8 +2631,10 @@ function AbaApp() {
       comportementTags: [],
       consequenceTags: [],
     });
+  };
 
-  const openCrisis = () =>
+  const openCrisis = () => {
+    setCrisisMinimized(false);
     setCrisis({
       id: uid(),
       date: new Date().toISOString(),
@@ -2483,9 +2649,14 @@ function AbaApp() {
       antecedent: '',
       comportement: '',
       consequence: '',
+      antecedentTags: [],
+      comportementTags: [],
+      consequenceTags: [],
     });
+  };
 
-  const editCrisis = (c) =>
+  const editCrisis = (c) => {
+    setCrisisMinimized(false);
     setCrisis({
       ...c,
       kind: c.kind || 'crise',
@@ -2494,6 +2665,7 @@ function AbaApp() {
       intervenantIds: c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []),
       commentaire: c.commentaire || '',
     });
+  };
 
   const saveCrisis = (c) => {
     const { isNew, ...rest } = c;
@@ -2506,11 +2678,13 @@ function AbaApp() {
       notify(rest.kind === 'abc' ? 'Observation modifiée' : 'Crise modifiée');
     }
     setCrisis(null);
+    setCrisisMinimized(false);
   };
 
   const deleteCrisis = (id) => {
     setCrises((list) => list.filter((x) => x.id !== id));
     setCrisis(null);
+    setCrisisMinimized(false);
     notify('Enregistrement supprimé');
   };
 
@@ -2522,15 +2696,15 @@ function AbaApp() {
     );
   }
 
-  if (locked || !security.pinHash) {
+  if (!security.disabled && (locked || !security.pinHash)) {
     return (
       <LockScreen
         security={security}
         onUnlock={unlockWith}
         onFailedAttempt={registerFailedAttempt}
-        onSetup={async (pinHash, pinSalt, pinDigits, pin) => {
+        onSetup={async (pinHash, pinSalt, pinDigits, pin, mode) => {
           const dataSalt = newSalt();
-          const next = { pinHash, pinSalt, pinDigits, dataSalt, failedAttempts: 0, lockUntil: 0 };
+          const next = { pinHash, pinSalt, pinDigits, mode: mode || 'pin', dataSalt, failedAttempts: 0, lockUntil: 0 };
           setSecurity(next);
           await store.setRaw('aba:security', JSON.stringify(next));
           dataKey = await deriveDataKey(pin, dataSalt);
@@ -2606,7 +2780,7 @@ function AbaApp() {
             addAtelier={addAtelier} removeAtelier={removeAtelier} renameAtelier={renameAtelier}
             addIntervenant={addIntervenant} removeIntervenant={removeIntervenant} renameIntervenant={renameIntervenant}
             onAddGuidance={addGuidance} onRemoveGuidance={removeGuidance} onToggleIndependent={toggleIndependent} onReorderGuidances={setGuidances}
-            security={security} onChangePin={changePin}
+            security={security} onChangePin={changePin} onDisableProtection={disableProtection}
             retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
             templates={objectiveTemplates} onRemoveTemplate={removeTemplate} onExportConfig={exportConfig}
             abcOptions={abcOptions} onSetAbc={setAbcOptions}
@@ -2619,7 +2793,7 @@ function AbaApp() {
         {tab === 'session' && (
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
-            sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession}
+            sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions} onDeleteAllSessions={deleteAllSessions}
             onSetAtelierGroup={setAtelierGroup} onShareSession={shareSession} onExportIoa={exportIoa} notify={notify}
             activeSession={activeSession} setActiveSession={setActiveSession}
             onFinish={(session) => {
@@ -2658,7 +2832,25 @@ function AbaApp() {
         className="fixed bottom-0 left-0 right-0 z-30 px-4 pt-6"
         style={{ background: `linear-gradient(to top, ${PAPER} 55%, transparent)`, paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)' }}
       >
-        <div className="max-w-4xl mx-auto flex gap-2">
+        <div className="max-w-4xl mx-auto">
+        {crisis && crisisMinimized && (
+          <button
+            onClick={() => setCrisisMinimized(false)}
+            className="w-full mb-2 rounded-2xl px-4 py-2.5 text-white flex items-center gap-2 shadow-lg"
+            style={{ backgroundColor: crisis.kind === 'abc' ? '#B07A2E' : CRISIS, fontFamily: F_DISPLAY }}
+          >
+            {crisis.kind === 'abc' ? <ClipboardList size={16} /> : <AlertTriangle size={16} />}
+            <span className="text-sm">
+              {crisis.kind === 'abc' ? 'Observation en cours' : 'Crise en cours'} — reprendre la saisie
+            </span>
+            {crisis.kind !== 'abc' && crisis.isNew && (
+              <span className="ml-auto text-sm tabular-nums" style={{ fontFamily: F_MONO }}>
+                {fmtClock(Math.max(0, crisisTick - crisis.startedAt))}
+              </span>
+            )}
+          </button>
+        )}
+        <div className="flex gap-2">
           <button
             onClick={openCrisis}
             className="flex-1 rounded-2xl py-4 text-white font-semibold flex items-center justify-center gap-2 shadow-lg active:scale-[0.99] transition-transform"
@@ -2676,12 +2868,14 @@ function AbaApp() {
             ABC
           </button>
         </div>
+        </div>
       </div>
 
-      {crisis && (
+      {crisis && !crisisMinimized && (
         <CrisisOverlay
           crisis={crisis} setCrisis={setCrisis}
           students={students} ateliers={ateliers} intervenants={intervenants} abcOptions={abcOptions}
+          onMinimize={() => setCrisisMinimized(true)}
           onSave={saveCrisis} onDelete={deleteCrisis}
         />
       )}
@@ -2755,7 +2949,7 @@ function ChangePinModal({ security, onSave, onClose }) {
   async function checkCurrent(pin) {
     const hash = await hashPin(pin, security.pinSalt);
     if (hash === security.pinHash) {
-      setStep('length');
+      setStep(security.mode === 'password' ? 'new1' : 'length');
     } else {
       setError('Code actuel incorrect');
       setTimeout(() => setError(''), 1200);
@@ -2775,7 +2969,7 @@ function ChangePinModal({ security, onSave, onClose }) {
     }
     const salt = newSalt();
     const hash = await hashPin(pin, salt);
-    onSave(hash, salt, newDigits, pin);
+    onSave(hash, salt, newDigits, pin, security.mode || 'pin');
   }
 
   return (
@@ -2819,14 +3013,44 @@ function ChangePinModal({ security, onSave, onClose }) {
                 Les données enregistrées seront rechiffrées avec ce nouveau code.
               </p>
             )}
-            <MiniPinInput
-              key={step}
-              digits={step === 'current' ? currentDigits : newDigits}
-              onSubmit={step === 'current' ? checkCurrent : step === 'new1' ? acceptNew : confirmNew}
-            />
+            {security.mode === 'password' ? (
+              <PasswordField
+                key={step}
+                onSubmit={step === 'current' ? checkCurrent : step === 'new1' ? acceptNew : confirmNew}
+                label={step === 'current' ? 'Vérifier' : step === 'new1' ? 'Continuer' : 'Valider'}
+              />
+            ) : (
+              <MiniPinInput
+                key={step}
+                digits={step === 'current' ? currentDigits : newDigits}
+                onSubmit={step === 'current' ? checkCurrent : step === 'new1' ? acceptNew : confirmNew}
+              />
+            )}
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/* Champ de mot de passe compact, pour la fenêtre de modification */
+function PasswordField({ onSubmit, label }) {
+  const [value, setValue] = useState('');
+  return (
+    <div>
+      <input
+        type="password"
+        value={value}
+        autoFocus
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && value.length >= 4) { onSubmit(value); setValue(''); } }}
+        placeholder="Mot de passe"
+        className="w-full rounded-xl border px-3 py-2.5 text-base bg-transparent mb-3"
+        style={{ borderColor: BORDER, color: INK }}
+      />
+      <Btn onClick={() => { onSubmit(value); setValue(''); }} disabled={value.length < 4} className="w-full text-sm">
+        {label || 'Valider'}
+      </Btn>
     </div>
   );
 }
@@ -2865,7 +3089,7 @@ function MiniPinInput({ onSubmit, digits = 4 }) {
   );
 }
 
-function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, retentionMonths, onSetRetention, templates, onRemoveTemplate, onExportConfig, abcOptions, onSetAbc, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onReorderGuidances, onExportBackup, onImportBackup }) {
+function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, onDisableProtection, retentionMonths, onSetRetention, templates, onRemoveTemplate, onExportConfig, abcOptions, onSetAbc, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onReorderGuidances, onExportBackup, onImportBackup }) {
   const [initials, setInitials] = useState('');
   const [atelier, setAtelier] = useState('');
   const [intervenant, setIntervenant] = useState('');
@@ -3037,14 +3261,49 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
           <Lock size={16} style={{ color: INK_SOFT }} />
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Sécurité</span>
         </div>
-        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Code à {security.pinDigits || 4} chiffres. L'application se verrouille à chaque mise en veille et après
-          10 minutes d'inactivité, et la saisie se suspend après plusieurs codes erronés. Les données enregistrées
-          sur cette tablette sont chiffrées avec ce code.
-        </p>
-        <Btn variant="outline" onClick={() => setChangingPin(true)} className="w-full text-sm">
-          <Lock size={16} /> Modifier le code
-        </Btn>
+        {security.disabled ? (
+          <>
+            <p className="text-xs mb-3" style={{ color: CRISIS }}>
+              <strong>Protection désactivée.</strong> L'application s'ouvre sans code et les données ne sont
+              plus chiffrées : quiconque accède à l'appareil peut les lire. Seul le verrouillage de la
+              tablette les protège encore.
+            </p>
+            <Btn variant="outline" onClick={() => window.location.reload()} className="w-full text-sm">
+              <Lock size={16} /> Réactiver une protection
+            </Btn>
+            <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
+              La réactivation passe par un rechargement : un nouveau code vous sera demandé, et les
+              données seront à nouveau chiffrées.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+              {security.mode === 'password'
+                ? 'Mot de passe écrit.'
+                : `Code à ${security.pinDigits || 4} chiffres.`}{' '}
+              L'application se verrouille à chaque mise en veille et après 10 minutes d'inactivité, et la
+              saisie se suspend après plusieurs essais erronés. Les données enregistrées sur cet appareil
+              sont chiffrées avec lui.
+            </p>
+            <Btn variant="outline" onClick={() => setChangingPin(true)} className="w-full text-sm mb-2">
+              <Lock size={16} /> Modifier {security.mode === 'password' ? 'le mot de passe' : 'le code'}
+            </Btn>
+            <button
+              onClick={() => {
+                if (window.confirm(
+                  "Désactiver la protection ?\n\nLes données seront DÉCHIFFRÉES et enregistrées en clair sur cet appareil. Quiconque y accède pourra les lire, y compris en récupérant les fichiers.\n\nÀ n'envisager que si l'appareil est lui-même verrouillé et réservé au service."
+                ) && window.confirm('Dernière confirmation : le chiffrement des données va être retiré.')) {
+                  onDisableProtection();
+                }
+              }}
+              className="w-full text-xs py-2"
+              style={{ color: CRISIS }}
+            >
+              Désactiver la protection et le chiffrement
+            </button>
+          </>
+        )}
         {changingPin && (
           <ChangePinModal
             security={security}
@@ -3946,21 +4205,21 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onShareSession, onExportIoa, onSetAtelierGroup, notify, activeSession, setActiveSession, onFinish }) {
+function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onShareSession, onExportIoa, onSetAtelierGroup, notify, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
     return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} onFinish={onFinish} />;
   }
   return (
     <SessionSetup
       students={students} ateliers={ateliers} intervenants={intervenants} sessions={sessions}
-      onEditSession={onEditSession} onDeleteSession={onDeleteSession} onShareSession={onShareSession} onExportIoa={onExportIoa}
+      onEditSession={onEditSession} onDeleteSession={onDeleteSession} onDeleteAllSessions={onDeleteAllSessions} onShareSession={onShareSession} onExportIoa={onExportIoa}
       onSetAtelierGroup={onSetAtelierGroup} notify={notify}
       onStart={setActiveSession}
     />
   );
 }
 
-function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onShareSession, onExportIoa, onSetAtelierGroup, notify, onStart }) {
+function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onDeleteAllSessions, onShareSession, onExportIoa, onSetAtelierGroup, notify, onStart }) {
   const [atelierId, setAtelierId] = useState(null);
   const [intervenantId, setIntervenantId] = useState(null);
   const [studentIds, setStudentIds] = useState([]);
@@ -4303,6 +4562,15 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
               );
             })}
           </div>
+          {sessions.length > 1 && (
+            <button
+              onClick={onDeleteAllSessions}
+              className="w-full mt-2 rounded-xl border px-3 py-2 text-xs flex items-center justify-center gap-1.5"
+              style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
+            >
+              <Trash2 size={13} /> Supprimer toutes les séances enregistrées
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -4467,6 +4735,39 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     });
   }
 
+  /* Renforcement : pendant qu'il court, les cotations de la personne sont
+     suspendues. On mesure ainsi le temps d'activité et le temps de renforcement. */
+  const renfoDe = (sid) => (session.reinforcement && session.reinforcement[sid]) || { running: false, startedAt: null, totalMs: 0 };
+  const renfoTotal = (sid) => {
+    const r = renfoDe(sid);
+    return (r.totalMs || 0) + (r.running && r.startedAt ? now - r.startedAt : 0);
+  };
+  const enRenfo = (sid) => !!renfoDe(sid).running;
+
+  function toggleRenfo(sid) {
+    setSession((s0) => {
+      const cur = (s0.reinforcement && s0.reinforcement[sid]) || { running: false, startedAt: null, totalMs: 0 };
+      let next;
+      let data = s0.data;
+      if (cur.running) {
+        next = { running: false, startedAt: null, totalMs: (cur.totalMs || 0) + (Date.now() - cur.startedAt) };
+      } else {
+        next = { running: true, startedAt: Date.now(), totalMs: cur.totalMs || 0 };
+        // Les chronomètres en cours de cette personne sont figés
+        const stamp = Date.now();
+        const objs = s0.data[sid] || {};
+        const maj = {};
+        Object.entries(objs).forEach(([oid, e]) => {
+          maj[oid] = e && e.running && e.startedAt
+            ? { ...e, running: false, elapsedMs: (e.elapsedMs || 0) + (stamp - e.startedAt), pendingMs: (e.pendingMs || 0) + (stamp - e.startedAt), startedAt: null }
+            : e;
+        });
+        data = { ...s0.data, [sid]: maj };
+      }
+      return { ...s0, data, reinforcement: { ...(s0.reinforcement || {}), [sid]: next } };
+    });
+  }
+
   function toggleHidden(sid, oid) {
     setSession((s0) => {
       const hidden = { ...(s0.hidden || {}) };
@@ -4616,6 +4917,35 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
         </div>
       </div>
 
+      {!isEdit && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {session.studentIds.map((sid) => {
+            const st = students.find((x) => x.id === sid);
+            if (!st) return null;
+            const actif = enRenfo(sid);
+            const total = renfoTotal(sid);
+            return (
+              <button
+                key={sid}
+                onClick={() => toggleRenfo(sid)}
+                className="rounded-xl px-3 py-2 text-sm flex items-center gap-1.5 border"
+                style={{
+                  fontFamily: F_DISPLAY,
+                  borderColor: actif ? '#D69A2D' : BORDER,
+                  backgroundColor: actif ? '#D69A2D' : CARD,
+                  color: actif ? '#fff' : INK_SOFT,
+                }}
+                title={actif ? 'Reprendre les cotations' : 'Mettre en renforcement'}
+              >
+                <span className="font-semibold">{st.initials}</span>
+                <Gift size={14} />
+                {total > 0 && <span style={{ fontFamily: F_MONO }}>{fmtClock(total)}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div
         className="flex gap-3"
         data-no-swipe
@@ -4683,6 +5013,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       now={now} elapsed={elapsed}
                       session={session} crises={crises} studentId={currentId} guidances={guidances}
                       hidden={hiddenFor(currentId).includes(oid)}
+                      paused={enRenfo(currentId)}
                       onToggleHidden={() => toggleHidden(currentId, oid)}
                       onExpand={() => setExpanded({ sid: currentId, oid })}
                       onChange={(p) => updateEntry(currentId, oid, p)}
@@ -4772,7 +5103,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   );
 }
 
-function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick }) {
+function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, paused, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick }) {
   /* Double-appui sur l'intitulé : agrandit la fiche. On le détecte à la main,
      l'événement natif de double-clic étant peu fiable au toucher sur iOS. */
   const dernierAppui = useRef(0);
@@ -4837,7 +5168,12 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
           </button>
         )}
       </div>
-      <div className="mt-3">
+      {paused && (
+        <div className="mt-2 text-xs flex items-center gap-1.5 rounded-lg px-2 py-1.5" style={{ backgroundColor: '#D69A2D', color: '#fff' }}>
+          <Gift size={12} /> En renforcement — cotations suspendues
+        </div>
+      )}
+      <div className="mt-3" style={paused ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
         {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} now={now} onChange={onChange} />}
         {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
@@ -5698,6 +6034,16 @@ function CrisisAnalysis({ crises, students, ateliers }) {
   const parConsequence = compter(retenues.flatMap((c) => c.consequenceTags || []));
   const parFonction = compter(retenues.map((c) => c.fonction).filter(Boolean));
   const parJour = compter(retenues.map((c) => new Date(c.date).toLocaleDateString('fr-FR', { weekday: 'long' })));
+  const parAtelier = compter(retenues.map((c) => {
+    const a = ateliers.find((x) => x.id === c.atelierId);
+    return a ? a.name : 'Hors atelier';
+  }));
+  const parAtelier = compter(
+    retenues.map((c) => {
+      const a = ateliers.find((x) => x.id === c.atelierId);
+      return a ? a.name : 'Hors atelier';
+    })
+  );
 
   const dureeMoy = retenues.length
     ? Math.round(retenues.reduce((a, c) => a + (c.durationMs || 0), 0) / retenues.length / 60000)
@@ -5833,6 +6179,8 @@ function CrisisAnalysis({ crises, students, ateliers }) {
       <Barres titre="Comportements observés, tous rangs confondus" donnees={parComportement} total={retenues.length} />
       <Barres titre="Fonctions supposées" donnees={parFonction.map(([k, n]) => [(CRISIS_FUNCTIONS.find((x) => x.k === k) || {}).label || k, n])} total={retenues.length} />
       <Barres titre="Conséquences observées" donnees={parConsequence} total={retenues.length} />
+      <Barres titre="Répartition par atelier" donnees={parAtelier} total={retenues.length} />
+      <Barres titre="Répartition par atelier" donnees={parAtelier} total={retenues.length} />
       <Barres titre="Répartition par jour de la semaine" donnees={parJour} total={retenues.length} />
 
       <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
@@ -6359,7 +6707,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
 
 
 /* ==================== Module crise ABC ==================== */
-function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, abcOptions, onSave, onDelete }) {
+function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, abcOptions, onMinimize, onSave, onDelete }) {
   const options = abcOptions || DEFAULT_ABC;
   const isNew = !!crisis.isNew;
   const [picker, setPicker] = useState(null); // zone dont les catégories sont ouvertes
@@ -6401,9 +6749,21 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
               </div>
             </div>
           </div>
-          {!estObservation && (
-            <div className="text-3xl font-semibold tabular-nums shrink-0" style={{ fontFamily: F_MONO }}>{fmtClock(elapsed)}</div>
-          )}
+          <div className="flex items-center gap-3 shrink-0">
+            {!estObservation && (
+              <div className="text-3xl font-semibold tabular-nums" style={{ fontFamily: F_MONO }}>{fmtClock(elapsed)}</div>
+            )}
+            {onMinimize && (
+              <button
+                onClick={onMinimize}
+                className="rounded-lg px-2.5 py-2 text-xs flex items-center gap-1"
+                style={{ backgroundColor: 'rgba(255,255,255,0.2)', color: '#fff' }}
+                title="Revenir aux cotations sans interrompre la saisie"
+              >
+                <Minimize2 size={14} /> Réduire
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
