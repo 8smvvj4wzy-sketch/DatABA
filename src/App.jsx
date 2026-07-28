@@ -2592,15 +2592,6 @@ function AbaApp() {
     setSessions((list) => list.map((s) => (ids.includes(s.id) ? { ...s, sentAt: sent ? new Date().toISOString() : null } : s)));
 
   const deleteAllSessions = () => {
-    if (!window.confirm(
-      `Supprimer les ${sessions.length} séance(s) enregistrée(s) ?\n\nLes cotations seront définitivement perdues. Les crises et observations sont conservées.\n\nExportez une sauvegarde avant si vous voulez pouvoir revenir en arrière.`
-    )) return;
-    if (!window.confirm('Confirmation définitive : supprimer toutes les séances ?')) return;
-    setSessions([]);
-    notify('Toutes les séances ont été supprimées');
-  };
-
-  const deleteAllSessions = () => {
     setSessions([]);
     notify('Toutes les séances ont été supprimées');
   };
@@ -2793,7 +2784,7 @@ function AbaApp() {
         {tab === 'session' && (
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
-            sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions} onDeleteAllSessions={deleteAllSessions}
+            sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
             onSetAtelierGroup={setAtelierGroup} onShareSession={shareSession} onExportIoa={exportIoa} notify={notify}
             activeSession={activeSession} setActiveSession={setActiveSession}
             onFinish={(session) => {
@@ -6038,12 +6029,6 @@ function CrisisAnalysis({ crises, students, ateliers }) {
     const a = ateliers.find((x) => x.id === c.atelierId);
     return a ? a.name : 'Hors atelier';
   }));
-  const parAtelier = compter(
-    retenues.map((c) => {
-      const a = ateliers.find((x) => x.id === c.atelierId);
-      return a ? a.name : 'Hors atelier';
-    })
-  );
 
   const dureeMoy = retenues.length
     ? Math.round(retenues.reduce((a, c) => a + (c.durationMs || 0), 0) / retenues.length / 60000)
@@ -6179,7 +6164,6 @@ function CrisisAnalysis({ crises, students, ateliers }) {
       <Barres titre="Comportements observés, tous rangs confondus" donnees={parComportement} total={retenues.length} />
       <Barres titre="Fonctions supposées" donnees={parFonction.map(([k, n]) => [(CRISIS_FUNCTIONS.find((x) => x.k === k) || {}).label || k, n])} total={retenues.length} />
       <Barres titre="Conséquences observées" donnees={parConsequence} total={retenues.length} />
-      <Barres titre="Répartition par atelier" donnees={parAtelier} total={retenues.length} />
       <Barres titre="Répartition par atelier" donnees={parAtelier} total={retenues.length} />
       <Barres titre="Répartition par jour de la semaine" donnees={parJour} total={retenues.length} />
 
