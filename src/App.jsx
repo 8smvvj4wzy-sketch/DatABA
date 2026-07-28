@@ -1375,7 +1375,7 @@ function EditableRow({ label, onRename, onRemove, chip }) {
 /* Liste réordonnable : appui long (~0,3 s) puis glissement vertical.
    Les écouteurs sont posés en natif avec passive:false, indispensable pour
    bloquer le défilement pendant le déplacement — React les poserait en passif. */
-function ReorderList({ items, keyOf, onReorder, renderItem, className = '', style }) {
+function ReorderList({ items, keyOf, onReorder, renderItem, className = '', style, itemStyle }) {
   const containerRef = useRef(null);
   const [dragKey, setDragKey] = useState(null);
   const [overIndex, setOverIndex] = useState(null);
@@ -1508,6 +1508,7 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
           <div
             key={k}
             style={{
+              ...itemStyle,
               opacity: isDragging ? 0.45 : 1,
               outline: isOver ? `2px solid ${INK}` : 'none',
               outlineOffset: '2px',
@@ -3747,18 +3748,44 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     setZoom(next);
     store.setRaw('aba:zoom', String(next));
   }
+  /* Disposition en colonnes plutôt qu'en lignes : une fiche courte (un
+     compteur) n'impose plus sa hauteur à la fiche voisine, et l'espace
+     laissé libre est repris par l'objectif suivant, même s'il appartient à
+     une autre personne. Le nombre de colonnes suit la largeur disponible,
+     donc la densité choisie. */
   const gridStyle = {
     zoom,
-    display: 'grid',
-    gap: '0.75rem',
-    alignItems: 'start',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+    columnWidth: '280px',
+    columnGap: '0.75rem',
+  };
+  const gridItemStyle = {
+    breakInside: 'avoid',
+    WebkitColumnBreakInside: 'avoid',
+    pageBreakInside: 'avoid',
+    display: 'inline-block',
+    width: '100%',
+    marginBottom: '0.75rem',
   };
   const cotationRef = useRef(null);
 
   /* Réordonne les objectifs d'une personne. En vue Prioritaires on ne déplace
      qu'un sous-ensemble : les positions occupées par ce sous-ensemble dans la
      liste complète sont réutilisées, l'ordre des autres reste intact. */
+  /* Liste à plat des objectifs prioritaires, toutes personnes confondues.
+     L'ordre choisi par l'éducateur est conservé dans la séance ; les objectifs
+     qui n'y figurent pas encore sont ajoutés à la suite. */
+  const priorityItems = (() => {
+    const naturel = [];
+    session.studentIds.forEach((sid) => {
+      (session.selectedObjectives[sid] || []).forEach((oid) => {
+        const o = session.objectiveSnapshot[oid];
+        if (o && o.favorite) naturel.push(`${sid}|${oid}`);
+      });
+    });
+    const memorise = session.priorityOrder || [];
+    return [...memorise.filter((k) => naturel.includes(k)), ...naturel.filter((k) => !memorise.includes(k))];
+  })();
+
   function reorderObjectives(sid, nouvelOrdre) {
     setSession((s0) => {
       const complet = s0.selectedObjectives[sid] || [];
@@ -4014,55 +4041,37 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
             alors à l'écran sans défilement. */}
         <div className="flex-1 min-w-0">
           {viewMode === 'priority' ? (
-            <div className="space-y-5">
-              {session.studentIds.map((sid) => {
-                const st = students.find((s) => s.id === sid);
-                if (!st) return null;
-                const ordre = session.selectedObjectives[sid] || [];
-                const ids = ordre.filter((oid) => {
-                  const o = session.objectiveSnapshot[oid];
-                  return o && o.favorite;
-                });
-                return (
-                  <div key={sid}>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-lg font-semibold" style={{ fontFamily: F_DISPLAY }}>{st.initials}</span>
-                      <button
-                        onClick={() => { setCurrentId(sid); setViewMode('student'); }}
-                        className="text-xs flex items-center gap-1 rounded-lg px-2.5 py-1.5 border"
-                        style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-                      >
-                        Tous ses objectifs <ChevronRight size={13} />
-                      </button>
-                    </div>
-                    {ids.length === 0 ? (
-                      <div className="rounded-xl border border-dashed px-3 py-4 text-center text-xs" style={{ borderColor: BORDER, color: INK_SOFT }}>
-                        Aucun objectif prioritaire pour cette personne.
-                      </div>
-                    ) : (
-                      <ReorderList
-                        items={ids}
-                        keyOf={(oid) => oid}
-                        onReorder={(next) => reorderObjectives(sid, next)}
-                        style={gridStyle}
-                        renderItem={(oid) => (
-                          <ObjectiveCard
-                            obj={session.objectiveSnapshot[oid]}
-                            entry={session.data[sid][oid]}
-                            now={now} elapsed={elapsed}
-                            session={session} crises={crises} studentId={sid} guidances={guidances}
-                            hidden={hiddenFor(sid).includes(oid)}
-                            onToggleHidden={() => toggleHidden(sid, oid)}
-                            onExpand={() => setExpanded({ sid, oid })}
-                            onChange={(p) => updateEntry(sid, oid, p)}
-                          />
-                        )}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            priorityItems.length === 0 ? (
+              <Empty>Aucun objectif prioritaire parmi les personnes présentes.</Empty>
+            ) : (
+              <ReorderList
+                items={priorityItems}
+                keyOf={(k) => k}
+                onReorder={(next) => setSession((s0) => ({ ...s0, priorityOrder: next }))}
+                style={gridStyle}
+                itemStyle={gridItemStyle}
+                renderItem={(k) => {
+                  const [sid, oid] = k.split('|');
+                  const obj = session.objectiveSnapshot[oid];
+                  const st = students.find((x) => x.id === sid);
+                  if (!obj || !session.data[sid]) return null;
+                  return (
+                    <ObjectiveCard
+                      obj={obj}
+                      entry={session.data[sid][oid]}
+                      now={now} elapsed={elapsed}
+                      session={session} crises={crises} studentId={sid} guidances={guidances}
+                      studentLabel={st ? st.initials : null}
+                      onStudentClick={() => { setCurrentId(sid); setViewMode('student'); }}
+                      hidden={hiddenFor(sid).includes(oid)}
+                      onToggleHidden={() => toggleHidden(sid, oid)}
+                      onExpand={() => setExpanded({ sid, oid })}
+                      onChange={(p) => updateEntry(sid, oid, p)}
+                    />
+                  );
+                }}
+              />
+            )
           ) : (
             <div>
               <div className="mb-3">
@@ -4074,6 +4083,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 keyOf={(oid) => oid}
                 onReorder={(next) => reorderObjectives(currentId, next)}
                 style={gridStyle}
+                itemStyle={gridItemStyle}
                 renderItem={(oid) => {
                   const obj = session.objectiveSnapshot[oid];
                   if (!obj) return null;
@@ -4173,7 +4183,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   );
 }
 
-function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView }) {
+function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick }) {
   /* Double-appui sur l'intitulé : agrandit la fiche. On le détecte à la main,
      l'événement natif de double-clic étant peu fiable au toucher sur iOS. */
   const dernierAppui = useRef(0);
@@ -4201,6 +4211,9 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
         className="w-full rounded-2xl border px-3 py-2.5 flex items-center gap-2 text-left"
         style={{ borderColor: BORDER, backgroundColor: CARD }}
       >
+        {studentLabel && (
+          <span className="text-xs font-semibold shrink-0" style={{ fontFamily: F_DISPLAY, color: INK }}>{studentLabel}</span>
+        )}
         <Icon size={14} style={{ color: meta.color }} className="shrink-0" />
         <span className="text-sm flex-1 min-w-0 truncate" style={{ color: INK_SOFT }}>{obj.name}</span>
         <Eye size={15} style={{ color: INK_SOFT }} />
@@ -4211,6 +4224,16 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
   return (
     <Card>
       <div className="flex items-start justify-between gap-2">
+        {studentLabel && (
+          <button
+            onClick={onStudentClick}
+            className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold"
+            style={{ fontFamily: F_DISPLAY, backgroundColor: INK, color: '#fff' }}
+            title="Voir tous les objectifs de cette personne"
+          >
+            {studentLabel}
+          </button>
+        )}
         <div className="min-w-0 flex-1 cursor-pointer" onClick={handleHeaderTap}>
           <ObjectiveHeader obj={obj} entry={entry} guidances={guidances} />
         </div>
