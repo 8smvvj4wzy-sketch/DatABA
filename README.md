@@ -337,13 +337,20 @@ comptabilisées à part.
 Deux vues, séparées par un curseur au centre (ou par balayage) :
 
 - **Prioritaires** — tous les objectifs étoilés de toutes les personnes
-  présentes, sur une seule page. C'est la vue qui s'ouvre par défaut.
+  présentes, mélangés dans un **flux unique**. C'est la vue qui s'ouvre par
+  défaut. Chaque fiche porte les initiales de la personne concernée ; appuyer
+  dessus ouvre sa fiche complète.
 - **Par personne** — la fiche complète d'une personne.
 
 Le **rail de cercles** à droite bascule d'une personne à l'autre.
 
-**En paysage, les objectifs se répartissent en colonnes** selon la largeur
-disponible. Le bouton de pourcentage dans l'en-tête (**100 % / 85 % / 70 % /
+**Les objectifs s'empilent en colonnes**, chacun à sa hauteur réelle. Un simple
+compteur occupe deux fois moins de place qu'une série d'essais, et la place
+laissée libre est reprise par l'objectif suivant — même s'il appartient à une
+autre personne. Une personne n'ayant qu'un seul objectif prioritaire ne
+monopolise donc plus une ligne entière.
+
+Le nombre de colonnes suit la largeur disponible. Le bouton de pourcentage dans l'en-tête (**100 % / 85 % / 70 % /
 60 %**) règle la densité : plus elle est réduite, plus il tient d'objectifs à
 l'écran. Sur iPhone en paysage, comptez 70 % pour en voir six d'un coup ; sur
 tablette, 100 % suffit souvent. Le réglage est mémorisé d'une séance à l'autre.
