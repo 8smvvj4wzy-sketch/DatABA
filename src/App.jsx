@@ -45,6 +45,16 @@ function useFonts() {
 @media (prefers-reduced-motion: reduce) {
   @keyframes abaInFromRight { from { opacity: 1; } to { opacity: 1; } }
   @keyframes abaInFromLeft  { from { opacity: 1; } to { opacity: 1; } }
+}
+[data-reorder] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+[data-reorder] input,
+[data-reorder] textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }`;
       document.head.appendChild(style);
     }
@@ -1365,7 +1375,7 @@ function EditableRow({ label, onRename, onRemove, chip }) {
 /* Liste réordonnable : appui long (~0,3 s) puis glissement vertical.
    Les écouteurs sont posés en natif avec passive:false, indispensable pour
    bloquer le défilement pendant le déplacement — React les poserait en passif. */
-function ReorderList({ items, keyOf, onReorder, renderItem, className = '' }) {
+function ReorderList({ items, keyOf, onReorder, renderItem, className = '', style }) {
   const containerRef = useRef(null);
   const [dragKey, setDragKey] = useState(null);
   const [overIndex, setOverIndex] = useState(null);
@@ -1489,7 +1499,7 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '' }) {
   }, []);
 
   return (
-    <div ref={containerRef} data-no-swipe className={className}>
+    <div ref={containerRef} data-no-swipe data-reorder className={className} style={style}>
       {items.map((it, i) => {
         const k = keyOf(it);
         const isDragging = dragKey === k;
@@ -1521,6 +1531,15 @@ function Empty({ children }) {
     </div>
   );
 }
+
+/* Densités d'affichage de la zone de cotation. Réduire fait tenir plus
+   d'objectifs à l'écran, au prix de boutons plus petits. */
+const ZOOM_LEVELS = [
+  { v: 1, l: '100 %' },
+  { v: 0.85, l: '85 %' },
+  { v: 0.7, l: '70 %' },
+  { v: 0.6, l: '60 %' },
+];
 
 /* ==================== Navigation par balayage ====================
    Ordre des onglets, utilisé pour savoir vers quel écran glisser. */
@@ -1946,7 +1965,13 @@ function AbaApp() {
   const renameAtelier = (id, name) => setAteliers((a) => a.map((x) => (x.id === id ? { ...x, name } : x)));
   const setAtelierGroup = (id, config) =>
     setAteliers((a) => a.map((x) => (x.id === id
-      ? { ...x, usualStudentIds: config.studentIds, usualObjectives: config.objectives, favoriteObjectiveIds: config.favorites }
+      ? {
+          ...x,
+          usualStudentIds: config.studentIds,
+          usualObjectives: config.objectives,
+          favoriteObjectiveIds: config.favorites,
+          knownObjectiveIds: config.known,
+        }
       : x)));
   const addIntervenant = (name) => setIntervenants((l) => [...l, { id: uid(), name }]);
   const removeIntervenant = (id) => setIntervenants((l) => l.filter((x) => x.id !== id));
@@ -3374,22 +3399,40 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
      à la création de l'objectif, qui vaut lui quel que soit l'atelier. */
   const [atelierFavorites, setAtelierFavorites] = useState([]);
 
-  const applyGroup = (ids, savedObjectives) => {
-    setStudentIds(ids);
-    setSelected(() => {
-      const next = {};
-      ids.forEach((id) => {
-        const st = students.find((s) => s.id === id);
-        if (!st) return;
-        const visibles = visibleObjectives(st).map((o) => o.id);
-        const saved = savedObjectives && savedObjectives[id];
-        // On ne retient que les objectifs encore existants et visibles dans ce mode
-        next[id] = saved ? saved.filter((oid) => visibles.includes(oid)) : visibles;
-        if (!next[id].length) next[id] = visibles;
-      });
-      return next;
+  const applyGroup = (ids, savedObjectives, known) => {
+    const next = {};
+    let nbNouveaux = 0;
+    ids.forEach((id) => {
+      const st = students.find((s) => s.id === id);
+      if (!st) return;
+      const visibles = visibleObjectives(st);
+      const visiblesIds = visibles.map((o) => o.id);
+      const saved = savedObjectives && savedObjectives[id];
+      if (!saved) { next[id] = visiblesIds; return; }
+
+      // On ne retient que les objectifs encore existants et visibles dans ce mode
+      const retenus = saved.filter((oid) => visiblesIds.includes(oid));
+
+      /* Objectifs créés depuis la mémorisation : cochés d'office, pour qu'un
+         nouvel objectif n'échappe pas à un atelier déjà configuré. Pour les
+         configurations enregistrées avant l'ajout de ce repère, on se rabat
+         sur les objectifs marqués prioritaires. */
+      const nouveaux = visibles
+        .filter((o) => !saved.includes(o.id))
+        .filter((o) => (known ? !known.includes(o.id) : !!o.favorite))
+        .map((o) => o.id);
+
+      nbNouveaux += nouveaux.length;
+      next[id] = [...retenus, ...nouveaux];
+      if (!next[id].length) next[id] = visiblesIds;
     });
+
+    setStudentIds(ids);
+    setSelected(next);
     setAutoApplied(true);
+    if (nbNouveaux > 0) {
+      setTimeout(() => notify(`${nbNouveaux} nouvel${nbNouveaux > 1 ? 'x' : ''} objectif${nbNouveaux > 1 ? 's' : ''} ajouté${nbNouveaux > 1 ? 's' : ''} à cet atelier`), 400);
+    }
   };
 
   const pickAtelier = (id) => {
@@ -3399,7 +3442,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
     const a = ateliers.find((x) => x.id === next);
     const usual = a && a.usualStudentIds ? a.usualStudentIds.filter((sid) => students.some((s) => s.id === sid)) : [];
     setAtelierFavorites((a && a.favoriteObjectiveIds) || []);
-    if (usual.length && (studentIds.length === 0 || autoApplied)) applyGroup(usual, a && a.usualObjectives);
+    if (usual.length && (studentIds.length === 0 || autoApplied)) applyGroup(usual, a && a.usualObjectives, a && a.knownObjectiveIds);
   };
 
   const toggleStudent = (id) => {
@@ -3556,7 +3599,11 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
           {mode === 'atelier' && atelierId && studentIds.length > 0 && !sameAsUsual && (
             <button
               onClick={() => {
-                onSetAtelierGroup(atelierId, { studentIds, objectives: selected, favorites: atelierFavorites });
+                const known = studentIds.flatMap((sid) => {
+                  const st = students.find((x) => x.id === sid);
+                  return st ? st.objectives.map((o) => o.id) : [];
+                });
+                onSetAtelierGroup(atelierId, { studentIds, objectives: selected, favorites: atelierFavorites, known });
                 notify('Configuration mémorisée pour cet atelier');
               }}
               className="text-xs flex items-center gap-1"
@@ -3682,6 +3729,31 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const [wakeOk, setWakeOk] = useState(false);
   const stepsRef = useRef({});
   const [expanded, setExpanded] = useState(null); // { sid, oid } de l'objectif agrandi
+
+  /* Densité d'affichage. Réduire la taille agrandit d'autant la largeur
+     disponible en pixels de mise en page : la grille place alors davantage de
+     colonnes d'elle-même, et davantage de lignes tiennent en hauteur. */
+  const [zoom, setZoom] = useState(1);
+  useEffect(() => {
+    (async () => {
+      const v = await store.getRaw('aba:zoom');
+      const n = Number(v);
+      if (ZOOM_LEVELS.some((z) => z.v === n)) setZoom(n);
+    })();
+  }, []);
+  function cycleZoom() {
+    const i = ZOOM_LEVELS.findIndex((z) => z.v === zoom);
+    const next = ZOOM_LEVELS[(i + 1) % ZOOM_LEVELS.length].v;
+    setZoom(next);
+    store.setRaw('aba:zoom', String(next));
+  }
+  const gridStyle = {
+    zoom,
+    display: 'grid',
+    gap: '0.75rem',
+    alignItems: 'start',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+  };
   const cotationRef = useRef(null);
 
   /* Réordonne les objectifs d'une personne. En vue Prioritaires on ne déplace
@@ -3842,6 +3914,14 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           {isEdit && (
             <Btn variant="ghost" onClick={() => setSession(null)} className="text-sm py-2.5">Annuler</Btn>
           )}
+          <button
+            onClick={cycleZoom}
+            className="rounded-xl px-3 py-2.5 border text-xs font-medium"
+            style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD, fontFamily: F_MONO }}
+            title="Densité d'affichage : plus d'objectifs à l'écran"
+          >
+            {(ZOOM_LEVELS.find((z) => z.v === zoom) || ZOOM_LEVELS[0]).l}
+          </button>
           {!isEdit && (
             <button
               onClick={togglePause}
@@ -3964,7 +4044,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                         items={ids}
                         keyOf={(oid) => oid}
                         onReorder={(next) => reorderObjectives(sid, next)}
-                        className="grid gap-3 landscape:grid-cols-2 xl:landscape:grid-cols-3 items-start"
+                        style={gridStyle}
                         renderItem={(oid) => (
                           <ObjectiveCard
                             obj={session.objectiveSnapshot[oid]}
@@ -3993,7 +4073,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 items={objIds}
                 keyOf={(oid) => oid}
                 onReorder={(next) => reorderObjectives(currentId, next)}
-                className="grid gap-3 landscape:grid-cols-2 xl:landscape:grid-cols-3 items-start"
+                style={gridStyle}
                 renderItem={(oid) => {
                   const obj = session.objectiveSnapshot[oid];
                   if (!obj) return null;
