@@ -1,7 +1,7 @@
 # Cotations ABA — manuel d'utilisation
 
 Application de recueil de données comportementales en contexte de groupe.
-Elle fonctionne **sans connexion** et les données restent **sur chaque appareil** :
+Elle fonctionne **sans connexion** et les données restent **sur l'appareil** :
 rien n'est envoyé vers un serveur.
 
 ---
@@ -9,143 +9,84 @@ rien n'est envoyé vers un serveur.
 ## Sommaire
 
 1. [Vue d'ensemble](#1-vue-densemble)
-2. [Mettre l'application en ligne](#2-mettre-lapplication-en-ligne)
-3. [Installer sur les appareils](#3-installer-sur-les-appareils)
-4. [Premier démarrage : le code de sécurité](#4-premier-démarrage--le-code-de-sécurité)
-5. [Écran Gestion](#5-écran-gestion)
-6. [Écran Personnes accompagnées](#6-écran-personnes-accompagnées)
-7. [Les huit modes de cotation](#7-les-huit-modes-de-cotation)
-8. [Écran Session](#8-écran-session)
-9. [Le bouton Crise](#9-le-bouton-crise)
-10. [Écran Suivi](#10-écran-suivi)
-11. [Écran Export](#11-écran-export)
-12. [Exploiter les données dans Excel](#12-exploiter-les-données-dans-excel)
-13. [Gestes et raccourcis](#13-gestes-et-raccourcis)
-14. [Sauvegarde et récupération](#14-sauvegarde-et-récupération)
-15. [Mettre l'application à jour](#15-mettre-lapplication-à-jour)
-16. [RGPD et protection des données](#16-rgpd-et-protection-des-données)
-17. [Dépannage](#17-dépannage)
-18. [Aller plus loin](#18-aller-plus-loin)
+2. [Installer l'application](#2-installer-lapplication)
+3. [Le code de sécurité](#3-le-code-de-sécurité)
+4. [Écran Gestion](#4-écran-gestion)
+5. [Écran Personnes accompagnées](#5-écran-personnes-accompagnées)
+6. [Les huit modes de cotation](#6-les-huit-modes-de-cotation)
+7. [Écran Session](#7-écran-session)
+8. [Crises et observations ABC](#8-crises-et-observations-abc)
+9. [Écran Suivi](#9-écran-suivi)
+10. [Écran Export](#10-écran-export)
+11. [Exploiter les données dans Excel](#11-exploiter-les-données-dans-excel)
+12. [Gestes et raccourcis](#12-gestes-et-raccourcis)
+13. [Sauvegarde](#13-sauvegarde)
+14. [Mises à jour](#14-mises-à-jour)
+15. [RGPD et protection des données](#15-rgpd-et-protection-des-données)
+16. [Dépannage](#16-dépannage)
 
 ---
 
 ## 1. Vue d'ensemble
 
-L'application s'organise en cinq écrans, accessibles par les onglets du haut
-ou par balayage horizontal :
+Cinq écrans, accessibles par les onglets du haut ou par balayage horizontal :
 
 | Écran | À quoi il sert |
 |---|---|
-| **Gestion** | Personnes, ateliers, intervenants, guidances, sécurité, sauvegarde |
+| **Gestion** | Personnes, ateliers, intervenants, guidances, réponses ABC, sécurité, sauvegarde |
 | **Personnes** | Définir les objectifs de chacun et leur mode de cotation |
 | **Session** | Préparer et coter une séance |
-| **Suivi** | Courbes de progression et critères d'acquisition |
+| **Suivi** | Courbes de progression et analyse des crises |
 | **Export** | Produire et transmettre les rapports Excel |
 
-Un **bouton rouge CRISE** est présent en bas de tous les écrans.
+Deux boutons sont présents en bas de tous les écrans : **CRISE** et **ABC**.
 
 Ordre de mise en route la première fois : Gestion → Personnes → Session.
 
 ---
 
-## 2. Mettre l'application en ligne
+## 2. Installer l'application
 
-### Option A — GitHub Pages (recommandée)
+Ouvrez l'adresse fournie par votre établissement, puis :
 
-Le fichier `.github/workflows/deploy.yml` inclus dans ce dossier compile et
-publie l'application automatiquement. **Aucun logiciel à installer, aucune
-commande à taper.**
+**iPhone / iPad** — dans **Safari** (obligatoire, les autres navigateurs ne le
+proposent pas sur iOS) : bouton **Partager**, puis **Sur l'écran d'accueil**,
+puis **Ajouter**.
 
-1. Sur <https://github.com>, créez un compte, puis un dépôt (**New repository**),
-   par exemple `aba-groupe`. **Il doit être Public** : sur un compte gratuit,
-   GitHub Pages ne fonctionne qu'ainsi. Cela rend le *code* visible, jamais les
-   données — elles ne quittent pas les appareils.
-2. **Add file → Upload files**, puis glissez tout le contenu de ce dossier,
-   dossiers `src`, `public` et `.github` inclus. Validez (**Commit**).
-3. **Settings → Pages** → sous « Build and deployment », Source : **GitHub Actions**.
-4. Onglet **Actions** : la publication démarre seule (1 à 2 minutes). Une fois
-   la coche verte affichée, l'adresse apparaît dans **Settings → Pages**
-   (`https://votre-identifiant.github.io/aba-groupe/`).
-
-> **Attention au glisser-déposer.** Les dossiers commençant par un point, comme
-> `.github`, sont masqués par le système et ne suivent pas toujours. Vérifiez
-> après l'envoi que `.github`, `src` et `public` apparaissent bien comme des
-> dossiers dans le dépôt, et non comme des fichiers en vrac à la racine.
-
-### Option B — Netlify Drop, Cloudflare Pages
-
-Ces hébergements acceptent un dossier `dist/` déjà compilé, mais demandent de
-compiler soi-même :
-
-1. Installez **Node.js** (version 18 ou plus) depuis <https://nodejs.org>, version « LTS ».
-2. Dans un terminal ouvert sur ce dossier :
-
-   ```bash
-   npm install
-   npm run build
-   ```
-
-3. Déposez le dossier **`dist/`** obtenu sur <https://app.netlify.com/drop>.
-
-Pour tester en local avant publication : `npm run dev`.
-
-> L'accès doit se faire en **HTTPS**. Sans cela, ni le mode hors connexion ni
-> l'installation sur l'écran d'accueil ne fonctionnent.
-
----
-
-## 3. Installer sur les appareils
-
-### iPhone / iPad
-
-1. Ouvrez l'adresse dans **Safari** — obligatoire, les autres navigateurs ne
-   proposent pas cette option sur iOS.
-2. Bouton **Partager** (carré avec une flèche vers le haut).
-3. **Sur l'écran d'accueil**, puis **Ajouter**.
-
-### Tablettes Android
-
-1. Ouvrez l'adresse dans **Chrome**.
-2. Menu **⋮** → **Installer l'application**.
+**Tablette Android** — dans **Chrome** : menu **⋮**, puis
+**Installer l'application**.
 
 L'icône se comporte ensuite comme une application : plein écran, et
 fonctionnement hors connexion après la première ouverture.
 
 ---
 
-## 4. Premier démarrage : le code de sécurité
+## 3. Le code de sécurité
 
-À la première ouverture, l'application demande de créer un code, **à 4 ou
-6 chiffres**. Ce code a deux rôles :
-
-- il verrouille l'accès à l'application ;
-- il sert à **chiffrer les données enregistrées** sur l'appareil.
-
-**6 chiffres sont fortement recommandés** : 4 chiffres ne représentent que
-10 000 combinaisons, contre un million pour 6.
-
-Ensuite :
+À la première ouverture, l'application demande de créer un code à **4 ou
+6 chiffres**. Il a deux rôles : verrouiller l'accès, et **chiffrer les données
+enregistrées** sur l'appareil. **6 chiffres sont fortement recommandés.**
 
 - L'application se verrouille **à chaque mise en veille** et après
   **10 minutes sans interaction**.
 - Après **3 codes erronés**, la saisie se suspend 30 secondes ; après 5, cinq
   minutes ; après 8, quinze minutes. Ce délai survit à un redémarrage.
 - Le code se modifie dans **Gestion → Sécurité → Modifier le code**. Les
-  données sont automatiquement rechiffrées avec le nouveau code.
+  données sont automatiquement rechiffrées.
 
 > ⚠️ **Le code perdu, les données sont perdues.** Elles sont chiffrées avec lui :
 > il n'existe aucun moyen de les récupérer. Le seul recours est d'effacer
-> l'appareil et de restaurer une sauvegarde. Voir la section 14.
+> l'appareil et de restaurer une sauvegarde (section 13).
 
 ---
 
-## 5. Écran Gestion
+## 4. Écran Gestion
 
 ### Personnes accompagnées
 
 Ajoutez-les par leurs **initiales uniquement** (ex. `J.D.`). Aucun nom, aucune
 date de naissance, aucune adresse n'est demandé — c'est délibéré, voir la
-section 16.
+section 15.
 
 L'icône crayon renomme, la croix supprime (avec confirmation, car les objectifs
 de la personne partent avec).
@@ -153,7 +94,7 @@ de la personne partent avec).
 ### Ateliers
 
 Les groupes récurrents : « Habiletés sociales », « Repas », « Atelier cuisine »…
-Un atelier peut mémoriser sa configuration habituelle (section 8).
+Un atelier peut mémoriser sa configuration habituelle (section 7).
 
 ### Intervenants
 
@@ -170,7 +111,22 @@ Vous pouvez en ajouter (code, intitulé, couleur), en supprimer, et **réordonne
 la liste par appui long puis glissement**.
 
 L'étoile ne fixe ici qu'une **valeur par défaut** : le fait qu'une guidance
-compte comme réussite autonome se décide objectif par objectif (section 6).
+compte comme réussite autonome se décide objectif par objectif (section 5).
+
+### Réponses ABC
+
+Les réponses proposées derrière le bouton **+** des zones A, B et C, pour les
+crises comme pour les observations. Les trois listes sont entièrement
+modifiables : ajout, renommage, suppression, et réorganisation par appui long.
+
+Placez en tête ce que votre équipe coche le plus souvent : c'est l'ordre
+d'affichage.
+
+### Modèles d'objectifs
+
+Objectifs types réutilisables, avec leur mode de cotation, leurs cibles et leur
+critère. On les enregistre depuis l'écran Personnes (icône signet), et on les
+applique à la création d'un objectif.
 
 ### Sécurité
 
@@ -178,38 +134,39 @@ Longueur du code, modification, rappel des règles de verrouillage.
 
 ### Durée de conservation
 
-Aucune limite (par défaut), ou 6 / 12 / 24 / 36 mois. Les séances et crises
-plus anciennes sont **supprimées automatiquement à l'ouverture**, avec un
-message indiquant le nombre d'éléments retirés. La date de coupure s'affiche.
+Aucune limite (par défaut), ou 6 / 12 / 24 / 36 mois. Les séances, crises et
+observations plus anciennes sont **supprimées automatiquement à l'ouverture**,
+avec un message indiquant le nombre d'éléments retirés. La date de coupure
+s'affiche.
 
 > Cette suppression est **définitive**. Transmettez vos rapports avant l'échéance.
 
 ### Sauvegarde
 
-Export et restauration, chiffrés par un mot de passe (section 14).
+Export et restauration (section 13).
 
 ---
 
-## 6. Écran Personnes accompagnées
+## 5. Écran Personnes accompagnées
 
 Appuyez sur une personne pour dérouler ses objectifs.
 
 ### Créer un objectif
 
 1. **Intitulé** — la formulation qui parle à l'équipe.
-1bis. **Phase** — Ligne de base, Intervention, Maintien ou Généralisation. Sans
-   ce repère, une courbe ne dit pas ce qui a produit un changement.
-2. **Mode de cotation** — parmi les huit décrits en section 7.
-3. **Réglages propres au mode** (nombre d'essais, durée, étapes…).
-4. **Réponses possibles** — pour les modes à guidance : lesquelles s'affichent,
+2. **Phase** — Ligne de base, Intervention, Maintien ou Généralisation. Sans ce
+   repère, une courbe ne dit pas ce qui a produit un changement.
+3. **Mode de cotation** — parmi les huit décrits en section 6.
+4. **Réglages propres au mode** (nombre d'essais, durée, étapes…).
+5. **Réponses possibles** — pour les modes à guidance : lesquelles s'affichent,
    dans quel ordre (appui long pour déplacer), et **lesquelles comptent comme
    réussite autonome** (étoile). C'est ici que se décide, pour cette personne et
-   cet objectif, si « guidance partielle » vaut réussite ou non.
-   Vous pouvez aussi **créer une réponse personnalisée** propre à cet objectif.
-5. **Critère d'acquisition** — pourcentage libre sur un nombre libre de séances
+   cet objectif, si « guidance partielle » vaut réussite ou non. Vous pouvez
+   aussi **créer une réponse personnalisée** propre à cet objectif.
+6. **Critère d'acquisition** — pourcentage libre sur un nombre libre de séances
    ou de jours consécutifs. En jours, plusieurs séances d'une même journée sont
    moyennées.
-6. **Cibles successives** (facultatif) — voir ci-dessous.
+7. **Cibles successives** (facultatif) — voir ci-dessous.
 
 ### Les cibles successives
 
@@ -223,17 +180,10 @@ cotation.
 
 ### Changer de phase
 
-Le bouton portant le nom de la phase, sous l'intitulé de l'objectif, la fait
-passer à la suivante après confirmation. Le changement est **daté** et trace un
-**repère vertical sur la courbe de suivi** : on voit alors précisément à partir
-de quelle séance l'intervention a commencé.
-
-### Modèles d'objectifs
-
-L'icône signet enregistre un objectif comme **modèle réutilisable**, avec son
-mode de cotation, ses cibles, son critère et ses réponses. À la création d'un
-objectif, le second bouton propose de partir d'un modèle. Les modèles se gèrent
-dans **Gestion → Modèles d'objectifs**, et s'exportent avec la configuration.
+Le bouton portant le nom de la phase, sous l'intitulé, la fait passer à la
+suivante après confirmation. Le changement est **daté** et trace un **repère
+vertical sur la courbe de suivi** : on voit alors précisément à partir de
+quelle séance l'intervention a commencé.
 
 ### Actions sur un objectif
 
@@ -247,7 +197,7 @@ dans **Gestion → Modèles d'objectifs**, et s'exportent avec la configuration.
 
 ---
 
-## 7. Les huit modes de cotation
+## 6. Les huit modes de cotation
 
 ### Essai par essai
 Une réponse par essai, avec son niveau de guidance. Nombre d'essais **sans
@@ -256,12 +206,8 @@ simple repère : rien n'empêche de dépasser.
 
 Option : **chronométrer chaque essai**. Le temps court à partir de la consigne
 et se fige dès que l'essai est coté ; chaque essai conserve sa durée, affichée
-sous sa case et reprise dans les rapports. Deux réglages :
-- **Chronomètre** — mesure libre du délai de réponse ;
-- **Temps limite** — compte à rebours, avec son et vibration à échéance.
-
-C'est la façon de combiner une durée et une cotation : plus besoin d'un objectif
-Timer séparé pour cela.
+sous sa case et reprise dans les rapports. Au choix chronomètre libre, ou temps
+limite avec son et vibration à échéance.
 
 → Score : pourcentage de réponses autonomes. La durée moyenne s'affiche à côté.
 
@@ -274,15 +220,13 @@ Compteur simple, avec correction possible à la baisse.
 → Score : nombre d'occurrences.
 
 ### Timer (durée)
-Deux fonctionnements :
-- **Chronomètre** — mesure libre ;
-- **Temps fixé** — compte à rebours, de 5 secondes à 60 minutes (minutes et
-  secondes, ex. 1 min 30), avec barre de progression, son et vibration à zéro.
-
+**Chronomètre** (mesure libre) ou **temps fixé** (compte à rebours de 5 secondes
+à 60 minutes, minutes et secondes, ex. 1 min 30), avec barre de progression, son
+et vibration à zéro.
 → Score : durée.
 
-> Pour associer une durée à une cotation essai par essai, utilisez plutôt
-> l'option *chronométrer chaque essai* du mode **Essai par essai**.
+> Pour associer une durée à une cotation, utilisez plutôt l'option
+> *chronométrer chaque essai* du mode **Essai par essai**.
 
 ### Niveau par intervalle
 Relevé périodique du niveau de fonctionnement, **toutes les 1, 5 ou 10 minutes**.
@@ -327,7 +271,7 @@ comptabilisées à part.
 
 ---
 
-## 8. Écran Session
+## 7. Écran Session
 
 ### Préparer
 
@@ -345,9 +289,8 @@ comptabilisées à part.
    atelier, tout se recoche automatiquement.
 
 > **Les objectifs créés ensuite sont ajoutés d'office** au rappel de la
-> configuration, avec un message le signalant : un nouvel objectif n'échappe
-> donc jamais à un atelier déjà réglé. En revanche, un objectif que vous aviez
-> volontairement décoché reste décoché.
+> configuration, avec un message le signalant. En revanche, un objectif que vous
+> aviez volontairement décoché reste décoché.
 
 ### Coter
 
@@ -364,22 +307,19 @@ Le **rail de cercles** à droite bascule d'une personne à l'autre.
 **Les objectifs s'empilent en colonnes**, chacun à sa hauteur réelle. Un simple
 compteur occupe deux fois moins de place qu'une série d'essais, et la place
 laissée libre est reprise par l'objectif suivant — même s'il appartient à une
-autre personne. Une personne n'ayant qu'un seul objectif prioritaire ne
-monopolise donc plus une ligne entière.
+autre personne.
 
-Le nombre de colonnes suit la largeur disponible. Le bouton de pourcentage dans l'en-tête (**100 % / 85 % / 70 % /
-60 %**) règle la densité : plus elle est réduite, plus il tient d'objectifs à
-l'écran. Sur iPhone en paysage, comptez 70 % pour en voir six d'un coup ; sur
-tablette, 100 % suffit souvent. Le réglage est mémorisé d'une séance à l'autre.
+Le bouton de pourcentage dans l'en-tête (**100 % / 85 % / 70 % / 60 %**) règle
+la densité : plus elle est réduite, plus il tient d'objectifs à l'écran. Sur
+iPhone en paysage, comptez 70 % pour en voir six d'un coup. Le réglage est
+mémorisé.
 
 **Réorganiser** : appui long sur un objectif puis glissement, pour le placer où
-vous voulez. L'ordre est propre à la séance et vaut pour les deux vues.
+vous voulez, y compris entre deux personnes.
 
-**Agrandir** : double-appui sur l'intitulé d'un objectif, ou l'icône d'expansion,
-ouvre sa fiche en plein écran — utile pour un chaînage ou un Balance Program à
-nombreuses étapes. « Réduire » revient à la grille.
-
-Pendant la séance :
+**Agrandir** : double-appui sur l'intitulé, ou l'icône d'expansion, ouvre la
+fiche en plein écran — utile pour un chaînage ou un Balance Program à
+nombreuses étapes.
 
 | Élément | Rôle |
 |---|---|
@@ -401,50 +341,70 @@ En bas de l'écran de préparation : la liste des séances passées. Appuyez sur
 l'une d'elles pour **corriger ses cotations**, sur l'icône de partage pour
 transmettre son rapport, ou sur la corbeille pour la supprimer.
 
+### Accord inter-observateurs
+
+Deux intervenants cotent la même séance, chacun sur son appareil, sans se
+concerter. Ensuite :
+
+1. Le premier appuie sur l'**icône de personnes** de sa séance, choisit un mot
+   de passe, et transmet le fichier obtenu à son collègue.
+2. Le second le reçoit et le charge par **Gestion → Sauvegarde → Restaurer**,
+   saisit le mot de passe, puis choisit **sa propre cotation** de la même séance.
+3. L'application affiche le **pourcentage d'accord**, global et objectif par
+   objectif, en signalant les points où les deux relevés divergent.
+
+Le rapprochement se fait sur les initiales et l'intitulé des objectifs, donc les
+deux appareils n'ont pas besoin de partager la même base.
+
+> Un accord d'au moins **80 %** est l'usage courant pour considérer des relevés
+> fiables. En dessous, mieux vaut reprendre ensemble les définitions avant de
+> poursuivre. C'est aussi l'argument le plus solide face à un tiers qui
+> questionnerait la fiabilité des données.
+
 ---
 
-## 9. Le bouton Crise
+## 8. Crises et observations ABC
 
-Le bouton rouge, présent en bas de tous les écrans, ouvre immédiatement une
-fiche avec **un chronomètre qui démarre seul**.
+Deux boutons en bas de tous les écrans, pour deux usages différents :
 
-À renseigner :
+| Bouton | Quand l'utiliser |
+|---|---|
+| **CRISE** (rouge) | Comportement relevant des critères de crise. Un **chronomètre démarre immédiatement**. |
+| **ABC** (ambre) | Comportement à consigner sans qu'il relève d'une crise. Pas de chronomètre. |
+
+Les deux ouvrent la même grille :
 
 - **Personne concernée**, **atelier**, **intervenants présents** — pré-remplis
   si une séance est en cours ;
 - **A — Antécédent** : ce qui se passait juste avant ;
-- **B — Comportement** : ce qui a été observé, de façon factuelle ;
+- **B — Comportement** : ce qui a été observé, de façon factuelle. **Cochez les
+  comportements dans leur ordre d'apparition** : ils se numérotent, et cette
+  chaîne d'escalade indique par quoi commencent habituellement les crises,
+  donc à quel moment intervenir ;
 - **C — Conséquence** : ce qui a suivi, réaction de l'environnement ;
 - **Fonction supposée** : attention, échappement, tangible, sensoriel ou
   indéterminée ;
 - **Commentaire** : contexte, hypothèses, suites à donner.
 
-Chaque zone A, B et C porte un bouton **+** qui déplie des catégories à cocher,
-plusieurs par zone :
+Chaque zone A, B et C porte un bouton **+** qui déplie les réponses à cocher,
+plusieurs par zone. Les réponses retenues s'affichent en pastilles ; un appui
+dessus les retire. Le champ de texte libre reste disponible sous chaque zone
+pour les précisions.
 
-| Zone | Catégories proposées |
-|---|---|
-| **A** | Consigne, transition, attente, refus opposé, bruit, interaction avec un pair, imprévu, fin d'activité appréciée, aucun déclencheur identifié |
-| **B** | Auto-agression, hétéro-agression, morsure, mise au sol, cris, jet d'objet, destruction de matériel, fuite, refus |
-| **C** | Retrait de la demande, attention de l'adulte, accès à un objet, mise à l'écart, aide physique, ignorance active, poursuite de l'activité |
+Les listes proposées se modifient dans **Gestion → Réponses ABC**.
 
-Les catégories retenues s'affichent en pastilles ; un appui dessus les retire.
-Le champ de texte libre reste disponible sous chaque zone pour les précisions.
+> Ce sont ces réponses cochées qui rendent les enregistrements comptables : un
+> texte seul ne s'agrège pas. Sans elles, l'écran Suivi n'a rien à analyser.
 
-> Ce sont ces catégories qui rendent les crises comptables : un texte seul ne
-> s'agrège pas. Sans elles, l'écran Suivi n'a rien à analyser.
-
-« Terminer et enregistrer » clôt le chronomètre.
-
-Les crises se retrouvent **en bas de l'écran Export** : appuyez sur l'une
-d'elles pour la modifier, y compris la date, l'heure et la durée si le bouton a
-été actionné en retard.
+Crises et observations se retrouvent **en bas de l'écran Export**, avec une
+pastille indiquant leur type. Appuyez sur l'une d'elles pour la modifier, y
+compris la date, l'heure et la durée si le bouton a été actionné en retard.
 
 ---
 
-## 10. Écran Suivi
+## 9. Écran Suivi
 
-Deux vues, au choix : **Objectifs** ou **Crises**.
+Trois vues, au choix : **Objectifs**, **Crises** ou **Croisement**.
 
 ### Objectifs
 
@@ -453,8 +413,7 @@ Une courbe par objectif, avec :
 - le **seuil d'acquisition** en pointillé ;
 - un badge **Acquis**, ou l'avancement (« 2/3 séances à 80 % ») ;
 - pour les objectifs à cibles, la liste des cibles avec celles déjà acquises,
-  la courbe ne portant que sur la **cible en cours**.
-
+  la courbe ne portant que sur la **cible en cours** ;
 - des **repères verticaux datés** à chaque changement de phase, avec son nom.
 
 **Réinitialiser le suivi** (sous la courbe) fait repartir la courbe et le
@@ -464,24 +423,40 @@ la date de reprise change.
 
 ### Crises
 
-Une analyse d'ensemble des crises consignées, filtrable par personne :
+Une analyse d'ensemble, filtrable par type (crises, observations, ou les deux)
+et par personne :
 
 - un **nuage de points temporel** — le jour en abscisse, l'heure en ordonnée,
   une couleur par fonction supposée. C'est la représentation qui fait
   apparaître les motifs : les crises de fin de matinée, celles d'un jour
   précis, celles qui suivent un même moment de la journée ;
+- le **délai depuis le dernier enregistrement** pour chaque personne, avec le
+  total et la date — un indicateur simple et parlant en réunion d'équipe ;
+- le **premier comportement de l'enchaînement**, qui indique par quoi
+  l'escalade démarre le plus souvent ;
 - le **classement des antécédents**, des **comportements observés**, des
   **fonctions supposées** et des **conséquences**, en nombre et en pourcentage ;
 - la **répartition par jour de la semaine** ;
-- le nombre de crises et leur durée moyenne.
+- le nombre d'enregistrements et leur durée moyenne.
 
 > Ces répartitions décrivent ce qui a été observé et coché. Elles orientent une
 > hypothèse, elles ne l'établissent pas : une analyse fonctionnelle reste du
 > ressort du professionnel.
 
+### Croisement
+
+Un graphique hebdomadaire superposant le **taux d'autonomie moyen** (courbe) et
+le **nombre de crises et observations** (barres), filtrable par personne. Il
+répond à une question clinique directe : les progrès s'accompagnent-ils d'une
+baisse des comportements-défis ?
+
+> Une évolution parallèle des deux courbes n'établit aucun lien de cause à
+> effet : d'autres facteurs — changement d'équipe, période de l'année, santé —
+> pèsent aussi. Le graphique sert à repérer un moment à examiner, pas à conclure.
+
 ---
 
-## 11. Écran Export
+## 10. Écran Export
 
 Deux façons de composer un rapport :
 
@@ -509,7 +484,7 @@ Deux actions :
 
 ---
 
-## 12. Exploiter les données dans Excel
+## 11. Exploiter les données dans Excel
 
 Le fichier produit contient cinq feuilles :
 
@@ -517,7 +492,7 @@ Le fichier produit contient cinq feuilles :
 |---|---|
 | **Cotations** | Une ligne par objectif et par séance, résultat résumé |
 | **Détail par essai** | Une ligne par essai, étape ou intervalle |
-| **Crises** | Grille ABC complète |
+| **Crises et observations** | Grille ABC complète, avec le type |
 | **Notes** | Observations qualitatives |
 | **Tableau de bord** | Une ligne par personne/objectif, une colonne par date |
 
@@ -537,8 +512,7 @@ Les étapes manquées laissent cette colonne **vide** plutôt qu'à 0, pour ne p
 fausser les moyennes.
 
 Une colonne **Durée (s)** accompagne les cotations chronométrées : essais
-chronométrés, timers, latences et périodes d'intervalle. Une moyenne dessus
-donne le délai de réponse moyen.
+chronométrés, timers, latences et périodes d'intervalle.
 
 ### Copier rapidement vers un tableau de bord
 
@@ -569,27 +543,28 @@ l'ouverture du fichier** : le classeur se met à jour tout seul à l'ouverture.
 
 ---
 
-## 13. Gestes et raccourcis
+## 12. Gestes et raccourcis
 
 | Geste | Effet |
 |---|---|
 | Balayage horizontal | Passer d'un écran à l'autre |
 | Balayage dans la zone de cotation | Basculer Prioritaires ↔ Par personne |
-| Appui long puis glissement | Réordonner les guidances, ou les objectifs en séance |
+| Appui long puis glissement | Réordonner les guidances, les réponses ABC, ou les objectifs en séance |
 | Double-appui sur un intitulé | Agrandir la fiche de l'objectif |
 | Appui sur une mesure de latence | La supprimer |
 | Appui sur une pastille Envoyé | Corriger le statut |
+| Appui sur un comportement coché | Le retirer de la chaîne |
 
 Les zones qui défilent déjà horizontalement (grilles d'essais, d'intervalles) et
 les champs de saisie gardent la priorité sur le balayage.
 
 ---
 
-## 14. Sauvegarde et récupération
+## 13. Sauvegarde
 
 **Gestion → Sauvegarde → Exporter** produit un fichier contenant tout :
-personnes, objectifs, séances, crises. Il est **chiffré par un mot de passe**
-que vous choisissez, distinct du code de l'application.
+personnes, objectifs, séances, crises et observations. Il est **chiffré par un
+mot de passe** que vous choisissez, distinct du code de l'application.
 
 > Ce mot de passe ne peut pas être récupéré. Conservez-le en lieu sûr, en
 > dehors de l'appareil.
@@ -600,40 +575,36 @@ l'appareil après confirmation.
 ### Exporter la configuration seule
 
 Un second bouton produit un fichier de **configuration** : ateliers,
-intervenants, guidances et modèles d'objectifs, **sans aucune personne, séance
-ni crise**. Il ne contient donc aucune donnée d'usager et peut circuler
-librement pour équiper un nouvel appareil sans tout ressaisir.
+intervenants, guidances, réponses ABC et modèles d'objectifs, **sans aucune
+personne ni séance**. Il ne contient donc aucune donnée d'usager et sert à
+équiper un nouvel appareil sans tout ressaisir.
 
 Il se restaure avec le même bouton **Restaurer** : l'application reconnaît le
 format et **complète** l'existant au lieu de le remplacer.
 
 ### Quand sauvegarder
 
-- Avant chaque mise à jour de l'application ;
-- après chaque période de collecte importante ;
-- avant tout changement d'appareil.
+- Après chaque période de collecte importante ;
+- avant tout changement d'appareil ;
+- avant une mise à jour annoncée.
 
 C'est le **seul** filet de sécurité : il n'existe aucune sauvegarde
 centralisée, et les données ne sont sur aucun serveur.
 
 ---
 
-## 15. Mettre l'application à jour
+## 14. Mises à jour
 
-**Avec GitHub Pages** : remplacez les fichiers concernés depuis l'interface
-GitHub (**Add file → Upload files** dans le bon dossier), validez. La
-publication se relance seule en 1 à 2 minutes.
+Les mises à jour arrivent toutes seules. Quand on vous en annonce une :
+**fermez complètement l'application** — depuis le sélecteur multitâche, en la
+faisant glisser vers le haut, pas seulement en revenant à l'écran d'accueil —
+puis rouvrez-la.
 
-**Une étape à ne pas oublier** : dans `public/sw.js`, incrémentez
-`CACHE_VERSION` (`'v22'` → `'v23'`, etc.). Sans cela, les appareils continuent
-d'afficher l'ancienne version.
-
-Sur l'appareil, **fermez complètement l'application** (depuis le sélecteur
-multitâche, pas seulement revenir à l'accueil) avant de la rouvrir.
+Vos données ne sont jamais affectées par une mise à jour.
 
 ---
 
-## 16. RGPD et protection des données
+## 15. RGPD et protection des données
 
 Cette section explique ce que l'application fait dans le sens du règlement, et
 surtout **ce qu'elle ne peut pas garantir**. Elle ne remplace pas l'avis de
@@ -650,8 +621,7 @@ encadrés, avec des garanties renforcées.
 ### Ce qui va dans le sens du règlement
 
 **Minimisation.** L'application ne demande que des **initiales**. Aucun nom,
-aucune date de naissance, aucune adresse, aucun identifiant administratif. Le
-strict nécessaire pour qu'un professionnel présent sache de qui il s'agit.
+aucune date de naissance, aucune adresse, aucun identifiant administratif.
 
 **Aucun transfert.** Les données ne quittent jamais l'appareil : pas de serveur,
 pas de compte en ligne, pas de sous-traitant hébergeur, pas d'API externe. Il
@@ -669,8 +639,7 @@ mémoire et n'est jamais écrite sur l'appareil.
 veille et après 10 minutes d'inactivité, blocage progressif après plusieurs
 codes erronés.
 
-**Limitation de conservation.** Durée paramétrable avec purge automatique — la
-mise en œuvre concrète du principe de conservation limitée.
+**Limitation de conservation.** Durée paramétrable avec purge automatique.
 
 **Droit à l'effacement.** Suppression possible à tous les niveaux : une cotation,
 une séance, une crise, une personne et tous ses objectifs, ou l'intégralité des
@@ -679,61 +648,52 @@ données de l'appareil.
 **Portabilité.** L'export Excel et la sauvegarde chiffrée permettent d'extraire
 les données dans des formats lisibles et réutilisables.
 
-**Traçabilité partielle.** L'intervenant est enregistré pour chaque séance et
-chaque crise.
+**Traçabilité partielle.** L'intervenant est enregistré pour chaque séance,
+chaque crise et chaque observation.
 
 ### Les limites — à traiter au niveau de l'établissement
 
 **1. Les initiales ne sont pas de l'anonymisation.**
 C'est une **pseudonymisation**. L'équipe reconstitue l'identité immédiatement,
 donc la donnée reste une donnée personnelle de santé et **toutes les obligations
-du RGPD continuent de s'appliquer**. La pseudonymisation est une bonne mesure de
-minimisation, pas une dispense.
+du RGPD continuent de s'appliquer**.
 
 **2. Le chiffrement ne vaut que ce que vaut le code.**
 Quatre chiffres, c'est 10 000 combinaisons ; six, un million. Face à quelqu'un
 qui récupérerait le fichier et l'analyserait avec des outils, un code court
 finit par céder. **Le chiffrement de l'appareil reste indispensable** : il
-s'active dès qu'un code de déverrouillage est défini sur la tablette, et c'est
-lui qui protège réellement les données au repos.
+s'active dès qu'un code de déverrouillage est défini sur la tablette.
 
 **3. Les rapports Excel ne sont pas chiffrés.**
-La bibliothèque utilisée ne sait pas produire de fichier protégé par mot de
-passe. Leur protection dépend **entièrement de l'endroit où ils sont déposés** :
-le dossier SharePoint doit être restreint aux seules personnes qui en ont besoin.
+Leur protection dépend **entièrement de l'endroit où ils sont déposés** : le
+dossier partagé doit être restreint aux seules personnes qui en ont besoin.
 
 **4. Aucune authentification individuelle.**
 Un seul code par appareil, partagé par l'équipe. Le champ « intervenant » est
 **déclaratif** : rien ne garantit que la personne désignée est bien celle qui a
-saisi. Il n'existe **aucun journal d'audit** permettant de reconstituer qui a
-fait quoi et quand.
+saisi. Il n'existe **aucun journal d'audit**.
 
 **5. Aucune sauvegarde centralisée.**
 Un appareil perdu, volé ou réinitialisé sans sauvegarde récente, ce sont des
 données définitivement perdues. Or l'article 32 impose aussi de garantir la
-**disponibilité** des données. La discipline de sauvegarde n'est pas une option
-de confort : c'est une obligation à organiser.
+**disponibilité** des données.
 
 **6. Une requête sortante subsiste.**
-Les polices de caractères sont chargées depuis Google Fonts. **Aucune donnée
-d'usager n'y transite**, mais c'est une requête vers un tiers, qui expose
-l'adresse IP de l'appareil. Certains délégués demandent l'auto-hébergement des
-polices ; c'est réalisable.
+Les polices de caractères sont chargées depuis un service tiers. **Aucune donnée
+d'usager n'y transite**, mais c'est une requête qui expose l'adresse IP de
+l'appareil.
 
-**7. L'application est servie depuis GitHub Pages.**
-Le **code** est hébergé sur une infrastructure Microsoft, aux États-Unis, dans un
-dépôt public. Les **données** n'y sont jamais envoyées. Mais l'application est
-téléchargée depuis ce domaine, ce qui suppose de faire confiance à cette chaîne
-de publication — d'où l'intérêt de protéger le dépôt et d'exiger une relecture
-avant toute mise en ligne.
+**7. L'application est servie depuis un hébergement tiers.**
+Le **code** est hébergé à l'extérieur ; les **données** n'y sont jamais
+envoyées. Mais l'application est téléchargée depuis ce domaine, ce qui suppose
+de faire confiance à cette chaîne de publication.
 
 **8. Les droits des personnes ne sont pas outillés.**
 Répondre à une demande d'accès ou de rectification est possible, mais
-manuellement, appareil par appareil. Il n'existe pas de fonction dédiée.
+manuellement, appareil par appareil.
 
 **9. La suppression est immédiate et définitive.**
-Aucune corbeille, aucune annulation. C'est cohérent avec le droit à l'effacement,
-mais impose de la prudence.
+Aucune corbeille, aucune annulation.
 
 **10. Aucune validation juridique ni audit.**
 Cette application n'est ni certifiée, ni auditée, ni hébergée chez un hébergeur
@@ -750,29 +710,27 @@ telle quelle.
   leurs représentants légaux.
 - Imposer un **code de déverrouillage sur chaque appareil**.
 - Décider et paramétrer une **durée de conservation**.
-- **Restreindre le dossier SharePoint** aux seules personnes concernées.
+- **Restreindre le dossier partagé** aux seules personnes concernées.
 - Interdire les **messageries personnelles** sur les appareils de service.
-- Écrire une **procédure en cas de perte ou de vol** d'un appareil, incluant la
-  notification à la CNIL sous 72 heures si une violation est caractérisée.
+- Écrire une **procédure en cas de perte ou de vol**, incluant la notification à
+  la CNIL sous 72 heures si une violation est caractérisée.
 
 ---
 
-## 17. Dépannage
+## 16. Dépannage
 
-**Rien ne change après une mise à jour.**
-Vérifiez que `CACHE_VERSION` a bien été incrémenté dans `public/sw.js`, que
-l'onglet Actions affiche une coche verte récente, puis **fermez complètement**
-l'application avant de la rouvrir.
+**Rien ne change après une mise à jour annoncée.**
+Fermez complètement l'application depuis le sélecteur multitâche, puis
+rouvrez-la.
 
 **Écran blanc au démarrage.**
 L'application attend le réseau 2,5 secondes au maximum avant d'ouvrir sa copie
-locale. Si l'attente se prolonge, c'est plutôt un problème de compilation :
-consultez l'onglet Actions.
+locale. Si l'attente se prolonge, signalez-le à la personne qui gère
+l'application.
 
 **« Code incorrect » alors que le code est bon.**
 Vérifiez la longueur attendue (4 ou 6 chiffres). Si l'écran demande de valider
-manuellement, l'application ne connaît pas encore la longueur : saisissez votre
-code entier puis appuyez sur **Valider**.
+manuellement, saisissez votre code entier puis appuyez sur **Valider**.
 
 **La vibration ne fonctionne pas sur iPhone.**
 Safari ne prend pas en charge cette fonction. Seul le son fonctionne sur iOS ;
@@ -786,41 +744,9 @@ téléchargements et déposez-le manuellement.
 Vérifiez la mention « écran maintenu » dans l'en-tête. Si elle est absente,
 réglez la mise en veille de l'appareil sur « jamais ».
 
----
-
-## 18. Aller plus loin
-
-### Application installable via un store
-
-À partir de ce même projet, avec **Capacitor** :
-
-```bash
-npm install @capacitor/core @capacitor/cli @capacitor/android
-npx cap init "Cotations ABA" fr.etablissement.aba --web-dir=dist
-npx cap add android
-npm run build && npx cap sync
-npx cap open android
-```
-
-La dernière commande ouvre **Android Studio** (gratuit), d'où se génère le
-`.apk`. Pour iOS, la même démarche existe avec `@capacitor/ios`, mais exige un
-Mac, Xcode et un compte développeur Apple (99 $/an, avec exonération possible
-pour les établissements d'enseignement et organismes à but non lucratif
-éligibles).
-
-Alternative sans ligne de commande : <https://www.pwabuilder.com>.
-
-### Protéger le dépôt GitHub
-
-- **Ruleset sur `main`** : interdire la suppression et le force-push, exiger une
-  pull request. Cochez « Do not allow bypassing ».
-- **Environnement `github-pages` avec relecteur obligatoire** : rien ne part en
-  ligne sans un second accord.
-- **Épingler les actions à un identifiant de commit** plutôt qu'à `@v4`.
-- **Workflow permissions en lecture seule** : Settings → Actions → General.
-- **Authentification à deux facteurs** et, à terme, transfert du dépôt vers une
-  **organisation** avec un second propriétaire, pour que le projet ne dépende
-  pas d'un compte personnel.
+**Un objectif n'apparaît pas dans la vue Prioritaires.**
+Il doit être étoilé, soit à sa création (prioritaire partout), soit dans la
+préparation de séance (prioritaire pour cet atelier).
 
 ---
 
