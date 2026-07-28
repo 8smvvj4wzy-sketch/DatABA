@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid, ScatterChart, Scatter, Cell } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid, ScatterChart, Scatter, Cell, ComposedChart, Bar, Legend } from 'recharts';
 import {
   Plus, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
   Timer as TimerIcon, ListChecks, LayoutGrid, CheckCircle2, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, BarChart3,
+  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, BarChart3, ClipboardList, Activity,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -169,6 +169,14 @@ const CRISIS_CONSEQUENCES = [
   'Ignorance active',
   'Poursuite de l\'activité',
 ];
+/* Listes proposées par défaut. Elles sont recopiées dans les réglages au
+   premier lancement, puis entièrement modifiables dans l'écran Gestion. */
+const DEFAULT_ABC = {
+  antecedents: CRISIS_ANTECEDENTS,
+  comportements: CRISIS_BEHAVIORS,
+  consequences: CRISIS_CONSEQUENCES,
+};
+
 const CRISIS_FUNCTIONS = [
   { k: 'attention', label: 'Attention', color: '#2E6E8E' },
   { k: 'echappement', label: 'Échappement', color: '#C36A2E' },
@@ -1045,6 +1053,160 @@ function advanceMasteredTargets(students, sessions, guidances) {
   return { students: nextStudents, achieved };
 }
 
+/* ==================== Accord inter-observateurs ====================
+   Deux intervenants cotent la même séance chacun de leur côté ; l'un transmet
+   sa cotation, l'application compare point par point. Le rapprochement se fait
+   sur les initiales et l'intitulé de l'objectif, pas sur des identifiants
+   internes : les deux appareils n'ont pas besoin de partager la même base. */
+
+function ioaForEntry(obj, ea, eb) {
+  if (!ea || !eb) return null;
+  const t = obj.type;
+
+  if (t === 'trials') {
+    const n = Math.max((ea.trials || []).length, (eb.trials || []).length);
+    let pts = 0, acc = 0;
+    for (let i = 0; i < n; i++) {
+      const ca = trialCode((ea.trials || [])[i]);
+      const cb = trialCode((eb.trials || [])[i]);
+      if (!ca && !cb) continue;
+      pts += 1;
+      if (ca === cb) acc += 1;
+    }
+    return pts ? { points: pts, accords: acc } : null;
+  }
+
+  if (t === 'probe') {
+    const a = ea.guidance != null ? ea.guidance : ea.value;
+    const b = eb.guidance != null ? eb.guidance : eb.value;
+    if (a == null && b == null) return null;
+    return { points: 1, accords: a === b ? 1 : 0 };
+  }
+
+  if (t === 'chaining') {
+    const steps = obj.config.steps || [];
+    let pts = 0, acc = 0;
+    steps.forEach((st) => {
+      const a = (ea.steps || {})[st.id];
+      const b = (eb.steps || {})[st.id];
+      if (!a && !b) return;
+      pts += 1;
+      if (a === b) acc += 1;
+    });
+    return pts ? { points: pts, accords: acc } : null;
+  }
+
+  if (t === 'balance') {
+    const steps = obj.config.steps || [];
+    const ta = balanceTrials(ea);
+    const tb = balanceTrials(eb);
+    const n = Math.max(ta.length, tb.length);
+    let pts = 0, acc = 0;
+    for (let i = 0; i < n; i++) {
+      steps.forEach((st) => {
+        const a = ((ta[i] || {}).steps || {})[st.id];
+        const b = ((tb[i] || {}).steps || {})[st.id];
+        const oa = a && a.outcome;
+        const ob = b && b.outcome;
+        if (!oa && !ob) return;
+        pts += 1;
+        if (oa === ob) acc += 1;
+      });
+    }
+    return pts ? { points: pts, accords: acc } : null;
+  }
+
+  if (t === 'interval') {
+    const cles = new Set([...Object.keys(ea.marks || {}), ...Object.keys(eb.marks || {})]);
+    let pts = 0, acc = 0;
+    cles.forEach((k) => {
+      pts += 1;
+      if ((ea.marks || {})[k] === (eb.marks || {})[k]) acc += 1;
+    });
+    return pts ? { points: pts, accords: acc } : null;
+  }
+
+  /* Mesures continues : l'accord exact n'a pas de sens, on retient le rapport
+     entre la plus petite et la plus grande valeur. */
+  const proportionnel = (a, b) => {
+    if (!a && !b) return null;
+    return { points: 1, accords: Math.min(a, b) / Math.max(a, b), proportionnel: true };
+  };
+  if (t === 'occurrence') return proportionnel(ea.count || 0, eb.count || 0);
+  if (t === 'timer') return proportionnel(ea.elapsedMs || 0, eb.elapsedMs || 0);
+  if (t === 'latency') {
+    const moy = (l) => (l && l.length ? l.reduce((x, y) => x + y, 0) / l.length : 0);
+    return proportionnel(moy(ea.latencies), moy(eb.latencies));
+  }
+  return null;
+}
+
+/* Cotation d'une séance, mise à plat pour être transmise à un autre appareil */
+function buildIoaPayload(session, students, ateliers, intervenants) {
+  const entrees = [];
+  (session.studentIds || []).forEach((sid) => {
+    const st = students.find((x) => x.id === sid);
+    (session.selectedObjectives[sid] || []).forEach((oid) => {
+      const obj = session.objectiveSnapshot[oid];
+      const entry = (session.data[sid] || {})[oid];
+      if (!obj || !entry) return;
+      entrees.push({
+        initials: st ? st.initials : '?',
+        objectif: obj.name,
+        type: obj.type,
+        config: obj.config,
+        entry,
+      });
+    });
+  });
+  const a = ateliers.find((x) => x.id === session.atelierId);
+  const i = intervenants.find((x) => x.id === session.intervenantId);
+  return {
+    format: 'aba-ioa',
+    version: 1,
+    date: session.date,
+    atelier: a ? a.name : null,
+    observateur: i ? i.name : null,
+    entrees,
+  };
+}
+
+function computeIOA(payload, session, students) {
+  const lignes = [];
+  const locales = new Map();
+  (session.studentIds || []).forEach((sid) => {
+    const st = students.find((x) => x.id === sid);
+    const initials = st ? st.initials : '?';
+    (session.selectedObjectives[sid] || []).forEach((oid) => {
+      const obj = session.objectiveSnapshot[oid];
+      const entry = (session.data[sid] || {})[oid];
+      if (obj && entry) locales.set(`${initials}|${obj.name}`, { obj, entry });
+    });
+  });
+
+  const nonApparies = [];
+  (payload.entrees || []).forEach((e) => {
+    const cle = `${e.initials}|${e.objectif}`;
+    const local = locales.get(cle);
+    if (!local) { nonApparies.push(cle); return; }
+    const r = ioaForEntry(local.obj, local.entry, e.entry);
+    if (!r) return;
+    lignes.push({
+      initials: e.initials,
+      objectif: e.objectif,
+      type: e.type,
+      points: r.points,
+      accords: r.accords,
+      proportionnel: !!r.proportionnel,
+      pct: Math.round((r.accords / r.points) * 100),
+    });
+  });
+
+  const points = lignes.reduce((a, l) => a + l.points, 0);
+  const accords = lignes.reduce((a, l) => a + l.accords, 0);
+  return { lignes, points, accords, pct: points ? Math.round((accords / points) * 100) : null, nonApparies };
+}
+
 /* ==================== Génération Excel ==================== */
 /* --- Mise à plat pour l'analyse Excel ---
    Une ligne empilant tous les essais dans une seule cellule se filtre mal et
@@ -1205,12 +1367,13 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
-  const crisisRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Antécédents', 'Comportements', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire']];
+  const crisisRows = [['Type', 'Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Antécédents', 'Enchaînement des comportements', 'Premier comportement', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire']];
   crises.forEach((c) => {
     if (studentFilter && c.studentId && !studentFilter.includes(c.studentId)) return;
     const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
     const f = c.fonction ? CRISIS_FUNCTIONS.find((x) => x.k === c.fonction) : null;
     crisisRows.push([
+      c.kind === 'abc' ? 'Observation' : 'Crise',
       new Date(c.date).toLocaleDateString('fr-FR'),
       timeShort(c.date),
       new Date(c.date).toLocaleDateString('fr-FR', { weekday: 'long' }),
@@ -1220,7 +1383,8 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
       fmtDuration(c.durationMs),
       Math.round((c.durationMs || 0) / 1000),
       (c.antecedentTags || []).join(' | '),
-      (c.comportementTags || []).join(' | '),
+      (c.comportementTags || []).map((v, i) => `${i + 1}. ${v}`).join(' → '),
+      (c.comportementTags || [])[0] || '',
       f ? f.label : '',
       (c.consequenceTags || []).join(' | '),
       c.antecedent || '',
@@ -1230,8 +1394,8 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
     ]);
   });
   const ws2 = XLSX.utils.aoa_to_sheet(crisisRows);
-  ws2['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 34 }, { wch: 34 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
-  XLSX.utils.book_append_sheet(wb, ws2, 'Crises');
+  ws2['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 34 }, { wch: 44 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Crises et observations');
 
   const noteRows = [['Date', 'Heure', 'Atelier', 'Personne accompagnée', 'Note']];
   sessions.forEach((s) => {
@@ -1597,6 +1761,45 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
   );
 }
 
+/* Liste de réponses modifiable : ajout, renommage, suppression, et
+   réorganisation par appui long. */
+function TagListEditor({ titre, items, onChange }) {
+  const [nouveau, setNouveau] = useState('');
+  const ajouter = () => {
+    const v = nouveau.trim();
+    if (!v || items.includes(v)) return;
+    onChange([...items, v]);
+    setNouveau('');
+  };
+  return (
+    <div className="mb-4">
+      <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>{titre}</div>
+      {items.length > 0 && (
+        <ReorderList
+          items={items}
+          keyOf={(v) => v}
+          onReorder={onChange}
+          className="space-y-1.5 mb-2"
+          renderItem={(v) => (
+            <EditableRow
+              label={v}
+              onRename={(n) => onChange(items.map((x) => (x === v ? n : x)))}
+              onRemove={() => onChange(items.filter((x) => x !== v))}
+            />
+          )}
+        />
+      )}
+      <div className="flex gap-2">
+        <Field value={nouveau} onChange={setNouveau} placeholder="Ajouter une réponse" onEnter={ajouter} />
+        <Btn variant="ghost" onClick={ajouter} className="px-4 shrink-0"><Plus size={16} /></Btn>
+      </div>
+      {nouveau.trim() && items.includes(nouveau.trim()) && (
+        <div className="text-xs mt-1" style={{ color: CRISIS }}>Cette réponse existe déjà.</div>
+      )}
+    </div>
+  );
+}
+
 function Empty({ children }) {
   return (
     <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm" style={{ borderColor: BORDER, color: INK_SOFT }}>
@@ -1793,6 +1996,7 @@ function AbaApp() {
   const [intervenants, setIntervenants] = useState([]);
   const [guidances, setGuidances] = useState(DEFAULT_GUIDANCE);
   const [objectiveTemplates, setObjectiveTemplates] = useState([]);
+  const [abcOptions, setAbcOptions] = useState(DEFAULT_ABC);
   const [sessions, setSessions] = useState([]);
   const [crises, setCrises] = useState([]);
 
@@ -1965,7 +2169,7 @@ function AbaApp() {
   /* Réécrit toutes les données avec la clé courante — utilisé après un
      changement de code, puisque l'ancienne clé ne déchiffrerait plus rien. */
   async function persistAll() {
-    await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates }));
+    await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions }));
     await store.set('aba:sessions', JSON.stringify(sessions));
     await store.set('aba:crises', JSON.stringify(crises));
     await store.set('aba:active', JSON.stringify(activeSession));
@@ -2017,8 +2221,8 @@ function AbaApp() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates }));
-  }, [students, ateliers, intervenants, guidances, retentionMonths, objectiveTemplates, loaded]);
+    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions }));
+  }, [students, ateliers, intervenants, guidances, retentionMonths, objectiveTemplates, abcOptions, loaded]);
   useEffect(() => {
     if (!loaded) return;
     store.set('aba:sessions', JSON.stringify(sessions));
@@ -2080,6 +2284,7 @@ function AbaApp() {
       intervenants,
       guidances,
       objectiveTemplates,
+      abcOptions,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     downloadBlob(blob, `configuration-aba-${new Date().toISOString().slice(0, 10)}.json`);
@@ -2097,17 +2302,42 @@ function AbaApp() {
     setIntervenants((cur) => [...cur, ...(d.intervenants || []).filter((i) => !cur.some((x) => x.name === i.name))]);
     setGuidances((cur) => [...cur, ...(d.guidances || []).filter((g) => !cur.some((x) => x.code === g.code))]);
     setObjectiveTemplates((cur) => [...cur, ...(d.objectiveTemplates || []).filter((t) => !cur.some((x) => x.name === t.name))]);
+    if (d.abcOptions) {
+      setAbcOptions((cur) => ({
+        antecedents: [...cur.antecedents, ...(d.abcOptions.antecedents || []).filter((v) => !cur.antecedents.includes(v))],
+        comportements: [...cur.comportements, ...(d.abcOptions.comportements || []).filter((v) => !cur.comportements.includes(v))],
+        consequences: [...cur.consequences, ...(d.abcOptions.consequences || []).filter((v) => !cur.consequences.includes(v))],
+      }));
+    }
     notify('Configuration importée');
   }
 
   /* --- sauvegarde / restauration --- */
   const [backupPrompt, setBackupPrompt] = useState(null); // { mode: 'export' } | { mode: 'import', envelope, error }
+  const [ioaPending, setIoaPending] = useState(null);  // cotation reçue, en attente d'une séance à comparer
+  const [ioaResult, setIoaResult] = useState(null);    // résultat de la comparaison
 
   function exportBackup() {
     setBackupPrompt({ mode: 'export' });
   }
 
+  /* Transmission d'une cotation pour comparaison : le fichier contient des
+     initiales, il est donc chiffré comme une sauvegarde. */
+  function exportIoa(session) {
+    setBackupPrompt({ mode: 'export', ioaSession: session });
+  }
+
   async function confirmExport(passphrase) {
+    if (backupPrompt && backupPrompt.ioaSession) {
+      const sess = backupPrompt.ioaSession;
+      const payload = buildIoaPayload(sess, students, ateliers, intervenants);
+      const envelope = await encryptJSON(payload, passphrase);
+      const blob = new Blob([JSON.stringify({ ...envelope, format: 'aba-ioa-encrypted' })], { type: 'application/json' });
+      downloadBlob(blob, `cotation-${new Date(sess.date).toISOString().slice(0, 10)}.json`);
+      setBackupPrompt(null);
+      notify('Cotation exportée pour comparaison');
+      return;
+    }
     const payload = { format: 'aba-backup', version: 2, exportedAt: new Date().toISOString(), students, ateliers, intervenants, guidances, sessions, crises };
     const envelope = await encryptJSON(payload, passphrase);
     const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json' });
@@ -2115,6 +2345,7 @@ function AbaApp() {
     setBackupPrompt(null);
     notify('Sauvegarde chiffrée exportée');
   }
+
 
   function applyRestoredData(d) {
     if (!d || !Array.isArray(d.students)) {
@@ -2148,6 +2379,10 @@ function AbaApp() {
         importConfig(d);
         return;
       }
+      if (d && d.format === 'aba-ioa-encrypted') {
+        setBackupPrompt({ mode: 'import', envelope: d, ioa: true, error: '' });
+        return;
+      }
       if (d && d.format === 'aba-backup-encrypted') {
         setBackupPrompt({ mode: 'import', envelope: d, error: '' });
         return;
@@ -2161,7 +2396,9 @@ function AbaApp() {
   async function confirmImport(passphrase) {
     try {
       const d = await decryptJSON(backupPrompt.envelope, passphrase);
+      const pourIoa = backupPrompt.ioa;
       setBackupPrompt(null);
+      if (pourIoa) { setIoaPending(d); return; }
       applyRestoredData(d);
     } catch (e) {
       setBackupPrompt({ ...backupPrompt, error: 'Mot de passe incorrect ou fichier corrompu' });
@@ -2211,12 +2448,33 @@ function AbaApp() {
   };
 
   /* --- crise --- */
+  const openObservation = () =>
+    setCrisis({
+      id: uid(),
+      date: new Date().toISOString(),
+      startedAt: Date.now(),
+      isNew: true,
+      kind: 'abc',
+      sessionId: (activeSession && activeSession.id) || null,
+      studentId: null,
+      atelierId: (activeSession && activeSession.atelierId) || null,
+      intervenantIds: activeSession && activeSession.intervenantId ? [activeSession.intervenantId] : [],
+      commentaire: '',
+      antecedent: '',
+      comportement: '',
+      consequence: '',
+      antecedentTags: [],
+      comportementTags: [],
+      consequenceTags: [],
+    });
+
   const openCrisis = () =>
     setCrisis({
       id: uid(),
       date: new Date().toISOString(),
       startedAt: Date.now(),
       isNew: true,
+      kind: 'crise',
       sessionId: (activeSession && activeSession.id) || null,
       studentId: null,
       atelierId: (activeSession && activeSession.atelierId) || null,
@@ -2230,6 +2488,7 @@ function AbaApp() {
   const editCrisis = (c) =>
     setCrisis({
       ...c,
+      kind: c.kind || 'crise',
       isNew: false,
       atelierId: c.atelierId || null,
       intervenantIds: c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []),
@@ -2239,11 +2498,12 @@ function AbaApp() {
   const saveCrisis = (c) => {
     const { isNew, ...rest } = c;
     if (isNew) {
-      setCrises((list) => [{ ...rest, durationMs: Date.now() - c.startedAt }, ...list]);
-      notify('Crise enregistrée');
+      const duree = rest.kind === 'abc' ? 0 : Date.now() - c.startedAt;
+      setCrises((list) => [{ ...rest, durationMs: duree }, ...list]);
+      notify(rest.kind === 'abc' ? 'Observation enregistrée' : 'Crise enregistrée');
     } else {
       setCrises((list) => list.map((x) => (x.id === rest.id ? { ...x, ...rest } : x)));
-      notify('Crise modifiée');
+      notify(rest.kind === 'abc' ? 'Observation modifiée' : 'Crise modifiée');
     }
     setCrisis(null);
   };
@@ -2251,7 +2511,7 @@ function AbaApp() {
   const deleteCrisis = (id) => {
     setCrises((list) => list.filter((x) => x.id !== id));
     setCrisis(null);
-    notify('Crise supprimée');
+    notify('Enregistrement supprimé');
   };
 
   if (!securityLoaded) {
@@ -2349,6 +2609,7 @@ function AbaApp() {
             security={security} onChangePin={changePin}
             retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
             templates={objectiveTemplates} onRemoveTemplate={removeTemplate} onExportConfig={exportConfig}
+            abcOptions={abcOptions} onSetAbc={setAbcOptions}
             onExportBackup={exportBackup} onImportBackup={importBackup}
           />
         )}
@@ -2359,7 +2620,7 @@ function AbaApp() {
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
             sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession}
-            onSetAtelierGroup={setAtelierGroup} onShareSession={shareSession} notify={notify}
+            onSetAtelierGroup={setAtelierGroup} onShareSession={shareSession} onExportIoa={exportIoa} notify={notify}
             activeSession={activeSession} setActiveSession={setActiveSession}
             onFinish={(session) => {
               const { isEdit, ...rest } = session;
@@ -2397,13 +2658,22 @@ function AbaApp() {
         className="fixed bottom-0 left-0 right-0 z-30 px-4 pt-6"
         style={{ background: `linear-gradient(to top, ${PAPER} 55%, transparent)`, paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)' }}
       >
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-4xl mx-auto flex gap-2">
           <button
             onClick={openCrisis}
-            className="w-full rounded-2xl py-4 text-white font-semibold flex items-center justify-center gap-2 shadow-lg active:scale-[0.99] transition-transform"
+            className="flex-1 rounded-2xl py-4 text-white font-semibold flex items-center justify-center gap-2 shadow-lg active:scale-[0.99] transition-transform"
             style={{ backgroundColor: CRISIS, fontFamily: F_DISPLAY, letterSpacing: '0.02em' }}
           >
             <AlertTriangle size={19} /> CRISE
+          </button>
+          {/* Comportement à consigner sans qu'il relève d'une crise */}
+          <button
+            onClick={openObservation}
+            className="rounded-2xl px-5 py-4 font-semibold flex items-center justify-center gap-2 shadow-lg border-2 active:scale-[0.99] transition-transform"
+            style={{ backgroundColor: CARD, borderColor: '#B07A2E', color: '#B07A2E', fontFamily: F_DISPLAY, letterSpacing: '0.02em' }}
+            title="Observation ABC, hors crise"
+          >
+            ABC
           </button>
         </div>
       </div>
@@ -2411,10 +2681,48 @@ function AbaApp() {
       {crisis && (
         <CrisisOverlay
           crisis={crisis} setCrisis={setCrisis}
-          students={students} ateliers={ateliers} intervenants={intervenants}
+          students={students} ateliers={ateliers} intervenants={intervenants} abcOptions={abcOptions}
           onSave={saveCrisis} onDelete={deleteCrisis}
         />
       )}
+
+      {ioaPending && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="rounded-2xl p-5 max-w-sm w-full max-h-[80vh] overflow-y-auto" style={{ backgroundColor: CARD }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Comparer avec</span>
+              <button onClick={() => setIoaPending(null)} style={{ color: INK_SOFT }}><X size={18} /></button>
+            </div>
+            <p className="text-sm mb-3" style={{ color: INK_SOFT }}>
+              Cotation reçue du {new Date(ioaPending.date).toLocaleDateString('fr-FR')}
+              {ioaPending.observateur ? `, par ${ioaPending.observateur}` : ''}
+              {ioaPending.atelier ? ` — ${ioaPending.atelier}` : ''}.
+              Choisissez votre propre cotation de la même séance.
+            </p>
+            {sessions.length === 0 ? (
+              <Empty>Aucune séance enregistrée sur cet appareil.</Empty>
+            ) : (
+              <div className="space-y-1.5">
+                {sessions.slice(0, 20).map((sess) => {
+                  const a = ateliers.find((x) => x.id === sess.atelierId);
+                  return (
+                    <button key={sess.id}
+                      onClick={() => { setIoaResult(computeIOA(ioaPending, sess, students)); setIoaPending(null); }}
+                      className="w-full text-left rounded-xl border px-3 py-2.5" style={{ borderColor: BORDER }}>
+                      <div className="text-sm font-medium">{a ? a.name : sess.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</div>
+                      <div className="text-xs" style={{ color: INK_SOFT }}>
+                        {new Date(sess.date).toLocaleDateString('fr-FR')} {timeShort(sess.date)}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {ioaResult && <IoaResultModal resultat={ioaResult} onClose={() => setIoaResult(null)} />}
 
       {backupPrompt && (
         <PassphraseModal
@@ -2557,7 +2865,7 @@ function MiniPinInput({ onSubmit, digits = 4 }) {
   );
 }
 
-function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, retentionMonths, onSetRetention, templates, onRemoveTemplate, onExportConfig, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onReorderGuidances, onExportBackup, onImportBackup }) {
+function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, retentionMonths, onSetRetention, templates, onRemoveTemplate, onExportConfig, abcOptions, onSetAbc, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onReorderGuidances, onExportBackup, onImportBackup }) {
   const [initials, setInitials] = useState('');
   const [atelier, setAtelier] = useState('');
   const [intervenant, setIntervenant] = useState('');
@@ -2744,6 +3052,21 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
             onClose={() => setChangingPin(false)}
           />
         )}
+      </Card>
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <AlertTriangle size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Réponses ABC</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Réponses proposées derrière le bouton + des zones A, B et C, pour les crises comme pour
+          les observations. Appui long sur une ligne pour la déplacer : l'ordre est celui d'affichage,
+          placez en tête ce que votre équipe coche le plus souvent.
+        </p>
+        <TagListEditor titre="A — Antécédents" items={abcOptions.antecedents} onChange={(v) => onSetAbc({ ...abcOptions, antecedents: v })} />
+        <TagListEditor titre="B — Comportements" items={abcOptions.comportements} onChange={(v) => onSetAbc({ ...abcOptions, comportements: v })} />
+        <TagListEditor titre="C — Conséquences" items={abcOptions.consequences} onChange={(v) => onSetAbc({ ...abcOptions, consequences: v })} />
       </Card>
 
       <Card className="mb-4">
@@ -3623,21 +3946,21 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onShareSession, onSetAtelierGroup, notify, activeSession, setActiveSession, onFinish }) {
+function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onShareSession, onExportIoa, onSetAtelierGroup, notify, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
     return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} onFinish={onFinish} />;
   }
   return (
     <SessionSetup
       students={students} ateliers={ateliers} intervenants={intervenants} sessions={sessions}
-      onEditSession={onEditSession} onDeleteSession={onDeleteSession} onShareSession={onShareSession}
+      onEditSession={onEditSession} onDeleteSession={onDeleteSession} onShareSession={onShareSession} onExportIoa={onExportIoa}
       onSetAtelierGroup={onSetAtelierGroup} notify={notify}
       onStart={setActiveSession}
     />
   );
 }
 
-function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onShareSession, onSetAtelierGroup, notify, onStart }) {
+function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onShareSession, onExportIoa, onSetAtelierGroup, notify, onStart }) {
   const [atelierId, setAtelierId] = useState(null);
   const [intervenantId, setIntervenantId] = useState(null);
   const [studentIds, setStudentIds] = useState([]);
@@ -3940,6 +4263,11 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
           <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
             Séances enregistrées — appuyez pour corriger
           </div>
+          <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
+            L'icône de personnes transmet votre cotation à un collègue qui a coté la même séance :
+            il pourra alors mesurer votre accord. Sa propre cotation se reçoit depuis
+            <strong> Gestion → Sauvegarde → Restaurer</strong>.
+          </p>
           <div className="space-y-1.5">
             {sessions.slice(0, 15).map((s) => {
               const a = ateliers.find((x) => x.id === s.atelierId);
@@ -3950,6 +4278,13 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                     <div className="text-xs" style={{ color: INK_SOFT }}>
                       {new Date(s.date).toLocaleDateString('fr-FR')} {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
                     </div>
+                  </button>
+                  <button
+                    onClick={() => onExportIoa(s)}
+                    style={{ color: INK_SOFT }}
+                    title="Transmettre cette cotation pour comparaison"
+                  >
+                    <Users size={16} />
                   </button>
                   <button
                     onClick={() => onShareSession(s)}
@@ -5262,6 +5597,7 @@ function SuiviScreen({ students, sessions, guidances, crises, ateliers, onResetT
         {[
           { k: 'objectifs', label: 'Objectifs', icon: TrendingUp },
           { k: 'crises', label: 'Crises', icon: BarChart3 },
+          { k: 'croisement', label: 'Croisement', icon: Activity },
         ].map((v) => {
           const Icon = v.icon;
           const on = vue === v.k;
@@ -5276,6 +5612,7 @@ function SuiviScreen({ students, sessions, guidances, crises, ateliers, onResetT
       </div>
 
       {vue === 'crises' && <CrisisAnalysis crises={crises} students={students} ateliers={ateliers} />}
+      {vue === 'croisement' && <CrossAnalysis sessions={sessions} crises={crises} students={students} guidances={guidances} />}
       {vue === 'objectifs' && (
       <>
       <div className="space-y-3">
@@ -5314,10 +5651,13 @@ function SuiviScreen({ students, sessions, guidances, crises, ateliers, onResetT
 /* ==================== Analyse des crises ==================== */
 function CrisisAnalysis({ crises, students, ateliers }) {
   const [personne, setPersonne] = useState(null);
-  const retenues = crises.filter((c) => !personne || c.studentId === personne);
+  const [type, setType] = useState('crise');
+
+  const parType = crises.filter((c) => type === 'tout' || (c.kind || 'crise') === type);
+  const retenues = parType.filter((c) => !personne || c.studentId === personne);
 
   if (crises.length === 0) {
-    return <Empty>Aucune crise consignée pour le moment.</Empty>;
+    return <Empty>Aucune crise ni observation consignée pour le moment.</Empty>;
   }
 
   /* Un point par crise : le jour en abscisse, l'heure en ordonnée. C'est la
@@ -5341,6 +5681,20 @@ function CrisisAnalysis({ crises, students, ateliers }) {
   }
   const parAntecedent = compter(retenues.flatMap((c) => c.antecedentTags || []));
   const parComportement = compter(retenues.flatMap((c) => c.comportementTags || []));
+  const parPremier = compter(retenues.map((c) => (c.comportementTags || [])[0]).filter(Boolean));
+
+  /* Délai depuis le dernier enregistrement, par personne : indicateur simple
+     et parlant en réunion d'équipe. */
+  const delais = students
+    .map((st) => {
+      const siennes = parType.filter((c) => c.studentId === st.id);
+      if (!siennes.length) return null;
+      const derniere = siennes.reduce((a, c) => (new Date(c.date) > new Date(a.date) ? c : a));
+      const jours = Math.floor((Date.now() - new Date(derniere.date)) / 86400000);
+      return { initials: st.initials, jours, total: siennes.length, date: derniere.date };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.jours - a.jours);
   const parConsequence = compter(retenues.flatMap((c) => c.consequenceTags || []));
   const parFonction = compter(retenues.map((c) => c.fonction).filter(Boolean));
   const parJour = compter(retenues.map((c) => new Date(c.date).toLocaleDateString('fr-FR', { weekday: 'long' })));
@@ -5374,24 +5728,42 @@ function CrisisAnalysis({ crises, students, ateliers }) {
 
   return (
     <div>
+      <div className="flex gap-1.5 mb-3">
+        {[
+          { k: 'crise', l: 'Crises' },
+          { k: 'abc', l: 'Observations' },
+          { k: 'tout', l: 'Les deux' },
+        ].map((o) => (
+          <button key={o.k} onClick={() => setType(o.k)} className="flex-1 rounded-lg py-2 text-xs border"
+            style={{ borderColor: type === o.k ? INK : BORDER, backgroundColor: type === o.k ? INK : 'transparent', color: type === o.k ? '#fff' : INK_SOFT }}>
+            {o.l} ({crises.filter((c) => o.k === 'tout' || (c.kind || 'crise') === o.k).length})
+          </button>
+        ))}
+      </div>
+
       <div className="flex flex-wrap gap-2 mb-3">
         <Chip label="Toutes" on={!personne} onClick={() => setPersonne(null)} />
-        {students.filter((st) => crises.some((c) => c.studentId === st.id)).map((st) => (
+        {students.filter((st) => parType.some((c) => c.studentId === st.id)).map((st) => (
           <Chip key={st.id} label={st.initials} on={personne === st.id} onClick={() => setPersonne(personne === st.id ? null : st.id)} />
         ))}
       </div>
 
       <Card className="mb-3">
         <div className="flex flex-wrap gap-4 text-sm">
-          <span><span style={{ fontFamily: F_MONO, fontSize: '1.25rem' }}>{retenues.length}</span> crise{retenues.length !== 1 ? 's' : ''}</span>
-          <span><span style={{ fontFamily: F_MONO, fontSize: '1.25rem' }}>{dureeMoy}</span> min en moyenne</span>
+          <span>
+            <span style={{ fontFamily: F_MONO, fontSize: '1.25rem' }}>{retenues.length}</span>{' '}
+            {type === 'abc' ? `observation${retenues.length !== 1 ? 's' : ''}` : `enregistrement${retenues.length !== 1 ? 's' : ''}`}
+          </span>
+          {type !== 'abc' && dureeMoy > 0 && (
+            <span><span style={{ fontFamily: F_MONO, fontSize: '1.25rem' }}>{dureeMoy}</span> min en moyenne</span>
+          )}
         </div>
       </Card>
 
       {points.length > 0 && (
         <Card className="mb-3">
           <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
-            Répartition dans le temps — chaque point est une crise, la couleur indique la fonction supposée
+            Répartition dans le temps — chaque point est un enregistrement, la couleur indique la fonction supposée
           </div>
           <div style={{ height: 240 }} data-no-swipe>
             <ResponsiveContainer width="100%" height="100%">
@@ -5436,7 +5808,29 @@ function CrisisAnalysis({ crises, students, ateliers }) {
       )}
 
       <Barres titre="Antécédents les plus fréquents" donnees={parAntecedent} total={retenues.length} />
-      <Barres titre="Comportements observés" donnees={parComportement} total={retenues.length} />
+      {delais.length > 0 && (
+        <Card className="mb-3">
+          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
+            Délai depuis le dernier enregistrement
+          </div>
+          <div className="space-y-1.5">
+            {delais.map((d) => (
+              <div key={d.initials} className="flex items-center gap-2 rounded-lg px-2.5 py-2" style={{ backgroundColor: PAPER }}>
+                <span className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{d.initials}</span>
+                <span className="text-sm flex-1" style={{ fontFamily: F_MONO, color: d.jours >= 7 ? '#0F8B6C' : INK }}>
+                  {d.jours} jour{d.jours !== 1 ? 's' : ''}
+                </span>
+                <span className="text-xs" style={{ color: INK_SOFT }}>
+                  {d.total} au total · dernier le {new Date(d.date).toLocaleDateString('fr-FR')}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Barres titre="Premier comportement de l'enchaînement" donnees={parPremier} total={retenues.length} />
+      <Barres titre="Comportements observés, tous rangs confondus" donnees={parComportement} total={retenues.length} />
       <Barres titre="Fonctions supposées" donnees={parFonction.map(([k, n]) => [(CRISIS_FUNCTIONS.find((x) => x.k === k) || {}).label || k, n])} total={retenues.length} />
       <Barres titre="Conséquences observées" donnees={parConsequence} total={retenues.length} />
       <Barres titre="Répartition par jour de la semaine" donnees={parJour} total={retenues.length} />
@@ -5579,6 +5973,169 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ==================== Croisement cotations et crises ====================
+   Les progrès s'accompagnent-ils d'une baisse des comportements-défis ?
+   On agrège par semaine : moyenne des cotations en pourcentage d'un côté,
+   nombre d'enregistrements de l'autre. */
+function CrossAnalysis({ sessions, crises, students, guidances }) {
+  const [personne, setPersonne] = useState(null);
+
+  const lundiDe = (d) => {
+    const x = new Date(d);
+    const j = (x.getDay() + 6) % 7; // lundi = 0
+    x.setDate(x.getDate() - j);
+    x.setHours(0, 0, 0, 0);
+    return x.getTime();
+  };
+
+  const semaines = new Map();
+  const touche = (cle) => {
+    if (!semaines.has(cle)) semaines.set(cle, { cle, somme: 0, n: 0, crises: 0 });
+    return semaines.get(cle);
+  };
+
+  sessions.forEach((sess) => {
+    const cle = lundiDe(sess.date);
+    (sess.studentIds || []).forEach((sid) => {
+      if (personne && sid !== personne) return;
+      (sess.selectedObjectives[sid] || []).forEach((oid) => {
+        const obj = sess.objectiveSnapshot[oid];
+        if (!obj) return;
+        const sc = objectiveScore(obj, (sess.data[sid] || {})[oid], guidances);
+        if (!sc || !sc.percent) return;
+        const e = touche(cle);
+        e.somme += sc.value;
+        e.n += 1;
+      });
+    });
+  });
+
+  crises.forEach((c) => {
+    if (personne && c.studentId !== personne) return;
+    touche(lundiDe(c.date)).crises += 1;
+  });
+
+  const donnees = Array.from(semaines.values())
+    .sort((a, b) => a.cle - b.cle)
+    .map((e) => ({
+      label: new Date(e.cle).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }),
+      autonomie: e.n ? Math.round(e.somme / e.n) : null,
+      crises: e.crises,
+    }));
+
+  if (donnees.length < 2) {
+    return <Empty>Il faut au moins deux semaines de données pour un croisement lisible.</Empty>;
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-3">
+        <Chip label="Toutes" on={!personne} onClick={() => setPersonne(null)} />
+        {students.map((st) => (
+          <Chip key={st.id} label={st.initials} on={personne === st.id} onClick={() => setPersonne(personne === st.id ? null : st.id)} />
+        ))}
+      </div>
+
+      <Card className="mb-3">
+        <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
+          Par semaine : taux d'autonomie moyen (courbe) et nombre de crises et observations (barres)
+        </div>
+        <div style={{ height: 260 }} data-no-swipe>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={donnees} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
+              <CartesianGrid stroke={BORDER} vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }} axisLine={{ stroke: BORDER }} tickLine={false} />
+              <YAxis yAxisId="g" domain={[0, 100]} tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }} axisLine={false} tickLine={false} width={44} />
+              <YAxis yAxisId="d" orientation="right" allowDecimals={false} tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }} axisLine={false} tickLine={false} width={32} />
+              <Tooltip
+                contentStyle={{ borderRadius: 12, border: `1px solid ${BORDER}`, fontFamily: 'IBM Plex Sans', fontSize: 12 }}
+                labelFormatter={(l) => `Semaine du ${l}`}
+              />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Bar yAxisId="d" dataKey="crises" name="Crises et observations" fill={CRISIS} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              <Line yAxisId="g" type="monotone" dataKey="autonomie" name="Autonomie (%)" stroke="#0F8B6C" strokeWidth={2.5} dot={{ r: 3 }} connectNulls isAnimationActive={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+
+      <p className="text-xs" style={{ color: INK_SOFT }}>
+        Une évolution parallèle des deux courbes n'établit aucun lien de cause à effet : d'autres
+        facteurs — changement d'équipe, période de l'année, santé — pèsent aussi. Le graphique sert
+        à repérer un moment à examiner, pas à conclure.
+      </p>
+    </div>
+  );
+}
+
+/* Résultat de la comparaison entre deux cotations d'une même séance */
+function IoaResultModal({ resultat, onClose }) {
+  const { lignes, points, pct, nonApparies } = resultat;
+  const couleur = pct == null ? INK_SOFT : pct >= 80 ? '#0F8B6C' : pct >= 60 ? '#D69A2D' : CRISIS;
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto" style={{ backgroundColor: PAPER }}>
+      <div className="max-w-2xl mx-auto px-4 pb-10" style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}>
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-xl font-semibold" style={{ fontFamily: F_DISPLAY }}>Accord inter-observateurs</h1>
+          <button onClick={onClose} className="rounded-xl px-3 py-2 border text-sm" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+            Fermer
+          </button>
+        </div>
+
+        {points === 0 ? (
+          <Empty>Aucun point comparable entre les deux cotations.</Empty>
+        ) : (
+          <>
+            <Card className="mb-3">
+              <div className="text-4xl font-semibold" style={{ fontFamily: F_MONO, color: couleur }}>{pct} %</div>
+              <div className="text-sm mt-1" style={{ color: INK_SOFT }}>
+                d'accord sur <span style={{ fontFamily: F_MONO }}>{points}</span> point{points !== 1 ? 's' : ''} comparé{points !== 1 ? 's' : ''}
+              </div>
+              <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
+                Un accord d'au moins 80 % est l'usage courant pour considérer des relevés fiables.
+                En dessous, il vaut mieux reprendre ensemble les définitions avant de poursuivre.
+              </p>
+            </Card>
+
+            <div className="space-y-1.5 mb-3">
+              {lignes.sort((a, b) => a.pct - b.pct).map((l, i) => (
+                <div key={i} className="rounded-xl border px-3 py-2.5" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm break-words">
+                        <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{l.initials}</span> · {l.objectif}
+                      </div>
+                      <div className="text-xs" style={{ color: INK_SOFT }}>
+                        {TYPES[l.type] ? TYPES[l.type].label : l.type}
+                        {l.proportionnel ? ' · accord proportionnel' : ` · ${Math.round(l.accords)}/${l.points}`}
+                      </div>
+                    </div>
+                    <span className="text-sm font-semibold shrink-0" style={{ fontFamily: F_MONO, color: l.pct >= 80 ? '#0F8B6C' : l.pct >= 60 ? '#D69A2D' : CRISIS }}>
+                      {l.pct} %
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {nonApparies.length > 0 && (
+          <Card>
+            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
+              Non comparés — présents chez l'autre observateur mais pas dans votre cotation
+            </div>
+            <div className="text-xs" style={{ color: INK_SOFT }}>
+              {nonApparies.map((c) => c.replace('|', ' · ')).join(', ')}
+            </div>
+          </Card>
+        )}
+      </div>
     </div>
   );
 }
@@ -5763,7 +6320,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
       {crises.length > 0 && (
         <div className="mt-6">
           <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
-            Crises consignées — appuyez pour modifier
+            Crises et observations — appuyez pour modifier
           </div>
           <div className="space-y-1.5">
             {crises.slice(0, 20).map((c) => {
@@ -5772,9 +6329,15 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
               const names = ids.map((id) => (intervenants.find((i) => i.id === id) || {}).name).filter(Boolean);
               return (
                 <button key={c.id} onClick={() => onEditCrisis(c)} className="w-full text-left rounded-2xl border p-4" style={{ borderColor: BORDER, backgroundColor: CARD }}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{st ? st.initials : 'Personne non renseignée'}</span>
-                    <span className="text-xs" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{fmtDuration(c.durationMs)}</span>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-sm font-semibold min-w-0 truncate" style={{ fontFamily: F_DISPLAY }}>{st ? st.initials : 'Personne non renseignée'}</span>
+                    <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5"
+                      style={{ backgroundColor: c.kind === 'abc' ? '#B07A2E' : CRISIS, color: '#fff' }}>
+                      {c.kind === 'abc' ? 'Observation' : 'Crise'}
+                    </span>
+                    {c.kind !== 'abc' && (
+                      <span className="text-xs shrink-0" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{fmtDuration(c.durationMs)}</span>
+                    )}
                   </div>
                   <div className="text-xs" style={{ color: INK_SOFT }}>
                     {new Date(c.date).toLocaleDateString('fr-FR')} {timeShort(c.date)}
@@ -5796,16 +6359,18 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
 
 
 /* ==================== Module crise ABC ==================== */
-function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, onSave, onDelete }) {
+function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, abcOptions, onSave, onDelete }) {
+  const options = abcOptions || DEFAULT_ABC;
   const isNew = !!crisis.isNew;
   const [picker, setPicker] = useState(null); // zone dont les catégories sont ouvertes
+  const estObservation = crisis.kind === 'abc';
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    if (!isNew) return undefined;
+    if (!isNew || crisis.kind === 'abc') return undefined;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [isNew]);
+  }, [isNew, crisis.kind]);
 
   const elapsed = isNew ? now - crisis.startedAt : crisis.durationMs || 0;
   const set = (patch) => setCrisis((c) => ({ ...c, ...patch }));
@@ -5818,21 +6383,27 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, on
     <div className="fixed inset-0 z-50 overflow-y-auto" style={{ backgroundColor: PAPER }}>
       <div
         className="sticky top-0 px-4 pb-4 text-white"
-        style={{ backgroundColor: CRISIS, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+        style={{ backgroundColor: estObservation ? '#B07A2E' : CRISIS, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
       >
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
-            <AlertTriangle size={20} className="shrink-0" />
+            {estObservation ? <ClipboardList size={20} className="shrink-0" /> : <AlertTriangle size={20} className="shrink-0" />}
             <div className="min-w-0">
               <div className="font-semibold leading-tight" style={{ fontFamily: F_DISPLAY }}>
-                {isNew ? 'Crise en cours' : 'Modifier la crise'}
+                {estObservation
+                  ? (isNew ? 'Observation ABC' : "Modifier l'observation")
+                  : (isNew ? 'Crise en cours' : 'Modifier la crise')}
               </div>
               <div className="text-xs opacity-90 truncate">
-                {isNew ? 'Grille ABC' : `${new Date(crisis.date).toLocaleDateString('fr-FR')} à ${timeShort(crisis.date)}`}
+                {isNew
+                  ? (estObservation ? 'Comportement hors crise' : 'Grille ABC')
+                  : `${new Date(crisis.date).toLocaleDateString('fr-FR')} à ${timeShort(crisis.date)}`}
               </div>
             </div>
           </div>
-          <div className="text-3xl font-semibold tabular-nums shrink-0" style={{ fontFamily: F_MONO }}>{fmtClock(elapsed)}</div>
+          {!estObservation && (
+            <div className="text-3xl font-semibold tabular-nums shrink-0" style={{ fontFamily: F_MONO }}>{fmtClock(elapsed)}</div>
+          )}
         </div>
       </div>
 
@@ -5921,9 +6492,9 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, on
         </div>
 
         {[
-          { k: 'antecedent', tagKey: 'antecedentTags', options: CRISIS_ANTECEDENTS, label: 'A — Antécédent', hint: 'Ce qui se passait juste avant' },
-          { k: 'comportement', tagKey: 'comportementTags', options: CRISIS_BEHAVIORS, label: 'B — Comportement', hint: 'Ce qui a été observé, de façon factuelle' },
-          { k: 'consequence', tagKey: 'consequenceTags', options: CRISIS_CONSEQUENCES, label: 'C — Conséquence', hint: "Ce qui a suivi, réaction de l'environnement" },
+          { k: 'antecedent', tagKey: 'antecedentTags', options: options.antecedents, label: 'A — Antécédent', hint: 'Ce qui se passait juste avant' },
+          { k: 'comportement', tagKey: 'comportementTags', options: options.comportements, label: 'B — Comportement', hint: "Cochez dans l'ordre d'apparition : c'est ce qui donne la chaîne d'escalade", ordonne: true },
+          { k: 'consequence', tagKey: 'consequenceTags', options: options.consequences, label: 'C — Conséquence', hint: "Ce qui a suivi, réaction de l'environnement" },
         ].map((f) => {
           const tags = crisis[f.tagKey] || [];
           const ouvert = picker === f.k;
@@ -5949,10 +6520,13 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, on
 
               {tags.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-2">
-                  {tags.map((v) => (
+                  {tags.map((v, i) => (
                     <button key={v} onClick={() => bascule(v)}
-                      className="rounded-lg pl-2.5 pr-1.5 py-1 text-xs flex items-center gap-1"
+                      className="rounded-lg pl-2 pr-1.5 py-1 text-xs flex items-center gap-1"
                       style={{ backgroundColor: CRISIS, color: '#fff' }}>
+                      {f.ordonne && (
+                        <span className="rounded px-1" style={{ backgroundColor: 'rgba(255,255,255,0.25)', fontFamily: F_MONO }}>{i + 1}</span>
+                      )}
                       {v} <X size={12} />
                     </button>
                   ))}
@@ -6018,8 +6592,10 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, on
         </div>
 
         <div className="flex gap-2 pt-1">
-          <Btn onClick={() => onSave(crisis)} className="flex-1" style={{ backgroundColor: CRISIS }}>
-            {isNew ? <><Square size={16} /> Terminer et enregistrer</> : <><Save size={16} /> Enregistrer les modifications</>}
+          <Btn onClick={() => onSave(crisis)} className="flex-1" style={{ backgroundColor: estObservation ? '#B07A2E' : CRISIS }}>
+            {isNew
+              ? (estObservation ? <><Save size={16} /> Enregistrer</> : <><Square size={16} /> Terminer et enregistrer</>)
+              : <><Save size={16} /> Enregistrer les modifications</>}
           </Btn>
           <Btn variant="ghost" onClick={() => setCrisis(null)}>{isNew ? 'Abandonner' : 'Annuler'}</Btn>
         </div>
@@ -6027,12 +6603,12 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, on
         {!isNew && (
           <button
             onClick={() => {
-              if (window.confirm('Supprimer définitivement cette crise ?')) onDelete(crisis.id);
+              if (window.confirm(`Supprimer définitivement cette ${estObservation ? 'observation' : 'crise'} ?`)) onDelete(crisis.id);
             }}
             className="w-full text-sm flex items-center justify-center gap-1.5 py-2"
             style={{ color: INK_SOFT }}
           >
-            <Trash2 size={14} /> Supprimer cette crise
+            <Trash2 size={14} /> Supprimer cet enregistrement
           </button>
         )}
       </div>
