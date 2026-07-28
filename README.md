@@ -63,16 +63,31 @@ fonctionnement hors connexion après la première ouverture.
 
 ## 3. Le code de sécurité
 
-À la première ouverture, l'application demande de créer un code à **4 ou
-6 chiffres**. Il a deux rôles : verrouiller l'accès, et **chiffrer les données
-enregistrées** sur l'appareil. **6 chiffres sont fortement recommandés.**
+À la première ouverture, l'application demande de choisir une protection :
+
+- **Code chiffré**, à 4 ou 6 chiffres — rapide à saisir. **6 chiffres sont
+  fortement recommandés**, ils protègent nettement mieux que 4.
+- **Mot de passe écrit** — plus solide, mais plus lent à chaque ouverture.
+
+Dans les deux cas, il a deux rôles : verrouiller l'accès, et **chiffrer les
+données enregistrées** sur l'appareil.
 
 - L'application se verrouille **à chaque mise en veille** et après
   **10 minutes sans interaction**.
 - Après **3 codes erronés**, la saisie se suspend 30 secondes ; après 5, cinq
   minutes ; après 8, quinze minutes. Ce délai survit à un redémarrage.
-- Le code se modifie dans **Gestion → Sécurité → Modifier le code**. Les
-  données sont automatiquement rechiffrées.
+- Le code ou mot de passe se modifie dans **Gestion → Sécurité**. Les données
+  sont automatiquement rechiffrées.
+
+### Désactiver la protection
+
+**Gestion → Sécurité** propose de retirer la protection. C'est un vrai recul :
+les données sont alors **déchiffrées et enregistrées en clair**, et quiconque
+accède à l'appareil peut les lire, y compris en récupérant les fichiers. Deux
+confirmations sont demandées.
+
+À n'envisager que si l'appareil est lui-même verrouillé par un code et réservé
+au service. La réactivation se fait depuis le même écran.
 
 > ⚠️ **Le code perdu, les données sont perdues.** Elles sont chiffrées avec lui :
 > il n'existe aucun moyen de les récupérer. Le seul recours est d'effacer
@@ -332,6 +347,16 @@ nombreuses étapes.
 | Note d'observation | Champ libre par personne, exporté à part |
 | **Enregistrer** | Clôture la séance |
 
+### Renforcement
+
+Au-dessus de la zone de cotation, une pastille par personne présente. Un appui
+la met **en renforcement** : ses fiches se grisent, ses cotations sont
+suspendues et ses chronomètres se figent. Un second appui reprend la cotation.
+
+Le temps cumulé s'affiche sur la pastille. Le rapport Excel indique, pour chaque
+personne et chaque séance, le **temps de renforcement** et le **temps
+d'activité** correspondant.
+
 L'écran reste allumé pendant la cotation (mention « écran maintenu »). Si elle
 n'apparaît pas, réglez la mise en veille de l'appareil sur « jamais ».
 
@@ -340,6 +365,10 @@ n'apparaît pas, réglez la mise en veille de l'appareil sur « jamais ».
 En bas de l'écran de préparation : la liste des séances passées. Appuyez sur
 l'une d'elles pour **corriger ses cotations**, sur l'icône de partage pour
 transmettre son rapport, ou sur la corbeille pour la supprimer.
+
+Un bouton en fin de liste permet de **supprimer toutes les séances** d'un coup,
+après deux confirmations. Les courbes de suivi repartent alors de zéro :
+exportez vos rapports et une sauvegarde avant.
 
 ### Accord inter-observateurs
 
@@ -436,7 +465,7 @@ et par personne :
   l'escalade démarre le plus souvent ;
 - le **classement des antécédents**, des **comportements observés**, des
   **fonctions supposées** et des **conséquences**, en nombre et en pourcentage ;
-- la **répartition par jour de la semaine** ;
+- la **répartition par atelier** et **par jour de la semaine** ;
 - le nombre d'enregistrements et leur durée moyenne.
 
 > Ces répartitions décrivent ce qui a été observé et coché. Elles orientent une
