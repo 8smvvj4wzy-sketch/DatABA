@@ -1372,6 +1372,10 @@ function EditableRow({ label, onRename, onRemove, chip }) {
   );
 }
 
+/* Vrai pendant un déplacement par appui long : évite qu'un balayage se
+   déclenche en même temps que le réordonnancement. */
+let reorderDragging = false;
+
 /* Liste réordonnable : appui long (~0,3 s) puis glissement vertical.
    Les écouteurs sont posés en natif avec passive:false, indispensable pour
    bloquer le défilement pendant le déplacement — React les poserait en passif. */
@@ -1433,6 +1437,7 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
       clearTimeout(s.timer);
       s.timer = setTimeout(() => {
         s.dragging = true;
+        reorderDragging = true;
         s.over = i;
         setDragKey(keyOfRef.current(itemsRef.current[i]));
         setOverIndex(i);
@@ -1470,6 +1475,7 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
         setTimeout(() => { s.justDragged = false; }, 250);
       }
       s.dragging = false; s.from = null; s.over = null;
+      reorderDragging = false;
       setDragKey(null); setOverIndex(null);
     }
 
@@ -1549,11 +1555,11 @@ const TAB_ORDER = ['admin', 'students', 'session', 'suivi', 'export'];
 /* Un balayage ne doit pas voler le geste à une zone qui défile déjà
    horizontalement (grille d'essais, grille d'intervalles), à un champ de
    saisie, ni à un graphique. */
-function ownsHorizontalGesture(target, boundary) {
+function ownsHorizontalGesture(target, boundary, ignoreNoSwipe) {
   let n = target;
   while (n && n !== document.body) {
     if (boundary && n === boundary) return false; // on s'arrête au conteneur qui gère le geste
-    if (n.dataset && n.dataset.noSwipe !== undefined) return true;
+    if (!ignoreNoSwipe && n.dataset && n.dataset.noSwipe !== undefined) return true;
     const tag = n.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
     if (n.scrollWidth > n.clientWidth + 4) {
@@ -1569,7 +1575,7 @@ function ownsHorizontalGesture(target, boundary) {
    Le contenu suit le doigt de façon amortie et plafonnée : assez pour que le
    geste soit tangible, sans déplacer toute la page hors de l'écran — ce qui
    provoquait des blancs de rendu sur iOS. */
-function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument = false }) {
+function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument = false, ignoreNoSwipe = false }) {
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [el, setEl] = useState(null);
@@ -1591,7 +1597,7 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
     const MAX = 80;
 
     function start(e) {
-      if (e.touches.length !== 1 || ownsHorizontalGesture(e.target, boundary)) {
+      if (e.touches.length !== 1 || reorderDragging || ownsHorizontalGesture(e.target, boundary, ignoreNoSwipe)) {
         state.current = null;
         return;
       }
@@ -1602,6 +1608,13 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
     function move(e) {
       const g = state.current;
       if (!g || e.touches.length !== 1) return;
+      if (reorderDragging) {
+        // Un déplacement d'objectif vient de démarrer : on abandonne le balayage
+        state.current = null;
+        setDragging(false);
+        setOffset(0);
+        return;
+      }
       const t = e.touches[0];
       const dx = t.clientX - g.x;
       const dy = t.clientY - g.y;
@@ -1637,7 +1650,7 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
       target.removeEventListener('touchend', end);
       target.removeEventListener('touchcancel', end);
     };
-  }, [el, onLeft, onRight, enabled, onDocument]);
+  }, [el, onLeft, onRight, enabled, onDocument, ignoreNoSwipe]);
 
   return { offset, dragging };
 }
@@ -3849,7 +3862,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      le changement de page — ne bloque pas ce geste-ci. */
   const toStudentView = React.useCallback(() => setViewMode('student'), []);
   const toPriorityView = React.useCallback(() => setViewMode('priority'), []);
-  const cotationSwipe = useHorizontalSwipe(cotationRef, { onLeft: toStudentView, onRight: toPriorityView });
+  const cotationSwipe = useHorizontalSwipe(cotationRef, { onLeft: toStudentView, onRight: toPriorityView, ignoreNoSwipe: true });
 
   const atelier = ateliers.find((a) => a.id === session.atelierId);
   const intervenant = intervenants.find((i) => i.id === session.intervenantId);
@@ -3904,7 +3917,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
   return (
     <div>
-      <div className="flex items-start justify-between mb-4 gap-2">
+      <div className="flex flex-col gap-2 mb-4 landscape:flex-row landscape:items-start landscape:justify-between">
         <div className="min-w-0">
           <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>{atelier ? atelier.name : session.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</h1>
           <p className="text-sm" style={{ color: INK_SOFT }}>
@@ -3913,7 +3926,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
             {!isEdit && wakeOk && <> · <Sun size={12} className="inline" /> écran maintenu</>}
           </p>
         </div>
-        <div className="flex gap-2 shrink-0">
+        <div className="flex flex-wrap gap-2 shrink-0">
           {hasInterval && !isEdit && (
             <button
               onClick={() => { const next = !soundOn; setSoundOn(next); if (next) { primeAudio(); beep(); } }}
@@ -4272,7 +4285,7 @@ function ObjectiveHeader({ obj, entry, guidances }) {
       <div className="flex items-start gap-2 min-w-0">
         <Icon size={16} style={{ color: meta.color, marginTop: 2 }} className="shrink-0" />
         <div className="min-w-0">
-          <div className="font-medium leading-snug">{obj.name}</div>
+          <div className="font-medium leading-snug break-words" style={{ overflowWrap: 'anywhere' }}>{obj.name}</div>
           {cible && (
             <div className="text-xs mt-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5" style={{ backgroundColor: PAPER, color: INK }}>
               <Target size={11} /> {cible}
@@ -4426,7 +4439,7 @@ function TrialsWidget({ obj, entry, guidances, now, onChange }) {
             style={{ backgroundColor: g.color }}
           >
             <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
-            <div className="text-[10px] opacity-90 leading-tight">{g.label}</div>
+            <div className="text-[10px] opacity-90 leading-tight break-words" style={{ overflowWrap: 'anywhere' }}>{g.label}</div>
           </button>
         ))}
       </div>
@@ -4463,7 +4476,7 @@ function ProbeWidget({ obj, entry, guidances, onChange }) {
               style={{ borderColor: g.color, backgroundColor: on ? g.color : 'transparent', color: on ? '#fff' : g.color }}
             >
               <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
-              <div className="text-[10px] opacity-90 leading-tight">{g.label}</div>
+              <div className="text-[10px] opacity-90 leading-tight break-words" style={{ overflowWrap: 'anywhere' }}>{g.label}</div>
             </button>
           );
         })}
@@ -4664,8 +4677,8 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
                 else marks[current] = l.id;
                 onChange({ marks });
               }}
-              className="rounded-xl py-3 px-3 text-sm border-2 text-left active:scale-95 transition-transform"
-              style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? '#fff' : color, fontFamily: F_DISPLAY }}>
+              className="rounded-xl py-3 px-2.5 text-sm border-2 text-left leading-tight break-words hyphens-auto active:scale-95 transition-transform"
+              style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? '#fff' : color, fontFamily: F_DISPLAY, overflowWrap: 'anywhere' }}>
               {l.name}
             </button>
           );
@@ -4730,8 +4743,8 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
                 const on = levelId === l.id;
                 return (
                   <button key={l.id} onClick={() => setLevelId(l.id)}
-                    className="rounded-lg px-3 py-2 text-xs border"
-                    style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? '#fff' : color }}>
+                    className="rounded-lg px-2.5 py-2 text-xs border leading-tight break-words"
+                    style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? '#fff' : color, overflowWrap: 'anywhere' }}>
                     {l.name}
                   </button>
                 );
@@ -4774,7 +4787,7 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
             <div key={s.id} className="rounded-xl px-2.5 py-2" style={{ backgroundColor: PAPER }}>
               <div className="flex items-start gap-2 mb-1.5">
                 <span className="text-xs w-5 shrink-0 pt-0.5" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
-                <span className="text-sm flex-1 leading-snug">{s.name}</span>
+                <span className="text-sm flex-1 leading-snug break-words" style={{ overflowWrap: 'anywhere' }}>{s.name}</span>
               </div>
               <div className="flex flex-wrap gap-1">
                 {list.map((g) => {
@@ -4877,7 +4890,7 @@ function BalanceWidget({ obj, entry, onChange }) {
             <div key={st.id} className="rounded-xl px-2.5 py-2" style={{ backgroundColor: PAPER }}>
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="text-xs w-5 shrink-0" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
-                <span className="text-sm flex-1 min-w-0 truncate">{st.name}</span>
+                <span className="text-sm flex-1 min-w-0 leading-snug break-words" style={{ overflowWrap: 'anywhere' }}>{st.name}</span>
               </div>
               <div className="flex gap-1 mb-1.5">
                 {BALANCE_OUTCOMES.map((o) => {
