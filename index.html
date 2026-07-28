@@ -20,14 +20,24 @@
     <link rel="apple-touch-icon" href="./icon-192.png" />
     <link rel="icon" type="image/png" href="./icon-192.png" />
 
-    <!-- Polices : si la tablette est hors ligne, l'application bascule
-         automatiquement sur les polices du système. -->
+    <!-- Polices chargées sans bloquer l'affichage : avec un rel="stylesheet"
+         classique, un réseau lent laisse l'écran blanc jusqu'à expiration du
+         délai. Ici l'application s'affiche tout de suite avec les polices du
+         système, et bascule sur les polices choisies dès qu'elles arrivent. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap"
       rel="stylesheet"
+      media="print"
+      onload="this.media='all'; this.onload=null;"
     />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
   </head>
   <body>
     <div id="root"></div>
