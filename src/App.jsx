@@ -149,6 +149,17 @@ const CRISIS_ANTECEDENTS = [
   'Fin d\'activité appréciée',
   'Aucun déclencheur identifié',
 ];
+const CRISIS_BEHAVIORS = [
+  'Auto-agression',
+  'Hétéro-agression',
+  'Morsure',
+  'Mise au sol',
+  'Cris',
+  'Jet d\'objet',
+  'Destruction de matériel',
+  'Fuite, départ de la pièce',
+  'Refus, immobilité',
+];
 const CRISIS_CONSEQUENCES = [
   'Retrait de la demande',
   'Attention de l\'adulte',
@@ -1194,7 +1205,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
-  const crisisRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Antécédents', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement', 'Conséquence (libre)', 'Commentaire']];
+  const crisisRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Antécédents', 'Comportements', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire']];
   crises.forEach((c) => {
     if (studentFilter && c.studentId && !studentFilter.includes(c.studentId)) return;
     const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
@@ -1209,6 +1220,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
       fmtDuration(c.durationMs),
       Math.round((c.durationMs || 0) / 1000),
       (c.antecedentTags || []).join(' | '),
+      (c.comportementTags || []).join(' | '),
       f ? f.label : '',
       (c.consequenceTags || []).join(' | '),
       c.antecedent || '',
@@ -1218,7 +1230,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
     ]);
   });
   const ws2 = XLSX.utils.aoa_to_sheet(crisisRows);
-  ws2['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
+  ws2['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 34 }, { wch: 34 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
   XLSX.utils.book_append_sheet(wb, ws2, 'Crises');
 
   const noteRows = [['Date', 'Heure', 'Atelier', 'Personne accompagnée', 'Note']];
@@ -5328,6 +5340,7 @@ function CrisisAnalysis({ crises, students, ateliers }) {
     return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
   }
   const parAntecedent = compter(retenues.flatMap((c) => c.antecedentTags || []));
+  const parComportement = compter(retenues.flatMap((c) => c.comportementTags || []));
   const parConsequence = compter(retenues.flatMap((c) => c.consequenceTags || []));
   const parFonction = compter(retenues.map((c) => c.fonction).filter(Boolean));
   const parJour = compter(retenues.map((c) => new Date(c.date).toLocaleDateString('fr-FR', { weekday: 'long' })));
@@ -5423,6 +5436,7 @@ function CrisisAnalysis({ crises, students, ateliers }) {
       )}
 
       <Barres titre="Antécédents les plus fréquents" donnees={parAntecedent} total={retenues.length} />
+      <Barres titre="Comportements observés" donnees={parComportement} total={retenues.length} />
       <Barres titre="Fonctions supposées" donnees={parFonction.map(([k, n]) => [(CRISIS_FUNCTIONS.find((x) => x.k === k) || {}).label || k, n])} total={retenues.length} />
       <Barres titre="Conséquences observées" donnees={parConsequence} total={retenues.length} />
       <Barres titre="Répartition par jour de la semaine" donnees={parJour} total={retenues.length} />
@@ -5768,7 +5782,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                     {names.length > 0 && <> · {names.join(', ')}</>}
                   </div>
                   <div className="text-xs mt-1" style={{ color: INK_SOFT }}>
-                    {c.comportement || 'comportement non renseigné'}
+                    {(c.comportementTags || []).join(', ') || c.comportement || 'comportement non renseigné'}
                   </div>
                 </button>
               );
@@ -5784,6 +5798,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
 /* ==================== Module crise ABC ==================== */
 function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, onSave, onDelete }) {
   const isNew = !!crisis.isNew;
+  const [picker, setPicker] = useState(null); // zone dont les catégories sont ouvertes
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -5905,68 +5920,102 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, on
           )}
         </div>
 
-        <div>
-          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
-            Antécédents — plusieurs choix possibles, c'est ce qui permet de repérer des motifs
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {CRISIS_ANTECEDENTS.map((a) => {
-              const on = (crisis.antecedentTags || []).includes(a);
-              return (
-                <Chip key={a} label={a} color={CRISIS} on={on}
-                  onClick={() => set({ antecedentTags: on ? (crisis.antecedentTags || []).filter((x) => x !== a) : [...(crisis.antecedentTags || []), a] })} />
-              );
-            })}
-          </div>
-        </div>
+        {[
+          { k: 'antecedent', tagKey: 'antecedentTags', options: CRISIS_ANTECEDENTS, label: 'A — Antécédent', hint: 'Ce qui se passait juste avant' },
+          { k: 'comportement', tagKey: 'comportementTags', options: CRISIS_BEHAVIORS, label: 'B — Comportement', hint: 'Ce qui a été observé, de façon factuelle' },
+          { k: 'consequence', tagKey: 'consequenceTags', options: CRISIS_CONSEQUENCES, label: 'C — Conséquence', hint: "Ce qui a suivi, réaction de l'environnement" },
+        ].map((f) => {
+          const tags = crisis[f.tagKey] || [];
+          const ouvert = picker === f.k;
+          const bascule = (v) =>
+            set({ [f.tagKey]: tags.includes(v) ? tags.filter((x) => x !== v) : [...tags, v] });
+          return (
+            <div key={f.k} className="rounded-2xl border p-3" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+              <div className="flex items-start justify-between gap-2 mb-1">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{f.label}</div>
+                  <div className="text-xs" style={{ color: INK_SOFT }}>{f.hint}</div>
+                </div>
+                {/* Le + ouvre les catégories : c'est elles qui rendent les crises comptables */}
+                <button
+                  onClick={() => setPicker(ouvert ? null : f.k)}
+                  className="shrink-0 w-8 h-8 rounded-lg border flex items-center justify-center"
+                  style={{ borderColor: ouvert ? CRISIS : BORDER, backgroundColor: ouvert ? CRISIS : 'transparent', color: ouvert ? '#fff' : CRISIS }}
+                  title="Ajouter des catégories"
+                >
+                  {ouvert ? <X size={16} /> : <Plus size={18} />}
+                </button>
+              </div>
+
+              {tags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {tags.map((v) => (
+                    <button key={v} onClick={() => bascule(v)}
+                      className="rounded-lg pl-2.5 pr-1.5 py-1 text-xs flex items-center gap-1"
+                      style={{ backgroundColor: CRISIS, color: '#fff' }}>
+                      {v} <X size={12} />
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {ouvert && (
+                <div className="rounded-xl p-2 mb-2" style={{ backgroundColor: PAPER }}>
+                  <div className="flex flex-wrap gap-1.5">
+                    {f.options.filter((v) => !tags.includes(v)).map((v) => (
+                      <button key={v} onClick={() => bascule(v)}
+                        className="rounded-lg px-2.5 py-1.5 text-xs border"
+                        style={{ borderColor: BORDER, color: INK, backgroundColor: CARD }}>
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                  {f.options.every((v) => tags.includes(v)) && (
+                    <div className="text-xs" style={{ color: INK_SOFT }}>Toutes les catégories sont retenues.</div>
+                  )}
+                </div>
+              )}
+
+              <textarea
+                value={crisis[f.k] || ''}
+                onChange={(e) => set({ [f.k]: e.target.value })}
+                rows={2}
+                placeholder="Précisions libres"
+                className="w-full rounded-xl border px-3 py-2.5 text-base bg-transparent"
+                style={{ borderColor: BORDER, fontFamily: F_BODY, color: INK }}
+              />
+            </div>
+          );
+        })}
 
         <div>
-          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Conséquences observées</div>
+          <div className="text-sm font-medium mb-1" style={{ fontFamily: F_DISPLAY }}>Fonction supposée</div>
+          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Hypothèse de travail, à confronter aux observations répétées</div>
           <div className="flex flex-wrap gap-2">
-            {CRISIS_CONSEQUENCES.map((c) => {
-              const on = (crisis.consequenceTags || []).includes(c);
+            {CRISIS_FUNCTIONS.map((fn) => {
+              const on = crisis.fonction === fn.k;
               return (
-                <Chip key={c} label={c} color={CRISIS} on={on}
-                  onClick={() => set({ consequenceTags: on ? (crisis.consequenceTags || []).filter((x) => x !== c) : [...(crisis.consequenceTags || []), c] })} />
-              );
-            })}
-          </div>
-        </div>
-
-        <div>
-          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Fonction supposée</div>
-          <div className="flex flex-wrap gap-2">
-            {CRISIS_FUNCTIONS.map((f) => {
-              const on = crisis.fonction === f.k;
-              return (
-                <button key={f.k} onClick={() => set({ fonction: on ? null : f.k })}
+                <button key={fn.k} onClick={() => set({ fonction: on ? null : fn.k })}
                   className="rounded-xl px-4 py-2.5 border text-sm"
-                  style={{ fontFamily: F_DISPLAY, borderColor: f.color, backgroundColor: on ? f.color : 'transparent', color: on ? '#fff' : f.color }}>
-                  {f.label}
+                  style={{ fontFamily: F_DISPLAY, borderColor: fn.color, backgroundColor: on ? fn.color : 'transparent', color: on ? '#fff' : fn.color }}>
+                  {fn.label}
                 </button>
               );
             })}
           </div>
         </div>
 
-        {[
-          { k: 'antecedent', label: 'A — Antécédent', hint: 'Précisions libres sur ce qui se passait juste avant' },
-          { k: 'comportement', label: 'B — Comportement', hint: 'Ce qui a été observé, de façon factuelle' },
-          { k: 'consequence', label: 'C — Conséquence', hint: "Ce qui a suivi, réaction de l'environnement" },
-          { k: 'commentaire', label: 'Commentaire', hint: 'Contexte, hypothèses, suites à donner' },
-        ].map((f) => (
-          <div key={f.k}>
-            <div className="text-sm font-medium mb-1" style={{ fontFamily: F_DISPLAY }}>{f.label}</div>
-            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>{f.hint}</div>
-            <textarea
-              value={crisis[f.k] || ''}
-              onChange={(e) => set({ [f.k]: e.target.value })}
-              rows={3}
-              className="w-full rounded-xl border px-3 py-2.5 text-base bg-transparent"
-              style={{ borderColor: BORDER, fontFamily: F_BODY, color: INK }}
-            />
-          </div>
-        ))}
+        <div>
+          <div className="text-sm font-medium mb-1" style={{ fontFamily: F_DISPLAY }}>Commentaire</div>
+          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Contexte, hypothèses, suites à donner</div>
+          <textarea
+            value={crisis.commentaire || ''}
+            onChange={(e) => set({ commentaire: e.target.value })}
+            rows={3}
+            className="w-full rounded-xl border px-3 py-2.5 text-base bg-transparent"
+            style={{ borderColor: BORDER, fontFamily: F_BODY, color: INK }}
+          />
+        </div>
 
         <div className="flex gap-2 pt-1">
           <Btn onClick={() => onSave(crisis)} className="flex-1" style={{ backgroundColor: CRISIS }}>
