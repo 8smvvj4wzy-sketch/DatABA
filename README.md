@@ -327,6 +327,11 @@ comptabilisées à part.
    personnes, leurs objectifs, et les prioritaires. Au prochain choix de cet
    atelier, tout se recoche automatiquement.
 
+> **Les objectifs créés ensuite sont ajoutés d'office** au rappel de la
+> configuration, avec un message le signalant : un nouvel objectif n'échappe
+> donc jamais à un atelier déjà réglé. En revanche, un objectif que vous aviez
+> volontairement décoché reste décoché.
+
 ### Coter
 
 Deux vues, séparées par un curseur au centre (ou par balayage) :
@@ -337,8 +342,11 @@ Deux vues, séparées par un curseur au centre (ou par balayage) :
 
 Le **rail de cercles** à droite bascule d'une personne à l'autre.
 
-**En paysage, les objectifs s'affichent sur deux colonnes** — six tiennent alors
-à l'écran sans défilement — et sur trois colonnes sur les grands écrans.
+**En paysage, les objectifs se répartissent en colonnes** selon la largeur
+disponible. Le bouton de pourcentage dans l'en-tête (**100 % / 85 % / 70 % /
+60 %**) règle la densité : plus elle est réduite, plus il tient d'objectifs à
+l'écran. Sur iPhone en paysage, comptez 70 % pour en voir six d'un coup ; sur
+tablette, 100 % suffit souvent. Le réglage est mémorisé d'une séance à l'autre.
 
 **Réorganiser** : appui long sur un objectif puis glissement, pour le placer où
 vous voulez. L'ordre est propre à la séance et vaut pour les deux vues.
@@ -353,6 +361,7 @@ Pendant la séance :
 |---|---|
 | Œil barré | Masquer un objectif pour gagner de la place |
 | Expansion | Agrandir la fiche en plein écran |
+| Pourcentage | Régler la densité d'affichage |
 | Pause | Arrêter la séance : chronomètres et intervalles se figent |
 | Croix | Abandonner la séance (avec confirmation) |
 | Haut-parleur / vibreur | Couper le son ou la vibration des alertes d'intervalle |
