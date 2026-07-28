@@ -229,13 +229,20 @@ async function decryptValue(raw, key) {
 }
 
 /* ==================== Écran de verrouillage ==================== */
-function PinPad({ title, subtitle, onSubmit, error, digits = 4, submitLabel, disabled }) {
+function PinPad({ title, subtitle, onSubmit, error, digits, submitLabel, disabled }) {
   const [value, setValue] = useState('');
+  /* Sans longueur connue, on accepte 4 à 8 chiffres avec validation manuelle :
+     c'est ce qui permet de rentrer un code plus long que prévu. */
+  const flexible = !digits;
+  const maxLen = digits || 8;
+  const minLen = digits || 4;
+  const showValidate = flexible || !!submitLabel;
+
   function press(d) {
-    if (disabled || value.length >= digits) return;
+    if (disabled || value.length >= maxLen) return;
     const next = value + d;
     setValue(next);
-    if (next.length === digits && !submitLabel) {
+    if (!showValidate && next.length === digits) {
       onSubmit(next);
       setValue('');
     }
@@ -243,13 +250,18 @@ function PinPad({ title, subtitle, onSubmit, error, digits = 4, submitLabel, dis
   function backspace() {
     setValue((v) => v.slice(0, -1));
   }
+  function validate() {
+    if (value.length < minLen) return;
+    onSubmit(value);
+    setValue('');
+  }
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{ background: PAPER, fontFamily: F_BODY }}>
       <div className="w-full max-w-xs">
         <h1 className="text-xl font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY, color: INK }}>{title}</h1>
         {subtitle && <p className="text-sm text-center mb-5" style={{ color: INK_SOFT }}>{subtitle}</p>}
         <div className="flex justify-center gap-3 mb-6">
-          {Array.from({ length: digits }, (_, i) => (
+          {Array.from({ length: Math.max(minLen, value.length) }, (_, i) => (
             <div key={i} className="w-4 h-4 rounded-full border-2" style={{ borderColor: INK, backgroundColor: i < value.length ? INK : 'transparent' }} />
           ))}
         </div>
@@ -269,8 +281,10 @@ function PinPad({ title, subtitle, onSubmit, error, digits = 4, submitLabel, dis
             )
           )}
         </div>
-        {submitLabel && (
-          <Btn onClick={() => onSubmit(value)} disabled={value.length !== digits} className="w-full mt-5">{submitLabel}</Btn>
+        {showValidate && (
+          <Btn onClick={validate} disabled={disabled || value.length < minLen} className="w-full mt-5">
+            {submitLabel || 'Valider'}
+          </Btn>
         )}
       </div>
     </div>
@@ -287,7 +301,7 @@ function lockDelayMs(failed) {
 }
 
 function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
-  const digits = security.pinDigits || 4;
+  const digits = security.pinDigits || null; // null : longueur inconnue, saisie libre
   const [step, setStep] = useState(security.pinHash ? 'enter' : 'choose');
   const [newDigits, setNewDigits] = useState(4);
   const [firstPin, setFirstPin] = useState('');
@@ -369,7 +383,9 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
           title={waiting ? 'Saisie suspendue' : 'Code verrouillé'}
           subtitle={waiting
             ? `Trop de codes erronés. Nouvel essai possible dans ${fmtClock(reste * 1000)}.`
-            : `Saisissez votre code à ${digits} chiffres`}
+            : digits
+            ? `Saisissez votre code à ${digits} chiffres`
+            : 'Saisissez votre code, puis validez'}
           onSubmit={handleEnter}
           error={error}
           digits={digits}
@@ -1665,7 +1681,17 @@ export default function App() {
     (async () => {
       const sec = await store.getRaw('aba:security');
       if (sec) {
-        try { setSecurity(JSON.parse(sec)); } catch (e) {}
+        try {
+          let parsed = JSON.parse(sec);
+          // Un code enregistré sans longueur connue vient d'une version où le
+          // changement de code était défectueux : les échecs accumulés
+          // portaient sur une saisie impossible, on repart à zéro.
+          if (parsed.pinHash && !parsed.pinDigits && (parsed.failedAttempts || parsed.lockUntil)) {
+            parsed = { ...parsed, failedAttempts: 0, lockUntil: 0 };
+            await store.setRaw('aba:security', JSON.stringify(parsed));
+          }
+          setSecurity(parsed);
+        } catch (e) {}
       }
       setSecurityLoaded(true);
     })();
@@ -1722,22 +1748,73 @@ export default function App() {
     setLoaded(true);
   }
 
+  /* Vérifie qu'une clé déchiffre bien les données déjà enregistrées. */
+  async function keyOpensData(key) {
+    const raw = await store.getRaw('aba:config');
+    if (raw == null) return true; // rien d'enregistré, rien à vérifier
+    let env = null;
+    try { env = JSON.parse(raw); } catch (e) { return true; }
+    if (!env || env.__enc !== 1) return true; // enregistrement en clair
+    try {
+      await decryptValue(raw, key);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /* Rechiffre les données d'une clé vers une autre, au niveau du stockage :
+     aucune donnée ne transite par l'état React, ce qui évite toute perte. */
+  async function reEncrypt(fromKey, toKey) {
+    for (const k of ['aba:config', 'aba:sessions', 'aba:crises', 'aba:active']) {
+      const raw = await store.getRaw(k);
+      if (raw == null) continue;
+      try {
+        const plain = await decryptValue(raw, fromKey);
+        await store.setRaw(k, await encryptValue(plain, toKey));
+      } catch (e) { /* enregistrement illisible : on n'y touche pas */ }
+    }
+  }
+
   /* Déverrouillage : on dérive la clé de chiffrement, puis on charge. */
   async function unlockWith(pin) {
     let sec = security;
+    let changed = false;
     if (!sec.dataSalt) {
       // Installation antérieure au chiffrement : on crée le sel maintenant,
       // les données en clair seront réécrites chiffrées à la première sauvegarde.
       sec = { ...sec, dataSalt: newSalt() };
+      changed = true;
+    }
+    if (!sec.pinDigits) {
+      // Longueur inconnue : on la retient d'après le code réellement saisi
+      sec = { ...sec, pinDigits: pin.length };
+      changed = true;
+    }
+    if (sec.failedAttempts || sec.lockUntil) {
+      sec = { ...sec, failedAttempts: 0, lockUntil: 0 };
+      changed = true;
+    }
+    if (changed) {
       setSecurity(sec);
       await store.setRaw('aba:security', JSON.stringify(sec));
     }
-    if (sec.failedAttempts || sec.lockUntil) {
-      const reset = { ...sec, failedAttempts: 0, lockUntil: 0 };
-      setSecurity(reset);
-      await store.setRaw('aba:security', JSON.stringify(reset));
+
+    const key = await deriveDataKey(pin, sec.dataSalt);
+
+    /* Réparation d'une anomalie d'une version antérieure : lors d'un changement
+       de code, le code saisi n'était pas transmis et les données avaient été
+       rechiffrées avec une clé bâtie sur une valeur vide. On la reconnaît ici
+       et on rechiffre proprement avec le code réel. */
+    if (!(await keyOpensData(key))) {
+      const cleDefectueuse = await deriveDataKey('undefined', sec.dataSalt);
+      if (await keyOpensData(cleDefectueuse)) {
+        await reEncrypt(cleDefectueuse, key);
+        setTimeout(() => notify('Données récupérées et rechiffrées'), 600);
+      }
     }
-    dataKey = await deriveDataKey(pin, sec.dataSalt);
+
+    dataKey = key;
     setLocked(false);
     await loadData();
   }
@@ -2464,7 +2541,7 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
         {changingPin && (
           <ChangePinModal
             security={security}
-            onSave={(hash, salt) => { onChangePin(hash, salt); setChangingPin(false); }}
+            onSave={(hash, salt, digits, pin) => { onChangePin(hash, salt, digits, pin); setChangingPin(false); }}
             onClose={() => setChangingPin(false)}
           />
         )}
