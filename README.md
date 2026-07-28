@@ -197,6 +197,8 @@ Appuyez sur une personne pour dérouler ses objectifs.
 ### Créer un objectif
 
 1. **Intitulé** — la formulation qui parle à l'équipe.
+1bis. **Phase** — Ligne de base, Intervention, Maintien ou Généralisation. Sans
+   ce repère, une courbe ne dit pas ce qui a produit un changement.
 2. **Mode de cotation** — parmi les huit décrits en section 7.
 3. **Réglages propres au mode** (nombre d'essais, durée, étapes…).
 4. **Réponses possibles** — pour les modes à guidance : lesquelles s'affichent,
@@ -219,11 +221,26 @@ suivante** et vous le signale.
 Le passage a lieu à l'**enregistrement d'une séance**, jamais en cours de
 cotation.
 
+### Changer de phase
+
+Le bouton portant le nom de la phase, sous l'intitulé de l'objectif, la fait
+passer à la suivante après confirmation. Le changement est **daté** et trace un
+**repère vertical sur la courbe de suivi** : on voit alors précisément à partir
+de quelle séance l'intervention a commencé.
+
+### Modèles d'objectifs
+
+L'icône signet enregistre un objectif comme **modèle réutilisable**, avec son
+mode de cotation, ses cibles, son critère et ses réponses. À la création d'un
+objectif, le second bouton propose de partir d'un modèle. Les modèles se gèrent
+dans **Gestion → Modèles d'objectifs**, et s'exportent avec la configuration.
+
 ### Actions sur un objectif
 
 | Icône | Effet |
 |---|---|
 | ⭐ | Objectif prioritaire, **quel que soit l'atelier** |
+| Signet | Enregistrer comme modèle réutilisable |
 | Copier | Dupliquer vers d'autres personnes (copies indépendantes) |
 | Crayon | Modifier |
 | Corbeille | Supprimer (avec confirmation) |
@@ -395,7 +412,11 @@ fiche avec **un chronomètre qui démarre seul**.
 
 - **Personne concernée**, **atelier**, **intervenants présents** — pré-remplis
   si une séance est en cours ;
-- **A — Antécédent** : ce qui se passait juste avant ;
+- **Antécédents**, **conséquences observées** et **fonction supposée**
+  (attention, échappement, tangible, sensoriel, indéterminée) — cochables,
+  plusieurs choix possibles. Ce sont ces catégories qui rendent les crises
+  comptables : un texte seul ne s'agrège pas ;
+- **A — Antécédent** : précisions libres sur ce qui se passait juste avant ;
 - **B — Comportement** : ce qui a été observé, de façon factuelle ;
 - **C — Conséquence** : ce qui a suivi, réaction de l'environnement ;
 - **Commentaire** : contexte, hypothèses, suites à donner.
@@ -410,6 +431,10 @@ d'elles pour la modifier, y compris la date, l'heure et la durée si le bouton a
 
 ## 10. Écran Suivi
 
+Deux vues, au choix : **Objectifs** ou **Crises**.
+
+### Objectifs
+
 Une courbe par objectif, avec :
 
 - le **seuil d'acquisition** en pointillé ;
@@ -417,10 +442,29 @@ Une courbe par objectif, avec :
 - pour les objectifs à cibles, la liste des cibles avec celles déjà acquises,
   la courbe ne portant que sur la **cible en cours**.
 
+- des **repères verticaux datés** à chaque changement de phase, avec son nom.
+
 **Réinitialiser le suivi** (sous la courbe) fait repartir la courbe et le
 critère de zéro, par exemple après un changement de protocole. Les séances
 enregistrées ne sont **pas** supprimées : elles restent dans les exports, seule
 la date de reprise change.
+
+### Crises
+
+Une analyse d'ensemble des crises consignées, filtrable par personne :
+
+- un **nuage de points temporel** — le jour en abscisse, l'heure en ordonnée,
+  une couleur par fonction supposée. C'est la représentation qui fait
+  apparaître les motifs : les crises de fin de matinée, celles d'un jour
+  précis, celles qui suivent un même moment de la journée ;
+- le **classement des antécédents**, des **fonctions supposées** et des
+  **conséquences observées**, en nombre et en pourcentage ;
+- la **répartition par jour de la semaine** ;
+- le nombre de crises et leur durée moyenne.
+
+> Ces répartitions décrivent ce qui a été observé et coché. Elles orientent une
+> hypothèse, elles ne l'établissent pas : une analyse fonctionnelle reste du
+> ressort du professionnel.
 
 ---
 
@@ -539,6 +583,16 @@ que vous choisissez, distinct du code de l'application.
 
 **Restaurer** demande ce mot de passe, puis remplace **toutes** les données de
 l'appareil après confirmation.
+
+### Exporter la configuration seule
+
+Un second bouton produit un fichier de **configuration** : ateliers,
+intervenants, guidances et modèles d'objectifs, **sans aucune personne, séance
+ni crise**. Il ne contient donc aucune donnée d'usager et peut circuler
+librement pour équiper un nouvel appareil sans tout ressaisir.
+
+Il se restaure avec le même bouton **Restaurer** : l'application reconnaît le
+format et **complète** l'existant au lieu de le remplacer.
 
 ### Quand sauvegarder
 
