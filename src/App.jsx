@@ -1213,160 +1213,6 @@ function advanceMasteredTargets(students, sessions, guidances) {
   return { students: nextStudents, achieved };
 }
 
-/* ==================== Accord inter-observateurs ====================
-   Deux intervenants cotent la même séance chacun de leur côté ; l'un transmet
-   sa cotation, l'application compare point par point. Le rapprochement se fait
-   sur les initiales et l'intitulé de l'objectif, pas sur des identifiants
-   internes : les deux appareils n'ont pas besoin de partager la même base. */
-
-function ioaForEntry(obj, ea, eb) {
-  if (!ea || !eb) return null;
-  const t = obj.type;
-
-  if (t === 'trials') {
-    const n = Math.max((ea.trials || []).length, (eb.trials || []).length);
-    let pts = 0, acc = 0;
-    for (let i = 0; i < n; i++) {
-      const ca = trialCode((ea.trials || [])[i]);
-      const cb = trialCode((eb.trials || [])[i]);
-      if (!ca && !cb) continue;
-      pts += 1;
-      if (ca === cb) acc += 1;
-    }
-    return pts ? { points: pts, accords: acc } : null;
-  }
-
-  if (t === 'probe') {
-    const a = ea.guidance != null ? ea.guidance : ea.value;
-    const b = eb.guidance != null ? eb.guidance : eb.value;
-    if (a == null && b == null) return null;
-    return { points: 1, accords: a === b ? 1 : 0 };
-  }
-
-  if (t === 'chaining') {
-    const steps = obj.config.steps || [];
-    let pts = 0, acc = 0;
-    steps.forEach((st) => {
-      const a = (ea.steps || {})[st.id];
-      const b = (eb.steps || {})[st.id];
-      if (!a && !b) return;
-      pts += 1;
-      if (a === b) acc += 1;
-    });
-    return pts ? { points: pts, accords: acc } : null;
-  }
-
-  if (t === 'balance') {
-    const steps = obj.config.steps || [];
-    const ta = balanceTrials(ea);
-    const tb = balanceTrials(eb);
-    const n = Math.max(ta.length, tb.length);
-    let pts = 0, acc = 0;
-    for (let i = 0; i < n; i++) {
-      steps.forEach((st) => {
-        const a = ((ta[i] || {}).steps || {})[st.id];
-        const b = ((tb[i] || {}).steps || {})[st.id];
-        const oa = a && a.outcome;
-        const ob = b && b.outcome;
-        if (!oa && !ob) return;
-        pts += 1;
-        if (oa === ob) acc += 1;
-      });
-    }
-    return pts ? { points: pts, accords: acc } : null;
-  }
-
-  if (t === 'interval') {
-    const cles = new Set([...Object.keys(ea.marks || {}), ...Object.keys(eb.marks || {})]);
-    let pts = 0, acc = 0;
-    cles.forEach((k) => {
-      pts += 1;
-      if ((ea.marks || {})[k] === (eb.marks || {})[k]) acc += 1;
-    });
-    return pts ? { points: pts, accords: acc } : null;
-  }
-
-  /* Mesures continues : l'accord exact n'a pas de sens, on retient le rapport
-     entre la plus petite et la plus grande valeur. */
-  const proportionnel = (a, b) => {
-    if (!a && !b) return null;
-    return { points: 1, accords: Math.min(a, b) / Math.max(a, b), proportionnel: true };
-  };
-  if (t === 'occurrence') return proportionnel(ea.count || 0, eb.count || 0);
-  if (t === 'timer') return proportionnel(ea.elapsedMs || 0, eb.elapsedMs || 0);
-  if (t === 'latency') {
-    const moy = (l) => (l && l.length ? l.reduce((x, y) => x + y, 0) / l.length : 0);
-    return proportionnel(moy(ea.latencies), moy(eb.latencies));
-  }
-  return null;
-}
-
-/* Cotation d'une séance, mise à plat pour être transmise à un autre appareil */
-function buildIoaPayload(session, students, ateliers, intervenants) {
-  const entrees = [];
-  (session.studentIds || []).forEach((sid) => {
-    const st = students.find((x) => x.id === sid);
-    (session.selectedObjectives[sid] || []).forEach((oid) => {
-      const obj = session.objectiveSnapshot[oid];
-      const entry = (session.data[sid] || {})[oid];
-      if (!obj || !entry) return;
-      entrees.push({
-        initials: st ? st.initials : '?',
-        objectif: obj.name,
-        type: obj.type,
-        config: obj.config,
-        entry,
-      });
-    });
-  });
-  const a = ateliers.find((x) => x.id === session.atelierId);
-  const i = intervenants.find((x) => x.id === session.intervenantId);
-  return {
-    format: 'aba-ioa',
-    version: 1,
-    date: session.date,
-    atelier: a ? a.name : null,
-    observateur: i ? i.name : null,
-    entrees,
-  };
-}
-
-function computeIOA(payload, session, students) {
-  const lignes = [];
-  const locales = new Map();
-  (session.studentIds || []).forEach((sid) => {
-    const st = students.find((x) => x.id === sid);
-    const initials = st ? st.initials : '?';
-    (session.selectedObjectives[sid] || []).forEach((oid) => {
-      const obj = session.objectiveSnapshot[oid];
-      const entry = (session.data[sid] || {})[oid];
-      if (obj && entry) locales.set(`${initials}|${obj.name}`, { obj, entry });
-    });
-  });
-
-  const nonApparies = [];
-  (payload.entrees || []).forEach((e) => {
-    const cle = `${e.initials}|${e.objectif}`;
-    const local = locales.get(cle);
-    if (!local) { nonApparies.push(cle); return; }
-    const r = ioaForEntry(local.obj, local.entry, e.entry);
-    if (!r) return;
-    lignes.push({
-      initials: e.initials,
-      objectif: e.objectif,
-      type: e.type,
-      points: r.points,
-      accords: r.accords,
-      proportionnel: !!r.proportionnel,
-      pct: Math.round((r.accords / r.points) * 100),
-    });
-  });
-
-  const points = lignes.reduce((a, l) => a + l.points, 0);
-  const accords = lignes.reduce((a, l) => a + l.accords, 0);
-  return { lignes, points, accords, pct: points ? Math.round((accords / points) * 100) : null, nonApparies };
-}
-
 /* ==================== Génération Excel ==================== */
 /* --- Mise à plat pour l'analyse Excel ---
    Une ligne empilant tous les essais dans une seule cellule se filtre mal et
@@ -2588,11 +2434,41 @@ function AbaApp() {
 
   /* --- sauvegarde / restauration --- */
   const [backupPrompt, setBackupPrompt] = useState(null); // { mode: 'export' } | { mode: 'import', envelope, error }
-  const [ioaPending, setIoaPending] = useState(null);  // cotation reçue, en attente d'une séance à comparer
-  const [ioaResult, setIoaResult] = useState(null);    // résultat de la comparaison
 
   function exportBackup() {
     setBackupPrompt({ mode: 'export-choix' });
+  }
+
+  /* Fichier destiné à DatABA Manager, limité aux séances retenues.
+     On y joint la configuration des personnes concernées : Manager en a besoin
+     pour retrouver les critères d'acquisition. Les personnes absentes de la
+     sélection n'y figurent pas. */
+  function payloadManager(seancesRetenues) {
+    const idsConcernes = new Set();
+    seancesRetenues.forEach((se) => (se.studentIds || []).forEach((id) => idsConcernes.add(id)));
+    const crisesRetenues = crises.filter((c) => !c.sessionId || seancesRetenues.some((se) => se.id === c.sessionId));
+    return {
+      format: 'aba-backup',
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      students: students.filter((st) => idsConcernes.has(st.id)),
+      ateliers,
+      intervenants,
+      guidances,
+      sessions: seancesRetenues,
+      crises: crisesRetenues,
+    };
+  }
+
+  function exportManager(seancesRetenues, chiffre) {
+    const payload = payloadManager(seancesRetenues);
+    const nom = `pour-manager-${new Date().toISOString().slice(0, 10)}.json`;
+    if (!chiffre) {
+      downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), nom);
+      notify('Fichier Manager exporté sans chiffrement');
+      return;
+    }
+    setBackupPrompt({ mode: 'export', managerPayload: payload, managerNom: nom });
   }
 
   /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
@@ -2605,21 +2481,13 @@ function AbaApp() {
     notify('Sauvegarde exportée sans chiffrement');
   }
 
-  /* Transmission d'une cotation pour comparaison : le fichier contient des
-     initiales, il est donc chiffré comme une sauvegarde. */
-  function exportIoa(session) {
-    setBackupPrompt({ mode: 'export', ioaSession: session });
-  }
 
   async function confirmExport(passphrase) {
-    if (backupPrompt && backupPrompt.ioaSession) {
-      const sess = backupPrompt.ioaSession;
-      const payload = buildIoaPayload(sess, students, ateliers, intervenants);
-      const envelope = await encryptJSON(payload, passphrase);
-      const blob = new Blob([JSON.stringify({ ...envelope, format: 'aba-ioa-encrypted' })], { type: 'application/json' });
-      downloadBlob(blob, `cotation-${new Date(sess.date).toISOString().slice(0, 10)}.json`);
+    if (backupPrompt && backupPrompt.managerPayload) {
+      const enveloppe = await encryptJSON(backupPrompt.managerPayload, passphrase);
+      downloadBlob(new Blob([JSON.stringify(enveloppe)], { type: 'application/json' }), backupPrompt.managerNom);
       setBackupPrompt(null);
-      notify('Cotation exportée pour comparaison');
+      notify('Fichier Manager chiffré exporté');
       return;
     }
     const payload = { format: 'aba-backup', version: 2, exportedAt: new Date().toISOString(), students, ateliers, intervenants, guidances, sessions, crises };
@@ -2663,10 +2531,6 @@ function AbaApp() {
         importConfig(d);
         return;
       }
-      if (d && d.format === 'aba-ioa-encrypted') {
-        setBackupPrompt({ mode: 'import', envelope: d, ioa: true, error: '' });
-        return;
-      }
       if (d && d.format === 'aba-backup-encrypted') {
         setBackupPrompt({ mode: 'import', envelope: d, error: '' });
         return;
@@ -2680,9 +2544,7 @@ function AbaApp() {
   async function confirmImport(passphrase) {
     try {
       const d = await decryptJSON(backupPrompt.envelope, passphrase);
-      const pourIoa = backupPrompt.ioa;
       setBackupPrompt(null);
-      if (pourIoa) { setIoaPending(d); return; }
       applyRestoredData(d);
     } catch (e) {
       setBackupPrompt({ ...backupPrompt, error: 'Mot de passe incorrect ou fichier corrompu' });
@@ -2716,12 +2578,6 @@ function AbaApp() {
 
   /* --- reprise d'une séance enregistrée pour correction --- */
   const editSession = (s) => setActiveSession({ ...s, isEdit: true });
-  const shareSession = (s) => {
-    const wb = buildWorkbook([s], crises.filter((c) => c.sessionId === s.id), students, ateliers, intervenants, guidances);
-    const name = `seance-${new Date(s.date).toISOString().slice(0, 10)}.xlsx`;
-    shareReport({ blob: workbookBlob(wb), name, title: name, notify });
-    markSent([s.id]);
-  };
 
   const markSent = (ids, sent = true) =>
     setSessions((list) => list.map((s) => (ids.includes(s.id) ? { ...s, sentAt: sent ? new Date().toISOString() : null } : s)));
@@ -2943,7 +2799,7 @@ function AbaApp() {
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
             sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
-            onSetAtelierGroup={setAtelierGroup} onShareSession={shareSession} onExportIoa={exportIoa} notify={notify}
+            onSetAtelierGroup={setAtelierGroup} notify={notify}
             activeSession={activeSession} setActiveSession={setActiveSession}
             onFinish={(session) => {
               const { isEdit, ...rest } = session;
@@ -2971,7 +2827,7 @@ function AbaApp() {
         )}
         {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} crises={crises} ateliers={ateliers} onResetTracking={resetTracking} />}
         {tab === 'export' && (
-          <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} onMarkSent={markSent} onExportBackup={exportBackup} />
+          <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} onMarkSent={markSent} onExportManager={exportManager} />
         )}
         </div>
       </div>
@@ -3039,44 +2895,6 @@ function AbaApp() {
           onSave={saveCrisis} onDelete={deleteCrisis}
         />
       )}
-
-      {ioaPending && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <div className="rounded-2xl p-5 max-w-sm w-full max-h-[80vh] overflow-y-auto" style={{ backgroundColor: CARD }}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Comparer avec</span>
-              <button onClick={() => setIoaPending(null)} style={{ color: INK_SOFT }}><X size={18} /></button>
-            </div>
-            <p className="text-sm mb-3" style={{ color: INK_SOFT }}>
-              Cotation reçue du {new Date(ioaPending.date).toLocaleDateString('fr-FR')}
-              {ioaPending.observateur ? `, par ${ioaPending.observateur}` : ''}
-              {ioaPending.atelier ? ` — ${ioaPending.atelier}` : ''}.
-              Choisissez votre propre cotation de la même séance.
-            </p>
-            {sessions.length === 0 ? (
-              <Empty>Aucune séance enregistrée sur cet appareil.</Empty>
-            ) : (
-              <div className="space-y-1.5">
-                {sessions.slice(0, 20).map((sess) => {
-                  const a = ateliers.find((x) => x.id === sess.atelierId);
-                  return (
-                    <button key={sess.id}
-                      onClick={() => { setIoaResult(computeIOA(ioaPending, sess, students)); setIoaPending(null); }}
-                      className="w-full text-left rounded-xl border px-3 py-2.5" style={{ borderColor: BORDER }}>
-                      <div className="text-sm font-medium">{a ? a.name : sess.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</div>
-                      <div className="text-xs" style={{ color: INK_SOFT }}>
-                        {new Date(sess.date).toLocaleDateString('fr-FR')} {timeShort(sess.date)}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {ioaResult && <IoaResultModal resultat={ioaResult} onClose={() => setIoaResult(null)} />}
 
       {backupPrompt && backupPrompt.mode === 'export-choix' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
@@ -4481,21 +4299,21 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onShareSession, onExportIoa, onSetAtelierGroup, notify, activeSession, setActiveSession, onFinish }) {
+function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
     return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} onFinish={onFinish} />;
   }
   return (
     <SessionSetup
       students={students} ateliers={ateliers} intervenants={intervenants} sessions={sessions}
-      onEditSession={onEditSession} onDeleteSession={onDeleteSession} onDeleteAllSessions={onDeleteAllSessions} onShareSession={onShareSession} onExportIoa={onExportIoa}
+      onEditSession={onEditSession} onDeleteSession={onDeleteSession} onDeleteAllSessions={onDeleteAllSessions}
       onSetAtelierGroup={onSetAtelierGroup} notify={notify}
       onStart={setActiveSession}
     />
   );
 }
 
-function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onDeleteAllSessions, onShareSession, onExportIoa, onSetAtelierGroup, notify, onStart }) {
+function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onStart }) {
   const [atelierId, setAtelierId] = useState(null);
   const [intervenantId, setIntervenantId] = useState(null);
   const [studentIds, setStudentIds] = useState([]);
@@ -4511,6 +4329,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
      priorités différentes d'un atelier à l'autre. Distinct du prioritaire posé
      à la création de l'objectif, qui vaut lui quel que soit l'atelier. */
   const [atelierFavorites, setAtelierFavorites] = useState([]);
+  const [doubleCotation, setDoubleCotation] = useState(false);
 
   const applyGroup = (ids, savedObjectives, known) => {
     const next = {};
@@ -4592,6 +4411,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
     setAtelierId(sess.atelierId || null);
     setIntervenantId(sess.intervenantId || null);
     setAtelierFavorites([]);
+    setDoubleCotation(!!sess.doubleCotation);
     applyGroup(ids, sess.selectedObjectives);
   }
 
@@ -4751,6 +4571,21 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       )}
 
       <Card className="mb-4">
+        <button onClick={() => setDoubleCotation((v) => !v)} className="flex items-start gap-2.5 text-left w-full">
+          <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: doubleCotation ? INK : BORDER }}>
+            <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: doubleCotation ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Deux observateurs en parallèle</span>
+            <span className="block text-xs" style={{ color: INK_SOFT }}>
+              À cocher par chacun des deux intervenants qui cotent cette même séance, chacun sur son
+              appareil. DatABA Manager repérera ensuite les deux relevés pour mesurer leur accord.
+            </span>
+          </span>
+        </button>
+      </Card>
+
+      <Card className="mb-4">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs" style={{ color: INK_SOFT }}>Personnes présentes</span>
           {mode === 'atelier' && atelierId && studentIds.length > 0 && !sameAsUsual && (
@@ -4843,9 +4678,8 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
             Séances enregistrées — appuyez pour corriger
           </div>
           <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
-            L'icône de personnes transmet votre cotation à un collègue qui a coté la même séance :
-            il pourra alors mesurer votre accord. Sa propre cotation se reçoit depuis
-            <strong> Gestion → Sauvegarde → Restaurer</strong>.
+            Appuyez sur une séance pour corriger ses cotations. Les rapports et les fichiers destinés
+            à DatABA Manager se génèrent depuis l'écran <strong>Export</strong>.
           </p>
           <div className="space-y-1.5">
             {sessions.slice(0, 15).map((s) => {
@@ -4856,21 +4690,8 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                     <div className="text-sm font-medium">{a ? a.name : s.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</div>
                     <div className="text-xs" style={{ color: INK_SOFT }}>
                       {new Date(s.date).toLocaleDateString('fr-FR')} {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
+                      {s.doubleCotation && ' · double cotation'}
                     </div>
-                  </button>
-                  <button
-                    onClick={() => onExportIoa(s)}
-                    style={{ color: INK_SOFT }}
-                    title="Transmettre cette cotation pour comparaison"
-                  >
-                    <Users size={16} />
-                  </button>
-                  <button
-                    onClick={() => onShareSession(s)}
-                    style={{ color: INK_SOFT }}
-                    title="Partager ce rapport"
-                  >
-                    <Share2 size={16} />
                   </button>
                   <button
                     onClick={() => { if (window.confirm('Supprimer définitivement cette séance ?')) onDeleteSession(s.id); }}
@@ -6970,76 +6791,8 @@ function CrossAnalysis({ sessions, crises, students, guidances }) {
   );
 }
 
-/* Résultat de la comparaison entre deux cotations d'une même séance */
-function IoaResultModal({ resultat, onClose }) {
-  const { lignes, points, pct, nonApparies } = resultat;
-  const couleur = pct == null ? INK_SOFT : pct >= 80 ? '#0F8B6C' : pct >= 60 ? '#D69A2D' : CRISIS;
-
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto" style={{ backgroundColor: PAPER }}>
-      <div className="max-w-2xl mx-auto px-4 pb-10" style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}>
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="text-xl font-semibold" style={{ fontFamily: F_DISPLAY }}>Accord inter-observateurs</h1>
-          <button onClick={onClose} className="rounded-xl px-3 py-2 border text-sm" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
-            Fermer
-          </button>
-        </div>
-
-        {points === 0 ? (
-          <Empty>Aucun point comparable entre les deux cotations.</Empty>
-        ) : (
-          <>
-            <Card className="mb-3">
-              <div className="text-4xl font-semibold" style={{ fontFamily: F_MONO, color: couleur }}>{pct} %</div>
-              <div className="text-sm mt-1" style={{ color: INK_SOFT }}>
-                d'accord sur <span style={{ fontFamily: F_MONO }}>{points}</span> point{points !== 1 ? 's' : ''} comparé{points !== 1 ? 's' : ''}
-              </div>
-              <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
-                Un accord d'au moins 80 % est l'usage courant pour considérer des relevés fiables.
-                En dessous, il vaut mieux reprendre ensemble les définitions avant de poursuivre.
-              </p>
-            </Card>
-
-            <div className="space-y-1.5 mb-3">
-              {lignes.sort((a, b) => a.pct - b.pct).map((l, i) => (
-                <div key={i} className="rounded-xl border px-3 py-2.5" style={{ borderColor: BORDER, backgroundColor: CARD }}>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="text-sm break-words">
-                        <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{l.initials}</span> · {l.objectif}
-                      </div>
-                      <div className="text-xs" style={{ color: INK_SOFT }}>
-                        {TYPES[l.type] ? TYPES[l.type].label : l.type}
-                        {l.proportionnel ? ' · accord proportionnel' : ` · ${Math.round(l.accords)}/${l.points}`}
-                      </div>
-                    </div>
-                    <span className="text-sm font-semibold shrink-0" style={{ fontFamily: F_MONO, color: l.pct >= 80 ? '#0F8B6C' : l.pct >= 60 ? '#D69A2D' : CRISIS }}>
-                      {l.pct} %
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-
-        {nonApparies.length > 0 && (
-          <Card>
-            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
-              Non comparés — présents chez l'autre observateur mais pas dans votre cotation
-            </div>
-            <div className="text-xs" style={{ color: INK_SOFT }}>
-              {nonApparies.map((c) => c.replace('|', ' · ')).join(', ')}
-            </div>
-          </Card>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /* ==================== Écran 4 : export ==================== */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, notify, onEditCrisis, onMarkSent, onExportBackup }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, notify, onEditCrisis, onMarkSent, onExportManager }) {
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   // Valeur d'état initiale seulement : React l'ignore aux rendus suivants,
   // donc une sélection ajustée à la main n'est jamais écrasée par un
@@ -7206,35 +6959,48 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
         </>
       )}
 
-      <div className="flex gap-2">
-        <Btn variant="outline" onClick={download} disabled={!canExport} className="flex-1">
-          <FileSpreadsheet size={17} /> Télécharger
-        </Btn>
-        <Btn onClick={shareSelection} disabled={!canExport} className="flex-1">
-          <Share2 size={17} /> Partager
-        </Btn>
-      </div>
+      {/* Une seule sélection, trois destinations possibles */}
+      <Card className="mb-3">
+        <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
+          Rapport Excel — à lire, imprimer ou déposer sur le dossier partagé
+        </div>
+        <div className="flex gap-2">
+          <Btn variant="outline" onClick={download} disabled={!canExport} className="flex-1">
+            <FileSpreadsheet size={17} /> Télécharger
+          </Btn>
+          <Btn onClick={shareSelection} disabled={!canExport} className="flex-1">
+            <Share2 size={17} /> Partager
+          </Btn>
+        </div>
+      </Card>
 
-      {/* Le rapport ci-dessus est un tableur, destiné à la lecture et à Excel.
-          DatABA Manager, lui, a besoin de la sauvegarde complète : c'est la
-          seule qui contient les objectifs et leurs critères. */}
-      <Card className="mt-4">
-        <div className="flex items-center gap-2 mb-2">
-          <Upload size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold text-sm" style={{ fontFamily: F_DISPLAY }}>Pour DatABA Manager</span>
+      <Card>
+        <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
+          Fichier pour DatABA Manager
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Les rapports ci-dessus sont des tableurs Excel, faits pour être lus et imprimés.
-          DatABA Manager a besoin d'un autre fichier : la <strong>sauvegarde complète</strong>,
-          qui seule contient les objectifs, leurs cibles et leurs critères d'acquisition.
+          Le rapport Excel se lit, mais ne contient pas les critères d'acquisition. Ce fichier-ci
+          les emporte : c'est lui que le cadre pédagogique charge dans DatABA Manager.
         </p>
-        <Btn variant="outline" onClick={onExportBackup} className="w-full text-sm">
-          <Download size={16} /> Générer le fichier pour Manager
-        </Btn>
-        <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
-          Chiffré ou non, au choix. Déposez-le ensuite dans le dossier partagé du cadre pédagogique.
-        </p>
+        <div className="flex gap-2">
+          <Btn variant="outline" onClick={() => onExportManager(chosen, true)} disabled={!canExport} className="flex-1">
+            <Lock size={16} /> Chiffré
+          </Btn>
+          <Btn
+            variant="ghost"
+            onClick={() => {
+              if (window.confirm(
+                "Exporter sans chiffrement ?\n\nLe fichier sera lisible par quiconque y a accès. À réserver à un dépôt dans un dossier déjà restreint."
+              )) onExportManager(chosen, false);
+            }}
+            disabled={!canExport}
+            className="flex-1"
+          >
+            <Download size={16} /> Sans chiffrement
+          </Btn>
+        </div>
       </Card>
+
 
       {crises.length > 0 && (
         <div className="mt-6">
