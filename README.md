@@ -326,6 +326,12 @@ Deux vues, séparées par un curseur au centre (ou par balayage) :
   présentes, mélangés dans un **flux unique**. C'est la vue qui s'ouvre par
   défaut. Chaque fiche porte les initiales de la personne concernée ; appuyer
   dessus ouvre sa fiche complète.
+
+  En **séance Balance Program**, ces cotations apparaissent ici d'office, sans
+  qu'il soit nécessaire de les étoiler ni de basculer sur la vue par personne.
+  Le Balance Program occupe alors la **zone principale** et les autres objectifs
+  prioritaires passent sur le côté ; à partir de deux Balance Program simultanés,
+  ils se placent côte à côte.
 - **Par personne** — la fiche complète d'une personne.
 
 Le **rail de cercles** à droite bascule d'une personne à l'autre.
