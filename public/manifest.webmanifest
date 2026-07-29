@@ -1,6 +1,6 @@
 {
-  "name": "Cotations ABA",
-  "short_name": "ABA",
+  "name": "DatABA",
+  "short_name": "DatABA",
   "description": "Collecte de données ABA en contexte de groupe",
   "lang": "fr",
   "start_url": ".",
