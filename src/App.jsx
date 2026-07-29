@@ -2592,7 +2592,17 @@ function AbaApp() {
   const [ioaResult, setIoaResult] = useState(null);    // résultat de la comparaison
 
   function exportBackup() {
-    setBackupPrompt({ mode: 'export' });
+    setBackupPrompt({ mode: 'export-choix' });
+  }
+
+  /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
+     transferts qui restent dans un espace déjà protégé. */
+  function exportBackupClair() {
+    const payload = { format: 'aba-backup', version: 2, exportedAt: new Date().toISOString(), students, ateliers, intervenants, guidances, sessions, crises };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    downloadBlob(blob, `sauvegarde-aba-${new Date().toISOString().slice(0, 10)}.json`);
+    setBackupPrompt(null);
+    notify('Sauvegarde exportée sans chiffrement');
   }
 
   /* Transmission d'une cotation pour comparaison : le fichier contient des
@@ -2961,7 +2971,7 @@ function AbaApp() {
         )}
         {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} crises={crises} ateliers={ateliers} onResetTracking={resetTracking} />}
         {tab === 'export' && (
-          <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} onMarkSent={markSent} />
+          <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} onMarkSent={markSent} onExportBackup={exportBackup} />
         )}
         </div>
       </div>
@@ -3068,7 +3078,43 @@ function AbaApp() {
 
       {ioaResult && <IoaResultModal resultat={ioaResult} onClose={() => setIoaResult(null)} />}
 
-      {backupPrompt && (
+      {backupPrompt && backupPrompt.mode === 'export-choix' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
+            <div className="flex justify-end mb-1">
+              <button onClick={() => setBackupPrompt(null)} style={{ color: INK_SOFT }}><X size={18} /></button>
+            </div>
+            <h2 className="text-lg font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY }}>Exporter la sauvegarde</h2>
+            <p className="text-sm text-center mb-4" style={{ color: INK_SOFT }}>
+              Le fichier contient les initiales, les cotations et les crises.
+            </p>
+
+            <Btn onClick={() => setBackupPrompt({ mode: 'export' })} className="w-full mb-2">
+              <Lock size={16} /> Chiffrée par mot de passe
+            </Btn>
+            <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+              Recommandé. Le fichier reste illisible sans le mot de passe, y compris s'il est transmis par erreur.
+            </p>
+
+            <Btn
+              variant="outline"
+              onClick={() => {
+                if (window.confirm(
+                  "Exporter sans chiffrement ?\n\nLe fichier sera lisible par n'importe qui y ayant accès : messagerie, clé USB, dossier partagé mal restreint.\n\nÀ réserver à un transfert qui reste dans un espace déjà protégé."
+                )) exportBackupClair();
+              }}
+              className="w-full"
+            >
+              <Download size={16} /> Sans chiffrement
+            </Btn>
+            <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
+              Plus simple à relire, mais le fichier n'est plus protégé une fois sorti de l'appareil.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {backupPrompt && backupPrompt.mode !== 'export-choix' && (
         <PassphraseModal
           mode={backupPrompt.mode}
           error={backupPrompt.error}
@@ -6993,7 +7039,7 @@ function IoaResultModal({ resultat, onClose }) {
 }
 
 /* ==================== Écran 4 : export ==================== */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, notify, onEditCrisis, onMarkSent }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, notify, onEditCrisis, onMarkSent, onExportBackup }) {
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   // Valeur d'état initiale seulement : React l'ignore aux rendus suivants,
   // donc une sélection ajustée à la main n'est jamais écrasée par un
@@ -7168,6 +7214,27 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
           <Share2 size={17} /> Partager
         </Btn>
       </div>
+
+      {/* Le rapport ci-dessus est un tableur, destiné à la lecture et à Excel.
+          DatABA Manager, lui, a besoin de la sauvegarde complète : c'est la
+          seule qui contient les objectifs et leurs critères. */}
+      <Card className="mt-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Upload size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold text-sm" style={{ fontFamily: F_DISPLAY }}>Pour DatABA Manager</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Les rapports ci-dessus sont des tableurs Excel, faits pour être lus et imprimés.
+          DatABA Manager a besoin d'un autre fichier : la <strong>sauvegarde complète</strong>,
+          qui seule contient les objectifs, leurs cibles et leurs critères d'acquisition.
+        </p>
+        <Btn variant="outline" onClick={onExportBackup} className="w-full text-sm">
+          <Download size={16} /> Générer le fichier pour Manager
+        </Btn>
+        <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
+          Chiffré ou non, au choix. Déposez-le ensuite dans le dossier partagé du cadre pédagogique.
+        </p>
+      </Card>
 
       {crises.length > 0 && (
         <div className="mt-6">
