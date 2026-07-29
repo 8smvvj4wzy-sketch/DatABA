@@ -553,8 +553,9 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
                 <h2 className="font-semibold mb-2" style={{ fontFamily: F_DISPLAY }}>Réinitialiser</h2>
                 <p className="text-sm mb-4" style={{ color: INK_SOFT }}>
                   Les données étant chiffrées avec ce mot de passe, il n'existe aucun moyen de les
-                  récupérer sans lui. La seule solution est de tout effacer, puis de restaurer une
-                  sauvegarde chiffrée si vous en avez une.
+                  récupérer sans lui. La seule solution est d'effacer les données de DatABA, puis de
+                  restaurer une sauvegarde si vous en avez une. Les autres applications installées
+                  ne sont pas touchées.
                 </p>
                 <div className="flex gap-2">
                   <Btn onClick={async () => { await store.clearAll(); window.location.reload(); }} className="flex-1 text-sm" style={{ backgroundColor: CRISIS }}>
@@ -695,10 +696,14 @@ const store = {
       return false;
     }
   },
+  /* Efface UNIQUEMENT les clés de cette application.
+     Les deux applications DatABA sont publiées sous la même adresse
+     (nom.github.io) et partagent donc le même espace de stockage : un
+     effacement global emporterait aussi les données de l'autre. */
   async clearAll() {
     if (typeof window !== 'undefined' && window.storage) {
       try {
-        const list = await window.storage.list('', false);
+        const list = await window.storage.list('aba:', false);
         if (list && list.keys) await Promise.all(list.keys.map((k) => window.storage.delete(k, false)));
         return true;
       } catch (e) {
@@ -706,7 +711,12 @@ const store = {
       }
     }
     try {
-      window.localStorage.clear();
+      const aSupprimer = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && k.startsWith('aba:')) aSupprimer.push(k);
+      }
+      aSupprimer.forEach((k) => window.localStorage.removeItem(k));
       return true;
     } catch (e) {
       return false;
@@ -3295,6 +3305,9 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
             </Btn>
             <button
               onClick={() => {
+                if (!window.confirm(
+                  "Avez-vous une sauvegarde récente ?\n\nAvant toute modification de la protection, exportez vos données : c'est le seul moyen de revenir en arrière en cas de problème.\n\nOK pour continuer, Annuler pour aller sauvegarder d'abord."
+                )) return;
                 if (window.confirm(
                   "Désactiver la protection ?\n\nLes données seront DÉCHIFFRÉES et enregistrées en clair sur cet appareil. Quiconque y accède pourra les lire, y compris en récupérant les fichiers.\n\nÀ n'envisager que si l'appareil est lui-même verrouillé et réservé au service."
                 ) && window.confirm('Dernière confirmation : le chiffrement des données va être retiré.')) {
