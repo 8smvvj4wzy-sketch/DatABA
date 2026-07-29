@@ -6,7 +6,7 @@ import {
   Timer as TimerIcon, ListChecks, LayoutGrid, CheckCircle2, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, BarChart3, ClipboardList, Activity,
+  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, BarChart3, ClipboardList, Activity, Link2,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -153,11 +153,11 @@ const CRISIS_ANTECEDENTS = [
   'Consigne ou demande',
   'Transition',
   'Attente',
-  'Refus opposé',
+  'Refus',
   'Bruit ou stimulation',
   'Interaction avec un pair',
   'Imprévu, changement',
-  'Fin d\'activité appréciée',
+  'Arrêt de tâche plaisante',
   'Aucun déclencheur identifié',
 ];
 const CRISIS_BEHAVIORS = [
@@ -172,13 +172,11 @@ const CRISIS_BEHAVIORS = [
   'Refus, immobilité',
 ];
 const CRISIS_CONSEQUENCES = [
-  'Retrait de la demande',
+  'Accès à la demande',
   'Attention de l\'adulte',
   'Accès à un objet ou une activité',
   'Retrait, mise à l\'écart',
-  'Aide physique',
-  'Ignorance active',
-  'Poursuite de l\'activité',
+  'Maintien de consigne',
 ];
 /* Listes proposées par défaut. Elles sont recopiées dans les réglages au
    premier lancement, puis entièrement modifiables dans l'écran Gestion. */
@@ -301,11 +299,32 @@ async function decryptValue(raw, key) {
   return new TextDecoder().decode(plain);
 }
 
+/* --- Historique des séances, réparti par mois ---
+   Tout garder sous une seule clé obligeait à réécrire et rechiffrer
+   l'historique complet au moindre changement : le coût grandissait avec
+   l'ancienneté de l'installation. Chaque mois a désormais sa propre clé, et
+   seuls les mois réellement modifiés sont réécrits. */
+const SESSIONS_INDEX = 'aba:sessions-index';
+const moisDe = (iso) => {
+  const d = new Date(iso);
+  if (isNaN(d)) return 'inconnu';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+const grouperParMois = (sessions) => {
+  const g = {};
+  sessions.forEach((s) => {
+    const k = moisDe(s.date);
+    (g[k] = g[k] || []).push(s);
+  });
+  return g;
+};
+
 /* ==================== Écran de verrouillage ==================== */
-function PinPad({ title, subtitle, onSubmit, error, digits, submitLabel, disabled }) {
+/* Pavé numérique unique, utilisé en plein écran comme en fenêtre.
+   Sans longueur connue, la saisie accepte 4 à 8 chiffres avec validation
+   manuelle : c'est ce qui permet d'entrer un code plus long que prévu. */
+function PinPad({ title, subtitle, onSubmit, error, digits, submitLabel, disabled, compact }) {
   const [value, setValue] = useState('');
-  /* Sans longueur connue, on accepte 4 à 8 chiffres avec validation manuelle :
-     c'est ce qui permet de rentrer un code plus long que prévu. */
   const flexible = !digits;
   const maxLen = digits || 8;
   const minLen = digits || 4;
@@ -320,45 +339,91 @@ function PinPad({ title, subtitle, onSubmit, error, digits, submitLabel, disable
       setValue('');
     }
   }
-  function backspace() {
-    setValue((v) => v.slice(0, -1));
-  }
   function validate() {
     if (value.length < minLen) return;
     onSubmit(value);
     setValue('');
   }
+
+  const pave = (
+    <>
+      <div className={`flex justify-center gap-3 ${compact ? 'mb-4' : 'mb-6'}`}>
+        {Array.from({ length: Math.max(minLen, value.length) }, (_, i) => (
+          <div key={i} className={compact ? 'w-3.5 h-3.5 rounded-full border-2' : 'w-4 h-4 rounded-full border-2'}
+            style={{ borderColor: INK, backgroundColor: i < value.length ? INK : 'transparent' }} />
+        ))}
+      </div>
+      {error && <p className="text-sm text-center mb-3" style={{ color: CRISIS }}>{error}</p>}
+      <div className={`grid grid-cols-3 ${compact ? 'gap-2' : 'gap-3'}`}>
+        {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((d, i) =>
+          d === '' ? <div key={i} /> : (
+            <button
+              key={i}
+              onClick={() => (d === '⌫' ? setValue((v) => v.slice(0, -1)) : press(d))}
+              disabled={disabled}
+              className={`rounded-2xl font-medium active:scale-95 transition-transform disabled:opacity-40 ${compact ? 'py-3 text-lg rounded-xl' : 'py-4 text-xl'}`}
+              style={{ backgroundColor: compact ? PAPER : CARD, color: INK, fontFamily: F_DISPLAY, border: `1px solid ${BORDER}` }}
+            >
+              {d}
+            </button>
+          )
+        )}
+      </div>
+      {showValidate && (
+        <Btn onClick={validate} disabled={disabled || value.length < minLen} className={`w-full ${compact ? 'mt-3 text-sm' : 'mt-5'}`}>
+          {submitLabel || 'Valider'}
+        </Btn>
+      )}
+    </>
+  );
+
+  if (compact) return <div>{pave}</div>;
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{ background: PAPER, fontFamily: F_BODY }}>
       <div className="w-full max-w-xs">
         <h1 className="text-xl font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY, color: INK }}>{title}</h1>
         {subtitle && <p className="text-sm text-center mb-5" style={{ color: INK_SOFT }}>{subtitle}</p>}
-        <div className="flex justify-center gap-3 mb-6">
-          {Array.from({ length: Math.max(minLen, value.length) }, (_, i) => (
-            <div key={i} className="w-4 h-4 rounded-full border-2" style={{ borderColor: INK, backgroundColor: i < value.length ? INK : 'transparent' }} />
-          ))}
-        </div>
-        {error && <p className="text-sm text-center mb-4" style={{ color: CRISIS }}>{error}</p>}
-        <div className="grid grid-cols-3 gap-3">
-          {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((d, i) =>
-            d === '' ? <div key={i} /> : (
-              <button
-                key={i}
-                onClick={() => (d === '⌫' ? backspace() : press(d))}
-                disabled={disabled}
-                className="rounded-2xl py-4 text-xl font-medium active:scale-95 transition-transform disabled:opacity-40"
-                style={{ backgroundColor: CARD, color: INK, fontFamily: F_DISPLAY, border: `1px solid ${BORDER}` }}
-              >
-                {d}
-              </button>
-            )
-          )}
-        </div>
-        {showValidate && (
-          <Btn onClick={validate} disabled={disabled || value.length < minLen} className="w-full mt-5">
-            {submitLabel || 'Valider'}
-          </Btn>
-        )}
+        {pave}
+      </div>
+    </div>
+  );
+}
+
+/* Champ de mot de passe, en plein écran ou en fenêtre selon « compact ». */
+function PasswordScreen({ title, subtitle, onSubmit, error, disabled, label, compact }) {
+  const [value, setValue] = useState('');
+  const valider = () => { if (value.length >= 4) { onSubmit(value); setValue(''); } };
+
+  const champ = (
+    <>
+      {error && <p className="text-sm text-center mb-3" style={{ color: CRISIS }}>{error}</p>}
+      <input
+        type="password"
+        value={value}
+        autoFocus
+        disabled={disabled}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') valider(); }}
+        placeholder="Mot de passe"
+        className="w-full rounded-xl border px-3 py-3 text-base bg-transparent mb-3"
+        style={{ borderColor: BORDER, color: INK }}
+      />
+      <Btn onClick={valider} disabled={disabled || value.length < 4} className="w-full">
+        {label || 'Valider'}
+      </Btn>
+      {!compact && <p className="text-xs text-center mt-3" style={{ color: INK_SOFT }}>Au moins 4 caractères.</p>}
+    </>
+  );
+
+  if (compact) return <div>{champ}</div>;
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{ background: PAPER, fontFamily: F_BODY }}>
+      <div className="w-full max-w-xs">
+        <h1 className="text-xl font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY, color: INK }}>{title}</h1>
+        {subtitle && <p className="text-sm text-center mb-5" style={{ color: INK_SOFT }}>{subtitle}</p>}
+        {champ}
       </div>
     </div>
   );
@@ -371,34 +436,6 @@ function lockDelayMs(failed) {
   if (failed < 5) return 30 * 1000;
   if (failed < 8) return 5 * 60 * 1000;
   return 15 * 60 * 1000;
-}
-
-function PasswordScreen({ title, subtitle, onSubmit, error, disabled, label }) {
-  const [value, setValue] = useState('');
-  return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{ background: PAPER, fontFamily: F_BODY }}>
-      <div className="w-full max-w-xs">
-        <h1 className="text-xl font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY, color: INK }}>{title}</h1>
-        {subtitle && <p className="text-sm text-center mb-5" style={{ color: INK_SOFT }}>{subtitle}</p>}
-        {error && <p className="text-sm text-center mb-3" style={{ color: CRISIS }}>{error}</p>}
-        <input
-          type="password"
-          value={value}
-          autoFocus
-          disabled={disabled}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && value.length >= 4) { onSubmit(value); setValue(''); } }}
-          placeholder="Mot de passe"
-          className="w-full rounded-xl border px-3 py-3 text-base bg-transparent mb-3"
-          style={{ borderColor: BORDER, color: INK }}
-        />
-        <Btn onClick={() => { onSubmit(value); setValue(''); }} disabled={disabled || value.length < 4} className="w-full">
-          {label || 'Valider'}
-        </Btn>
-        <p className="text-xs text-center mt-3" style={{ color: INK_SOFT }}>Au moins 4 caractères.</p>
-      </div>
-    </div>
-  );
 }
 
 function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
@@ -1507,13 +1544,15 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
-  const crisisRows = [['Type', 'Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Antécédents', 'Enchaînement des comportements', 'Premier comportement', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire']];
+  const crisisRows = [['Type', 'Chaîne', 'Rang', 'Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Antécédents', 'Enchaînement des comportements', 'Premier comportement', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire']];
   crises.forEach((c) => {
     if (studentFilter && c.studentId && !studentFilter.includes(c.studentId)) return;
     const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
     const f = c.fonction ? CRISIS_FUNCTIONS.find((x) => x.k === c.fonction) : null;
     crisisRows.push([
       c.kind === 'abc' ? 'Observation' : 'Crise',
+      c.chainId ? c.chainId.slice(0, 6) : '',
+      c.chainIndex || '',
       new Date(c.date).toLocaleDateString('fr-FR'),
       timeShort(c.date),
       new Date(c.date).toLocaleDateString('fr-FR', { weekday: 'long' }),
@@ -1534,7 +1573,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
     ]);
   });
   const ws2 = XLSX.utils.aoa_to_sheet(crisisRows);
-  ws2['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 34 }, { wch: 44 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
+  ws2['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 6 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 34 }, { wch: 44 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
   XLSX.utils.book_append_sheet(wb, ws2, 'Crises et observations');
 
   const noteRows = [['Date', 'Heure', 'Atelier', 'Personne accompagnée', 'Note']];
@@ -2230,8 +2269,22 @@ function AbaApp() {
 
     let loadedSessions = [];
     let loadedCrises = [];
-    const sess = await store.get('aba:sessions');
-    if (sess) { try { loadedSessions = JSON.parse(sess) || []; } catch (e) {} }
+    /* Ancien format : un seul bloc. On le relit, puis il sera réparti par mois
+       à la première sauvegarde. */
+    const ancien = await store.get('aba:sessions');
+    if (ancien) {
+      try { loadedSessions = JSON.parse(ancien) || []; } catch (e) {}
+    } else {
+      const idx = await store.get(SESSIONS_INDEX);
+      let mois = [];
+      if (idx) { try { mois = JSON.parse(idx) || []; } catch (e) {} }
+      for (const m of mois) {
+        const bloc = await store.get(`aba:sessions:${m}`);
+        if (!bloc) continue;
+        try { loadedSessions = loadedSessions.concat(JSON.parse(bloc) || []); } catch (e) {}
+      }
+      loadedSessions.sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
     const cri = await store.get('aba:crises');
     if (cri) { try { loadedCrises = JSON.parse(cri) || []; } catch (e) {} }
 
@@ -2256,6 +2309,20 @@ function AbaApp() {
     setLoaded(true);
   }
 
+  /* Toutes les clés contenant des données, mois par mois compris. */
+  async function clesDonnees() {
+    const base = ['aba:config', 'aba:sessions', 'aba:crises', 'aba:active', SESSIONS_INDEX];
+    const idx = await store.getRaw(SESSIONS_INDEX);
+    if (!idx) return base;
+    try {
+      const brut = dataKey ? await decryptValue(idx, dataKey) : idx;
+      const mois = JSON.parse(brut) || [];
+      return base.concat(mois.map((m) => `aba:sessions:${m}`));
+    } catch (e) {
+      return base;
+    }
+  }
+
   /* Vérifie qu'une clé déchiffre bien les données déjà enregistrées. */
   async function keyOpensData(key) {
     const raw = await store.getRaw('aba:config');
@@ -2274,7 +2341,7 @@ function AbaApp() {
   /* Rechiffre les données d'une clé vers une autre, au niveau du stockage :
      aucune donnée ne transite par l'état React, ce qui évite toute perte. */
   async function reEncrypt(fromKey, toKey) {
-    for (const k of ['aba:config', 'aba:sessions', 'aba:crises', 'aba:active']) {
+    for (const k of await clesDonnees()) {
       const raw = await store.getRaw(k);
       if (raw == null) continue;
       try {
@@ -2331,7 +2398,8 @@ function AbaApp() {
      changement de code, puisque l'ancienne clé ne déchiffrerait plus rien. */
   async function persistAll() {
     await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions }));
-    await store.set('aba:sessions', JSON.stringify(sessions));
+    moisEcrits.current = {};
+    await persistSessions(sessions);
     await store.set('aba:crises', JSON.stringify(crises));
     await store.set('aba:active', JSON.stringify(activeSession));
   }
@@ -2351,7 +2419,7 @@ function AbaApp() {
   async function disableProtection() {
     const cle = dataKey;
     if (cle) {
-      for (const k of ['aba:config', 'aba:sessions', 'aba:crises', 'aba:active']) {
+      for (const k of await clesDonnees()) {
         const raw = await store.getRaw(k);
         if (raw == null) continue;
         try { await store.setRaw(k, await decryptValue(raw, cle)); } catch (e) { /* déjà en clair */ }
@@ -2403,9 +2471,35 @@ function AbaApp() {
     if (!loaded) return;
     store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions }));
   }, [students, ateliers, intervenants, guidances, retentionMonths, objectiveTemplates, abcOptions, loaded]);
+  /* Empreinte du dernier enregistrement de chaque mois, pour n'écrire que ce
+     qui a réellement changé. */
+  const moisEcrits = useRef({});
+
+  async function persistSessions(liste) {
+    const groupes = grouperParMois(liste);
+    const mois = Object.keys(groupes).sort();
+    for (const m of mois) {
+      const contenu = JSON.stringify(groupes[m]);
+      if (moisEcrits.current[m] === contenu) continue;
+      await store.set(`aba:sessions:${m}`, contenu);
+      moisEcrits.current[m] = contenu;
+    }
+    // Mois devenus vides : on retire leur clé
+    for (const m of Object.keys(moisEcrits.current)) {
+      if (groupes[m]) continue;
+      await store.setRaw(`aba:sessions:${m}`, '');
+      delete moisEcrits.current[m];
+    }
+    await store.set(SESSIONS_INDEX, JSON.stringify(mois));
+    // L'ancien bloc unique n'a plus lieu d'être
+    const ancien = await store.getRaw('aba:sessions');
+    if (ancien) await store.setRaw('aba:sessions', '');
+  }
+
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:sessions', JSON.stringify(sessions));
+    persistSessions(sessions);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, loaded]);
   useEffect(() => {
     if (!loaded) return;
@@ -2677,6 +2771,38 @@ function AbaApp() {
     setActiveCrisisId(fiche.id);
   };
 
+  /* Enchaînement ABC : on enregistre le maillon en cours et on en ouvre un
+     nouveau dont l'antécédent reprend la conséquence du précédent. Les maillons
+     partagent un identifiant de chaîne, ce qui permet de les relire ensemble. */
+  const chainCrisis = (c) => {
+    const { isNew, ...rest } = c;
+    const chainId = c.chainId || uid();
+    const rang = c.chainIndex || 1;
+    const maillon = { ...rest, chainId, chainIndex: rang };
+
+    if (isNew) {
+      const duree = rest.kind === 'abc' ? 0 : Date.now() - c.startedAt;
+      setCrises((list) => [{ ...maillon, durationMs: duree }, ...list]);
+    } else {
+      setCrises((list) => list.map((x) => (x.id === rest.id ? { ...x, ...maillon } : x)));
+    }
+
+    const suivant = {
+      ...nouvelleFiche(c.kind),
+      chainId,
+      chainIndex: rang + 1,
+      studentId: c.studentId,
+      atelierId: c.atelierId,
+      intervenantIds: c.intervenantIds,
+      // Ce qui a suivi devient le point de départ du maillon suivant
+      antecedentTags: [...(c.consequenceTags || [])],
+      antecedent: c.consequence || '',
+    };
+    setOpenCrises((l) => [...l.filter((x) => x.id !== c.id), suivant]);
+    setActiveCrisisId(suivant.id);
+    notify(`Maillon ${rang} enregistré — suite de la chaîne`);
+  };
+
   const fermerFiche = (id) => {
     setOpenCrises((l) => l.filter((x) => x.id !== id));
     setActiveCrisisId((cur) => (cur === id ? null : cur));
@@ -2897,6 +3023,7 @@ function AbaApp() {
           crisis={crisis} setCrisis={setCrisis}
           students={students} ateliers={ateliers} intervenants={intervenants} abcOptions={abcOptions}
           nbAutres={openCrises.length - 1}
+          onChain={chainCrisis}
           onMinimize={() => setActiveCrisisId(null)}
           onAbandon={() => fermerFiche(crisis.id)}
           onSave={saveCrisis} onDelete={deleteCrisis}
@@ -3037,75 +3164,21 @@ function ChangePinModal({ security, onSave, onClose }) {
               </p>
             )}
             {security.mode === 'password' ? (
-              <PasswordField
+              <PasswordScreen
                 key={step}
+                compact
                 onSubmit={step === 'current' ? checkCurrent : step === 'new1' ? acceptNew : confirmNew}
                 label={step === 'current' ? 'Vérifier' : step === 'new1' ? 'Continuer' : 'Valider'}
               />
             ) : (
-              <MiniPinInput
+              <PinPad
                 key={step}
+                compact
                 digits={step === 'current' ? currentDigits : newDigits}
                 onSubmit={step === 'current' ? checkCurrent : step === 'new1' ? acceptNew : confirmNew}
               />
             )}
           </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* Champ de mot de passe compact, pour la fenêtre de modification */
-function PasswordField({ onSubmit, label }) {
-  const [value, setValue] = useState('');
-  return (
-    <div>
-      <input
-        type="password"
-        value={value}
-        autoFocus
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && value.length >= 4) { onSubmit(value); setValue(''); } }}
-        placeholder="Mot de passe"
-        className="w-full rounded-xl border px-3 py-2.5 text-base bg-transparent mb-3"
-        style={{ borderColor: BORDER, color: INK }}
-      />
-      <Btn onClick={() => { onSubmit(value); setValue(''); }} disabled={value.length < 4} className="w-full text-sm">
-        {label || 'Valider'}
-      </Btn>
-    </div>
-  );
-}
-
-/* Petit pavé numérique compact, pour une utilisation dans une fenêtre plutôt qu'en plein écran */
-function MiniPinInput({ onSubmit, digits = 4 }) {
-  const [value, setValue] = useState('');
-  function press(d) {
-    if (value.length >= digits) return;
-    const next = value + d;
-    setValue(next);
-    if (next.length === digits) { onSubmit(next); setValue(''); }
-  }
-  return (
-    <div>
-      <div className="flex justify-center gap-3 mb-4">
-        {Array.from({ length: digits }, (_, i) => (
-          <div key={i} className="w-3.5 h-3.5 rounded-full border-2" style={{ borderColor: INK, backgroundColor: i < value.length ? INK : 'transparent' }} />
-        ))}
-      </div>
-      <div className="grid grid-cols-3 gap-2">
-        {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((d, i) =>
-          d === '' ? <div key={i} /> : (
-            <button
-              key={i}
-              onClick={() => (d === '⌫' ? setValue((v) => v.slice(0, -1)) : press(d))}
-              className="rounded-xl py-3 text-lg font-medium active:scale-95 transition-transform"
-              style={{ backgroundColor: PAPER, color: INK, fontFamily: F_DISPLAY, border: `1px solid ${BORDER}` }}
-            >
-              {d}
-            </button>
-          )
         )}
       </div>
     </div>
@@ -3281,6 +3354,50 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
 
       <Card className="mb-4">
         <div className="flex items-center gap-2 mb-2">
+          <AlertTriangle size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Réponses ABC</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Réponses proposées derrière le bouton + des zones A, B et C, pour les crises comme pour
+          les observations. Appui long sur une ligne pour la déplacer : l'ordre est celui d'affichage,
+          placez en tête ce que votre équipe coche le plus souvent.
+        </p>
+        <TagListEditor titre="A — Antécédents" items={abcOptions.antecedents} onChange={(v) => onSetAbc({ ...abcOptions, antecedents: v })} />
+        <TagListEditor titre="B — Comportements" items={abcOptions.comportements} onChange={(v) => onSetAbc({ ...abcOptions, comportements: v })} />
+        <TagListEditor titre="C — Conséquences" items={abcOptions.consequences} onChange={(v) => onSetAbc({ ...abcOptions, consequences: v })} />
+      </Card>
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <BookmarkPlus size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Modèles d'objectifs</span>
+          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{templates.length}</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Objectifs types réutilisables, avec leur mode de cotation, leurs cibles et leur critère.
+          On les enregistre depuis l'écran Personnes, et on les applique à la création d'un objectif.
+        </p>
+        {templates.length === 0 ? (
+          <Empty>Aucun modèle enregistré.</Empty>
+        ) : (
+          <div className="space-y-1.5">
+            {templates.map((t) => {
+              const meta = TYPES[t.type];
+              const Icon = meta.icon;
+              return (
+                <div key={t.id} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+                  <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
+                  <span className="text-sm flex-1 min-w-0 break-words">{t.name}</span>
+                  <button onClick={() => onRemoveTemplate(t.id)} style={{ color: INK_SOFT }}><X size={15} /></button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
           <Lock size={16} style={{ color: INK_SOFT }} />
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Sécurité</span>
         </div>
@@ -3333,50 +3450,6 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
             onSave={(hash, salt, digits, pin) => { onChangePin(hash, salt, digits, pin); setChangingPin(false); }}
             onClose={() => setChangingPin(false)}
           />
-        )}
-      </Card>
-
-      <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-2">
-          <AlertTriangle size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Réponses ABC</span>
-        </div>
-        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Réponses proposées derrière le bouton + des zones A, B et C, pour les crises comme pour
-          les observations. Appui long sur une ligne pour la déplacer : l'ordre est celui d'affichage,
-          placez en tête ce que votre équipe coche le plus souvent.
-        </p>
-        <TagListEditor titre="A — Antécédents" items={abcOptions.antecedents} onChange={(v) => onSetAbc({ ...abcOptions, antecedents: v })} />
-        <TagListEditor titre="B — Comportements" items={abcOptions.comportements} onChange={(v) => onSetAbc({ ...abcOptions, comportements: v })} />
-        <TagListEditor titre="C — Conséquences" items={abcOptions.consequences} onChange={(v) => onSetAbc({ ...abcOptions, consequences: v })} />
-      </Card>
-
-      <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-2">
-          <BookmarkPlus size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Modèles d'objectifs</span>
-          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{templates.length}</span>
-        </div>
-        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Objectifs types réutilisables, avec leur mode de cotation, leurs cibles et leur critère.
-          On les enregistre depuis l'écran Personnes, et on les applique à la création d'un objectif.
-        </p>
-        {templates.length === 0 ? (
-          <Empty>Aucun modèle enregistré.</Empty>
-        ) : (
-          <div className="space-y-1.5">
-            {templates.map((t) => {
-              const meta = TYPES[t.type];
-              const Icon = meta.icon;
-              return (
-                <div key={t.id} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
-                  <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
-                  <span className="text-sm flex-1 min-w-0 break-words">{t.name}</span>
-                  <button onClick={() => onRemoveTemplate(t.id)} style={{ color: INK_SOFT }}><X size={15} /></button>
-                </div>
-              );
-            })}
-          </div>
         )}
       </Card>
 
@@ -6223,6 +6296,7 @@ function SuiviScreen({ students, sessions, guidances, crises, ateliers, onResetT
       <div className="flex gap-1.5 mb-4">
         {[
           { k: 'objectifs', label: 'Objectifs', icon: TrendingUp },
+          { k: 'bilan', label: 'Bilan', icon: ListChecks },
           { k: 'crises', label: 'Crises', icon: BarChart3 },
           { k: 'croisement', label: 'Croisement', icon: Activity },
         ].map((v) => {
@@ -6238,6 +6312,7 @@ function SuiviScreen({ students, sessions, guidances, crises, ateliers, onResetT
         })}
       </div>
 
+      {vue === 'bilan' && <BilanScreen students={students} sessions={sessions} guidances={guidances} />}
       {vue === 'crises' && <CrisisAnalysis crises={crises} students={students} ateliers={ateliers} />}
       {vue === 'croisement' && <CrossAnalysis sessions={sessions} crises={crises} students={students} guidances={guidances} />}
       {vue === 'objectifs' && (
@@ -6271,6 +6346,151 @@ function SuiviScreen({ students, sessions, guidances, crises, ateliers, onResetT
       </div>
       </>
       )}
+    </div>
+  );
+}
+
+/* ==================== Bilan des objectifs ====================
+   Vue d'ensemble de tout l'effectif : ce qui est sur le point d'être acquis,
+   ce qui stagne juste sous le seuil, et ce qui n'a plus été coté depuis
+   longtemps. C'est la lecture qui manque quand on regarde une personne à la fois. */
+const PLATEAU_MIN_POINTS = 6;   // en deçà, il est trop tôt pour parler de plateau
+const PLATEAU_ECART_MAX = 20;   // « juste sous le seuil »
+const SANS_COTATION_JOURS = 21;
+
+function bilanObjectifs(students, sessions, guidances) {
+  const ordered = sessions.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+  const bientot = [];
+  const plateau = [];
+  const dormants = [];
+  let acquis = 0;
+
+  students.forEach((st) => {
+    st.objectives.forEach((obj) => {
+      const cible = currentTarget(obj);
+      const points = objectivePoints(obj, st.id, ordered, guidances, cible ? cible.id : null);
+      const base = {
+        initials: st.initials,
+        objectif: obj.name,
+        type: obj.type,
+        cible: cible ? cible.name : null,
+        phase: currentPhase(obj).name,
+        points: points.length,
+      };
+
+      if (!points.length) return;
+
+      const dernier = points[points.length - 1];
+      const jours = Math.floor((Date.now() - new Date(dernier.date)) / 86400000);
+      if (jours >= SANS_COTATION_JOURS) {
+        dormants.push({ ...base, jours, valeur: dernier.value });
+        return;
+      }
+
+      const st2 = masteryStatus(obj, points);
+      if (!st2) return;
+      if (st2.mastered) { acquis += 1; return; }
+
+      if (st2.streak >= st2.needed - 1 && st2.needed > 1) {
+        bientot.push({ ...base, ...st2, valeur: dernier.value });
+        return;
+      }
+
+      if (points.length >= PLATEAU_MIN_POINTS) {
+        const cinq = points.slice(-5);
+        const moyenne = Math.round(cinq.reduce((a, p) => a + p.value, 0) / cinq.length);
+        const ecart = st2.threshold - moyenne;
+        if (ecart > 0 && ecart <= PLATEAU_ECART_MAX) {
+          plateau.push({ ...base, ...st2, moyenne, ecart });
+        }
+      }
+    });
+  });
+
+  bientot.sort((a, b) => b.valeur - a.valeur);
+  plateau.sort((a, b) => a.ecart - b.ecart);
+  dormants.sort((a, b) => b.jours - a.jours);
+  return { bientot, plateau, dormants, acquis };
+}
+
+function BilanScreen({ students, sessions, guidances }) {
+  const { bientot, plateau, dormants, acquis } = bilanObjectifs(students, sessions, guidances);
+
+  const Groupe = ({ titre, aide, lignes, rendu, couleur }) => (
+    <div className="mb-4">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: couleur }} />
+        <span className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{titre}</span>
+        <span className="text-sm ml-auto" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{lignes.length}</span>
+      </div>
+      <p className="text-xs mb-2" style={{ color: INK_SOFT }}>{aide}</p>
+      {lignes.length === 0 ? (
+        <div className="rounded-xl border border-dashed px-3 py-3 text-center text-xs" style={{ borderColor: BORDER, color: INK_SOFT }}>
+          Aucun pour le moment.
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {lignes.map((l, i) => (
+            <div key={i} className="rounded-xl border px-3 py-2.5 flex items-start justify-between gap-2" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+              <div className="min-w-0">
+                <div className="text-sm break-words">
+                  <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{l.initials}</span> · {l.objectif}
+                </div>
+                <div className="text-xs" style={{ color: INK_SOFT }}>
+                  {l.phase}
+                  {l.cible && ` · cible ${l.cible}`}
+                  {` · ${l.points} séance${l.points !== 1 ? 's' : ''}`}
+                </div>
+              </div>
+              <span className="text-xs shrink-0 text-right" style={{ fontFamily: F_MONO, color: couleur }}>{rendu(l)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  if (!students.length || !sessions.length) {
+    return <Empty>Enregistrez des séances pour voir apparaître le bilan.</Empty>;
+  }
+
+  return (
+    <div>
+      <Card className="mb-4">
+        <div className="text-sm">
+          <span style={{ fontFamily: F_MONO, fontSize: '1.25rem', color: '#0F8B6C' }}>{acquis}</span>{' '}
+          objectif{acquis !== 1 ? 's' : ''} au critère d'acquisition
+        </div>
+      </Card>
+
+      <Groupe
+        titre="Bientôt acquis"
+        aide="Une séance de plus au seuil suffit. C'est le moment de préparer la cible suivante ou une généralisation."
+        lignes={bientot}
+        couleur="#0F8B6C"
+        rendu={(l) => `${l.streak}/${l.needed} · dernier ${l.valeur} %`}
+      />
+
+      <Groupe
+        titre="En plateau"
+        aide={`Au moins ${PLATEAU_MIN_POINTS} séances, une moyenne récente à moins de ${PLATEAU_ECART_MAX} points du seuil, sans jamais l'atteindre durablement. Un critère trop haut, ou un objectif à retravailler.`}
+        lignes={plateau}
+        couleur="#D69A2D"
+        rendu={(l) => `${l.moyenne} % · seuil ${l.threshold} %`}
+      />
+
+      <Groupe
+        titre="Sans cotation récente"
+        aide={`Aucune donnée depuis plus de ${SANS_COTATION_JOURS} jours, alors que l'objectif est toujours actif.`}
+        lignes={dormants}
+        couleur={INK_SOFT}
+        rendu={(l) => `${l.jours} j`}
+      />
+
+      <p className="text-xs" style={{ color: INK_SOFT }}>
+        Ce bilan applique le critère défini pour chaque objectif. Il signale des situations
+        à regarder, il ne décide de rien à votre place.
+      </p>
     </div>
   );
 }
@@ -6967,6 +7187,16 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                       style={{ backgroundColor: c.kind === 'abc' ? '#B07A2E' : CRISIS, color: '#fff' }}>
                       {c.kind === 'abc' ? 'Observation' : 'Crise'}
                     </span>
+                    {c.chainId && (
+                      <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5 flex items-center gap-1"
+                        style={{ backgroundColor: PAPER, color: INK_SOFT }}>
+                        <Link2 size={11} /> {c.chainIndex || 1}
+                        {(() => {
+                          const n = crises.filter((x) => x.chainId === c.chainId).length;
+                          return n > 1 ? `/${n}` : '';
+                        })()}
+                      </span>
+                    )}
                     {c.kind !== 'abc' && (
                       <span className="text-xs shrink-0" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{fmtDuration(c.durationMs)}</span>
                     )}
@@ -6991,7 +7221,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
 
 
 /* ==================== Module crise ABC ==================== */
-function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, abcOptions, nbAutres, onMinimize, onAbandon, onSave, onDelete }) {
+function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, abcOptions, nbAutres, onChain, onMinimize, onAbandon, onSave, onDelete }) {
   const options = abcOptions || DEFAULT_ABC;
   const isNew = !!crisis.isNew;
   const [picker, setPicker] = useState(null); // zone dont les catégories sont ouvertes
@@ -7030,6 +7260,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
                 {isNew
                   ? (estObservation ? 'Comportement hors crise' : 'Grille ABC')
                   : `${new Date(crisis.date).toLocaleDateString('fr-FR')} à ${timeShort(crisis.date)}`}
+                {crisis.chainIndex > 1 && ` · maillon ${crisis.chainIndex} de la chaîne`}
                 {nbAutres > 0 && ` · ${nbAutres} autre${nbAutres > 1 ? 's' : ''} en cours`}
               </div>
             </div>
@@ -7150,7 +7381,11 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
               <div className="flex items-start justify-between gap-2 mb-1">
                 <div className="min-w-0">
                   <div className="text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{f.label}</div>
-                  <div className="text-xs" style={{ color: INK_SOFT }}>{f.hint}</div>
+                  <div className="text-xs" style={{ color: INK_SOFT }}>
+                    {f.k === 'antecedent' && crisis.chainIndex > 1
+                      ? 'Repris de la conséquence du maillon précédent'
+                      : f.hint}
+                  </div>
                 </div>
                 {/* Le + ouvre les catégories : c'est elles qui rendent les crises comptables */}
                 <button
@@ -7237,6 +7472,21 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
         </div>
 
         <div className="flex gap-2 pt-1">
+          {onChain && (
+            <Btn
+              variant="outline"
+              onClick={() => {
+                if ((crisis.consequenceTags || []).length === 0 && !(crisis.consequence || '').trim()) {
+                  if (!window.confirm("Aucune conséquence renseignée : le maillon suivant démarrera sans antécédent repris.\n\nContinuer ?")) return;
+                }
+                onChain(crisis);
+              }}
+              className="text-sm py-2.5"
+              title="Enregistrer et enchaîner : la conséquence devient l'antécédent du maillon suivant"
+            >
+              <Link2 size={16} /> Enchaîner
+            </Btn>
+          )}
           <Btn onClick={() => onSave(crisis)} className="flex-1" style={{ backgroundColor: estObservation ? '#B07A2E' : CRISIS }}>
             {isNew
               ? (estObservation ? <><Save size={16} /> Enregistrer</> : <><Square size={16} /> Terminer et enregistrer</>)
