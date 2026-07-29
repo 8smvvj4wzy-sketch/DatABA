@@ -244,8 +244,13 @@ et vibration à zéro.
 > *chronométrer chaque essai* du mode **Essai par essai**.
 
 ### Niveau par intervalle
-Relevé périodique du niveau de fonctionnement, **toutes les 1, 5 ou 10 minutes**.
+Relevé périodique du niveau de fonctionnement. Le **pas est libre, de 10
+secondes à 60 minutes** — raccourcis à 30 s, 1, 2, 5, 10 et 15 min, ou saisie
+en minutes et secondes. Un pas court donne une mesure plus fine, mais demande
+une attention soutenue pendant toute la séance.
+
 Les niveaux sont libres : autant que vous voulez, nommés comme vous voulez.
+Quatre sont proposés par défaut — **Stable, Pré-crise, Crise, Post-crise**.
 
 Précisez ce que mesure le relevé :
 - **Échantillonnage momentané** — l'état à l'instant précis du top ;
@@ -276,6 +281,12 @@ Une séquence d'étapes, cotée sur **plusieurs essais** dans la même séance.
 Pour chaque étape : **R** (réussi), **G** (guidé), **E** (mauvaise réponse),
 **M** (étape manquée) — plus deux marqueurs indépendants : **Demande** et
 **Renforcé**, cochables à n'importe quelle étape.
+
+**Ces réponses sont personnalisables** à la création de l'objectif : ajout,
+suppression, couleur, abrégé, réorganisation. Deux réglages en déterminent
+l'effet sur le score — l'**étoile** marque ce qui compte comme réussite, l'**œil
+barré** ce qui sort du calcul. Vous pouvez ainsi décider que « guidé » vaut
+réussite pour un accompagnement et pas pour un autre.
 
 « Valider l'essai » ouvre l'essai suivant, sans limite de nombre. Les essais
 apparaissent en puces E1, E2, E3 ; on peut revenir corriger l'un d'eux.
@@ -350,8 +361,13 @@ nombreuses étapes.
 ### Renforcement
 
 Au-dessus de la zone de cotation, une pastille par personne présente. Un appui
-la met **en renforcement** : ses fiches se grisent, ses cotations sont
-suspendues et ses chronomètres se figent. Un second appui reprend la cotation.
+la met **en renforcement** : ses fiches se grisent dans les deux vues, ses
+cotations sont suspendues et ses chronomètres se figent. Un second appui reprend
+la cotation.
+
+Si un comportement mérite d'être coté malgré le renforcement, un bandeau sur la
+fiche permet de le débloquer après confirmation. L'autorisation ne vaut que pour
+cette fiche, et retombe dès la fin du renforcement.
 
 Le temps cumulé s'affiche sur la pastille. Le rapport Excel indique, pour chaque
 personne et chaque séance, le **temps de renforcement** et le **temps
