@@ -124,11 +124,22 @@ const INTERVAL_MODE_SHORT = { momentane: 'momentané', partiel: 'partiel', total
    indépendants — une demande de la personne, et le moment du renforcement,
    qui varie d'une étape à l'autre. */
 const BALANCE_OUTCOMES = [
-  { k: 'reussi', label: 'Réussi', short: 'R', color: '#0F8B6C' },
-  { k: 'guide', label: 'Guidé', short: 'G', color: '#D69A2D' },
-  { k: 'erreur', label: 'Mauvaise réponse', short: 'E', color: '#A8402F' },
-  { k: 'manque', label: 'Étape manquée', short: 'M', color: '#565E54' },
+  { k: 'reussi', label: 'Réussi', short: 'R', color: '#0F8B6C', reussite: true },
+  { k: 'guide', label: 'Guidé', short: 'G', color: '#D69A2D', reussite: false },
+  { k: 'erreur', label: 'Mauvaise réponse', short: 'E', color: '#A8402F', reussite: false },
+  { k: 'manque', label: 'Étape manquée', short: 'M', color: '#565E54', reussite: false, exclu: true },
 ];
+
+/* Réponses retenues pour un Balance Program : celles de l'objectif, sinon
+   celles fournies par défaut. « reussite » désigne ce qui compte comme réussi,
+   « exclu » ce qui sort du calcul — une étape non présentée n'est pas un échec. */
+function balanceOutcomes(obj) {
+  const l = obj && obj.config && obj.config.balanceOutcomes;
+  return l && l.length ? l : BALANCE_OUTCOMES;
+}
+function outcomeMeta(obj, k) {
+  return balanceOutcomes(obj).find((x) => x.k === k) || null;
+}
 
 /* --- Phases d'un objectif ---
    Distinguer ligne de base et intervention est indispensable pour interpréter
@@ -192,9 +203,10 @@ const DEFAULT_CHAIN_STEPS = [
 ];
 
 const DEFAULT_INTERVAL_LEVELS = [
-  { id: 'lv1', name: 'Engagé' },
-  { id: 'lv2', name: 'Passif' },
-  { id: 'lv3', name: 'Opposition' },
+  { id: 'lv1', name: 'Stable' },
+  { id: 'lv2', name: 'Pré-crise' },
+  { id: 'lv3', name: 'Crise' },
+  { id: 'lv4', name: 'Post-crise' },
 ];
 const LEVEL_COLORS = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
 
@@ -803,6 +815,14 @@ function finalizeSession(session) {
   return { ...session, data, reinforcement, endedAt: session.isEdit ? session.endedAt || stamp : stamp };
 }
 
+/* Pas d'un relevé par intervalle, en secondes. Les objectifs enregistrés avant
+   la durée libre n'ont qu'un nombre de minutes : on le convertit. */
+function intervalStepSec(obj) {
+  const c = (obj && obj.config) || {};
+  if (c.intervalSeconds) return c.intervalSeconds;
+  return (c.intervalMinutes || 5) * 60;
+}
+
 /* --- Cotation par intervalle : relevés en direct + périodes saisies à la main ---
    Les deux sources sont ramenées à une durée en minutes, ce qui permet de les
    additionner. Un relevé en direct vaut la durée d'un intervalle ; une période
@@ -823,15 +843,20 @@ function segmentMinutes(seg) {
   if (a === null || b === null) return 0;
   return b > a ? b - a : 0;
 }
+function segmentSeconds(seg) {
+  return segmentMinutes(seg) * 60;
+}
 
+/* Cumuls en secondes : relevé en direct et période saisie à la main se
+   additionnent alors quelle que soit la durée du pas. */
 function intervalTotals(obj, entry) {
-  const step = obj.config.intervalMinutes || 5;
+  const step = intervalStepSec(obj);
   const totals = {};
   Object.values(entry.marks || {}).forEach((lid) => {
     if (lid) totals[lid] = (totals[lid] || 0) + step;
   });
   (entry.segments || []).forEach((s) => {
-    const d = segmentMinutes(s);
+    const d = segmentSeconds(s);
     if (d > 0 && s.levelId) totals[s.levelId] = (totals[s.levelId] || 0) + d;
   });
   const total = Object.values(totals).reduce((a, b) => a + b, 0);
@@ -904,12 +929,12 @@ function summarize(obj, entry, guidances) {
     const { totals, total } = intervalTotals(obj, entry);
     if (!total) return { result: 'Non coté', detail: '' };
     const mode = INTERVAL_MODE_SHORT[obj.config.intervalMode] || '';
-    const named = levels.filter((l) => totals[l.id]).map((l) => ({ name: l.name, min: totals[l.id] }));
-    const top = named.slice().sort((a, b) => b.min - a.min)[0];
-    const manual = (entry.segments || []).filter((s) => segmentMinutes(s) > 0).length;
+    const named = levels.filter((l) => totals[l.id]).map((l) => ({ name: l.name, sec: totals[l.id] }));
+    const top = named.slice().sort((a, b) => b.sec - a.sec)[0];
+    const manual = (entry.segments || []).filter((s) => segmentSeconds(s) > 0).length;
     return {
-      result: `${total} min cotées · dominant : ${top ? top.name : '—'}`,
-      detail: `${named.map((c) => `${c.name}: ${c.min} min (${Math.round((c.min / total) * 100)} %)`).join(' | ')}${mode ? ` (${mode})` : ''}${manual ? ` [${manual} période${manual > 1 ? 's' : ''} saisie${manual > 1 ? 's' : ''} à la main]` : ''}`,
+      result: `${fmtDuration(total * 1000)} cotées · dominant : ${top ? top.name : '—'}`,
+      detail: `${named.map((c) => `${c.name}: ${fmtDuration(c.sec * 1000)} (${Math.round((c.sec / total) * 100)} %)`).join(' | ')}${mode ? ` (${mode})` : ''}${manual ? ` [${manual} période${manual > 1 ? 's' : ''} saisie${manual > 1 ? 's' : ''} à la main]` : ''}`,
     };
   }
   if (obj.type === 'chaining') {
@@ -934,7 +959,7 @@ function summarize(obj, entry, guidances) {
           .map((step, i) => {
             const e = (tr.steps || {})[step.id];
             if (!e || !e.outcome) return '';
-            const o = BALANCE_OUTCOMES.find((x) => x.k === e.outcome);
+            const o = outcomeMeta(obj, e.outcome);
             return `${i + 1}:${o ? o.short : e.outcome}${e.demande ? '+D' : ''}${e.renforce ? '+R' : ''}`;
           })
           .filter(Boolean)
@@ -1066,9 +1091,10 @@ function balanceStats(obj, entry) {
       if (e.demande) demandes += 1;
       if (e.renforce) renforts.push(`E${ti + 1}·${si + 1}`);
       if (!e.outcome) return;
-      if (e.outcome === 'manque') { manque += 1; return; }
+      const meta = outcomeMeta(obj, e.outcome);
+      if (meta && meta.exclu) { manque += 1; return; }
       notes += 1;
-      if (e.outcome === 'reussi') reussi += 1;
+      if (meta && meta.reussite) reussi += 1;
     });
   });
   const cotes = trials.filter((tr) => Object.values(tr.steps || {}).some((e) => e && e.outcome)).length;
@@ -1388,10 +1414,10 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
             (obj.config.steps || []).forEach((st, si) => {
               const e = (tr.steps || {})[st.id];
               if (!e || !e.outcome) return;
-              const o = BALANCE_OUTCOMES.find((x) => x.k === e.outcome);
+              const o = outcomeMeta(obj, e.outcome);
               rows.push([
                 ...b, 'Balance Program', ti + 1, st.name, o ? o.label : e.outcome,
-                e.outcome === 'manque' ? '' : e.outcome === 'reussi' ? 1 : 0,
+                o && o.exclu ? '' : o && o.reussite ? 1 : 0,
                 e.demande ? 'Oui' : 'Non', e.renforce ? 'Oui' : 'Non', '',
               ]);
             });
@@ -1417,7 +1443,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
           });
           (entry.segments || []).forEach((seg) => {
             const lv = levels.find((l) => l.id === seg.levelId);
-            if (lv) rows.push([...b, 'Intervalle (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '', segmentMinutes(seg) * 60]);
+            if (lv) rows.push([...b, 'Intervalle (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '', segmentSeconds(seg)]);
           });
         }
       });
@@ -1447,7 +1473,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
         const score = objectiveScore(obj, entry, guidances);
         let fullDetail = detail;
         if (obj.type === 'interval') {
-          const set = crisisIntervals(s, crises, obj.config.intervalMinutes, sid);
+          const set = crisisIntervals(s, crises, intervalStepSec(obj) / 60, sid);
           if (set.size > 0) {
             const list = Array.from(set).sort((a, b) => a - b).map((n) => `#${n}`).join(', ');
             fullDetail = `${detail}${detail ? ' — ' : ''}CRISE sur ${set.size > 1 ? 'les intervalles' : "l'intervalle"} ${list}`;
@@ -3505,7 +3531,7 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                                 {o.type === 'trials' && o.config.withTimer && (o.config.timerMode === 'countdown' && o.config.timerSeconds
                                   ? ` · limite ${fmtDuration(o.config.timerSeconds * 1000)}`
                                   : ' · chronométré')}
-                                {o.type === 'interval' && ` · toutes les ${o.config.intervalMinutes} min · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
+                                {o.type === 'interval' && ` · toutes les ${fmtDuration(intervalStepSec(o) * 1000)} · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
                                 {(o.type === 'chaining' || o.type === 'balance') && ` · ${(o.config.steps || []).length} étapes`}
                                 {o.type === 'timer' && (o.config.timerMode === 'countdown' && o.config.timerSeconds
                                   ? ` · ${fmtDuration(o.config.timerSeconds * 1000)}`
@@ -3636,10 +3662,28 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const [name, setName] = useState(init.name || '');
   const [type, setType] = useState(init.type || 'trials');
   const [trialCount, setTrialCount] = useState(initConfig.trialCount === undefined ? 0 : initConfig.trialCount);
-  const [intervalMinutes, setIntervalMinutes] = useState(initConfig.intervalMinutes || 5);
+  const [intervalMin, setIntervalMin] = useState(() => {
+    const sec = initConfig.intervalSeconds || (initConfig.intervalMinutes || 5) * 60;
+    return Math.floor(sec / 60);
+  });
+  const [intervalSec, setIntervalSec] = useState(() => {
+    const sec = initConfig.intervalSeconds || (initConfig.intervalMinutes || 5) * 60;
+    return sec % 60;
+  });
   const [intervalMode, setIntervalMode] = useState(initConfig.intervalMode || 'momentane');
   const [steps, setSteps] = useState(initConfig.steps || DEFAULT_CHAIN_STEPS);
   const [newStep, setNewStep] = useState('');
+  const [balanceSet, setBalanceSet] = useState(() =>
+    (initConfig.balanceOutcomes && initConfig.balanceOutcomes.length
+      ? initConfig.balanceOutcomes
+      : BALANCE_OUTCOMES).map((o) => ({ ...o }))
+  );
+  const [addingOutcome, setAddingOutcome] = useState(false);
+  const [oLabel, setOLabel] = useState('');
+  const [oShort, setOShort] = useState('');
+  const [oColor, setOColor] = useState(GUIDANCE_PALETTE[0]);
+  const [oReussite, setOReussite] = useState(false);
+  const [oExclu, setOExclu] = useState(false);
   const [targets, setTargets] = useState(initConfig.targets || []);
   const [newTarget, setNewTarget] = useState('');
   /* Liste de réponses propre à cet objectif. On reprend d'abord un éventuel
@@ -3690,12 +3734,15 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
       }
     }
     if (type === 'interval') {
-      config.intervalMinutes = intervalMinutes;
+      const pas = Math.min(3600, Math.max(10, (Number(intervalMin) || 0) * 60 + (Number(intervalSec) || 0)));
+      config.intervalSeconds = pas;
+      config.intervalMinutes = pas / 60; // conservé pour les versions antérieures
       config.intervalMode = intervalMode;
       config.levels = levels;
       config.targetLevelId = levels.some((l) => l.id === targetLevelId) ? targetLevelId : levels[0].id;
     }
     if (type === 'chaining' || type === 'balance') config.steps = steps;
+    if (type === 'balance' && balanceSet.length) config.balanceOutcomes = balanceSet;
     if (type === 'probe') config.useGuidance = useGuidance;
     if (type === 'timer') {
       config.timerMode = timerMode;
@@ -3864,14 +3911,41 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
           </div>
           <div>
             <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Relevé toutes les</div>
-            <div className="flex gap-1.5">
-              {[1, 5, 10].map((n) => (
-                <button key={n} onClick={() => setIntervalMinutes(n)} className="flex-1 rounded-lg py-2.5 text-sm border"
-                  style={{ borderColor: intervalMinutes === n ? INK : BORDER, backgroundColor: intervalMinutes === n ? INK : 'transparent', color: intervalMinutes === n ? '#fff' : INK_SOFT }}>
-                  {n} min
-                </button>
-              ))}
+            <div className="flex gap-1.5 flex-wrap mb-2">
+              {[30, 60, 120, 300, 600, 900].map((total) => {
+                const m = Math.floor(total / 60);
+                const sec = total % 60;
+                const on = (Number(intervalMin) || 0) * 60 + (Number(intervalSec) || 0) === total;
+                return (
+                  <button key={total} onClick={() => { setIntervalMin(m); setIntervalSec(sec); }}
+                    className="rounded-lg px-3 py-2 text-sm border"
+                    style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT, fontFamily: F_MONO }}>
+                    {m ? `${m} min` : ''}{sec ? `${m ? ' ' : ''}${sec} s` : ''}
+                  </button>
+                );
+              })}
             </div>
+            <div className="flex gap-2 items-center">
+              <input type="number" inputMode="numeric" min="0" max="60" value={intervalMin}
+                onChange={(e) => setIntervalMin(e.target.value === '' ? '' : Number(e.target.value))}
+                onBlur={() => setIntervalMin((v) => (v === '' || v === null ? 0 : Math.min(60, Math.max(0, Number(v)))))}
+                className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
+                style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
+              <span className="text-xs" style={{ color: INK_SOFT }}>min</span>
+              <input type="number" inputMode="numeric" min="0" max="59" value={intervalSec}
+                onChange={(e) => setIntervalSec(e.target.value === '' ? '' : Number(e.target.value))}
+                onBlur={() => setIntervalSec((v) => (v === '' || v === null ? 0 : Math.min(59, Math.max(0, Number(v)))))}
+                className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
+                style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
+              <span className="text-xs" style={{ color: INK_SOFT }}>s</span>
+              <span className="text-xs ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
+                = {fmtDuration(Math.min(3600, Math.max(10, (Number(intervalMin) || 0) * 60 + (Number(intervalSec) || 0))) * 1000)}
+              </span>
+            </div>
+            <p className="text-xs mt-1.5" style={{ color: INK_SOFT }}>
+              De 10 secondes à 60 minutes. Un pas court donne une mesure plus fine, mais demande
+              une attention soutenue pendant toute la séance.
+            </p>
           </div>
           <div>
             <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Niveaux de fonctionnement</div>
@@ -4150,6 +4224,92 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
             <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
               Plusieurs séances d'une même journée sont moyennées et comptent pour un seul jour.
             </p>
+          )}
+        </div>
+      )}
+
+      {type === 'balance' && (
+        <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
+          <div className="flex items-center gap-1.5 mb-1">
+            <Route size={14} style={{ color: INK_SOFT }} />
+            <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Réponses possibles par étape</span>
+          </div>
+          <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
+            L'étoile désigne ce qui compte comme réussite. L'œil barré exclut la réponse du calcul,
+            pour une étape non présentée qui ne doit pas peser comme un échec.
+            Appui long pour réordonner.
+          </p>
+
+          <ReorderList
+            items={balanceSet}
+            keyOf={(o) => o.k}
+            onReorder={setBalanceSet}
+            className="space-y-1.5 mb-2"
+            renderItem={(o) => (
+              <div className="flex items-center gap-2 rounded-lg px-2.5 py-2" style={{ backgroundColor: CARD }}>
+                <GripVertical size={14} style={{ color: INK_SOFT }} className="shrink-0" />
+                <span className="w-8 h-7 rounded-md flex items-center justify-center text-xs font-semibold text-white shrink-0"
+                  style={{ backgroundColor: o.color, fontFamily: F_DISPLAY }}>
+                  {o.short}
+                </span>
+                <span className="text-sm flex-1 min-w-0 break-words">{o.label}</span>
+                <button onClick={() => setBalanceSet((cur) => cur.map((x) => (x.k === o.k ? { ...x, reussite: !x.reussite, exclu: false } : x)))}
+                  style={{ color: o.reussite ? '#D69A2D' : INK_SOFT }} title="Compte comme réussite">
+                  <Star size={15} fill={o.reussite ? '#D69A2D' : 'none'} />
+                </button>
+                <button onClick={() => setBalanceSet((cur) => cur.map((x) => (x.k === o.k ? { ...x, exclu: !x.exclu, reussite: false } : x)))}
+                  style={{ color: o.exclu ? INK : INK_SOFT }} title="Exclue du calcul">
+                  <EyeOff size={15} />
+                </button>
+                <button onClick={() => setBalanceSet((cur) => (cur.length > 1 ? cur.filter((x) => x.k !== o.k) : cur))}
+                  style={{ color: INK_SOFT }} title="Retirer">
+                  <X size={15} />
+                </button>
+              </div>
+            )}
+          />
+
+          {addingOutcome ? (
+            <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+              <div className="flex gap-2">
+                <input value={oShort} onChange={(e) => setOShort(e.target.value.toUpperCase().slice(0, 3))}
+                  placeholder="Abrégé" className="w-24 rounded-xl border px-3 py-2.5 text-sm bg-transparent text-center"
+                  style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
+                <Field value={oLabel} onChange={setOLabel} placeholder="Intitulé complet" />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {GUIDANCE_PALETTE.map((c) => (
+                  <button key={c} onClick={() => setOColor(c)} className="w-8 h-8 rounded-lg border-2"
+                    style={{ backgroundColor: c, borderColor: oColor === c ? INK : 'transparent' }} />
+                ))}
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => { setOReussite((v) => !v); setOExclu(false); }} className="flex items-center gap-1.5 text-xs" style={{ color: oReussite ? '#D69A2D' : INK_SOFT }}>
+                  <Star size={14} fill={oReussite ? '#D69A2D' : 'none'} /> Réussite
+                </button>
+                <button onClick={() => { setOExclu((v) => !v); setOReussite(false); }} className="flex items-center gap-1.5 text-xs" style={{ color: oExclu ? INK : INK_SOFT }}>
+                  <EyeOff size={14} /> Exclue du calcul
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <Btn
+                  onClick={() => {
+                    if (!oLabel.trim() || !oShort.trim()) return;
+                    setBalanceSet((cur) => [...cur, { k: uid(), label: oLabel.trim(), short: oShort.trim(), color: oColor, reussite: oReussite, exclu: oExclu }]);
+                    setOLabel(''); setOShort(''); setOReussite(false); setOExclu(false); setAddingOutcome(false);
+                  }}
+                  disabled={!oLabel.trim() || !oShort.trim()}
+                  className="flex-1 text-sm py-2.5"
+                >
+                  Ajouter
+                </Btn>
+                <Btn variant="ghost" onClick={() => setAddingOutcome(false)} className="text-sm py-2.5">Annuler</Btn>
+              </div>
+            </div>
+          ) : (
+            <Btn variant="ghost" onClick={() => setAddingOutcome(true)} className="w-full text-sm py-2.5">
+              <Plus size={15} /> Ajouter une réponse
+            </Btn>
           )}
         </div>
       )}
@@ -4680,7 +4840,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     if (isEdit || session.pausedAt) return;
     const stepSet = new Set();
     Object.values(session.objectiveSnapshot || {}).forEach((o) => {
-      if (o && o.type === 'interval') stepSet.add(o.config.intervalMinutes);
+      if (o && o.type === 'interval') stepSet.add(intervalStepSec(o) / 60);
     });
     let fire = false;
     stepSet.forEach((min) => {
@@ -4972,6 +5132,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       now={now} elapsed={elapsed}
                       session={session} crises={crises} studentId={sid} guidances={guidances}
                       studentLabel={st ? st.initials : null}
+                      paused={enRenfo(sid)}
                       onStudentClick={() => { setCurrentId(sid); setViewMode('student'); }}
                       hidden={hiddenFor(sid).includes(oid)}
                       onToggleHidden={() => toggleHidden(sid, oid)}
@@ -5098,6 +5259,12 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
   /* Double-appui sur l'intitulé : agrandit la fiche. On le détecte à la main,
      l'événement natif de double-clic étant peu fiable au toucher sur iOS. */
   const dernierAppui = useRef(0);
+  /* Autorisation ponctuelle de coter pendant un renforcement. Elle retombe
+     dès que le renforcement se termine, pour ne pas rester active à l'insu. */
+  const [forcer, setForcer] = useState(false);
+  useEffect(() => {
+    if (!paused) setForcer(false);
+  }, [paused]);
   function handleHeaderTap() {
     if (!onExpand) return;
     const t = Date.now();
@@ -5111,7 +5278,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
 
   if (!obj) return null;
   const crisisSet =
-    obj.type === 'interval' ? crisisIntervals(session, crises, obj.config.intervalMinutes, studentId) : null;
+    obj.type === 'interval' ? crisisIntervals(session, crises, intervalStepSec(obj) / 60, studentId) : null;
   const meta = TYPES[obj.type];
   const Icon = meta.icon;
 
@@ -5159,12 +5326,26 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
           </button>
         )}
       </div>
-      {paused && (
-        <div className="mt-2 text-xs flex items-center gap-1.5 rounded-lg px-2 py-1.5" style={{ backgroundColor: '#D69A2D', color: '#fff' }}>
-          <Gift size={12} /> En renforcement — cotations suspendues
+      {paused && !forcer && (
+        <button
+          onClick={() => {
+            if (window.confirm("Coter malgré le renforcement ?\n\nLe temps de renforcement continue d'être décompté : la cotation sera enregistrée, mais elle porte sur un moment hors activité.")) {
+              setForcer(true);
+            }
+          }}
+          className="mt-2 w-full text-xs flex items-center justify-center gap-1.5 rounded-lg px-2 py-2"
+          style={{ backgroundColor: '#D69A2D', color: '#fff' }}
+        >
+          <Gift size={12} /> En renforcement — appuyer pour coter quand même
+        </button>
+      )}
+      {paused && forcer && (
+        <div className="mt-2 text-xs flex items-center justify-between gap-2 rounded-lg px-2 py-1.5" style={{ backgroundColor: PAPER, color: INK_SOFT }}>
+          <span className="flex items-center gap-1.5"><Gift size={12} /> Cotation autorisée pendant le renforcement</span>
+          <button onClick={() => setForcer(false)} style={{ color: INK_SOFT }}><X size={13} /></button>
         </div>
       )}
-      <div className="mt-3" style={paused ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
+      <div className="mt-3" style={paused && !forcer ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
         {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} now={now} onChange={onChange} />}
         {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
@@ -5497,7 +5678,7 @@ function TimerWidget({ obj, entry, now, onChange }) {
 }
 
 function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
-  const stepMs = (obj.config.intervalMinutes || 5) * 60000;
+  const stepMs = intervalStepSec(obj) * 1000;
   const current = Math.floor(elapsed / stepMs) + 1;
   const remaining = stepMs - (elapsed % stepMs);
   const levels = obj.config.levels || [];
@@ -5723,6 +5904,7 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
 
 function BalanceWidget({ obj, entry, onChange }) {
   const steps = obj.config.steps || [];
+  const issues = balanceOutcomes(obj);
   const trials = balanceTrials(entry);
   const [active, setActive] = useState(trials.length - 1);
   const idx = Math.min(active, trials.length - 1);
@@ -5795,14 +5977,14 @@ function BalanceWidget({ obj, entry, onChange }) {
                 <span className="text-xs w-5 shrink-0" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
                 <span className="text-sm flex-1 min-w-0 leading-snug break-words" style={{ overflowWrap: 'anywhere' }}>{st.name}</span>
               </div>
-              <div className="flex gap-1 mb-1.5">
-                {BALANCE_OUTCOMES.map((o) => {
+              <div className="flex flex-wrap gap-1 mb-1.5">
+                {issues.map((o) => {
                   const on = e.outcome === o.k;
                   return (
                     <button
                       key={o.k}
                       onClick={() => setStep(st.id, { outcome: on ? null : o.k })}
-                      className="flex-1 rounded-lg py-2 text-xs font-semibold border active:scale-95 transition-transform"
+                      className="flex-1 min-w-[44px] rounded-lg py-2 text-xs font-semibold border active:scale-95 transition-transform"
                       style={{ fontFamily: F_DISPLAY, borderColor: on ? o.color : BORDER, backgroundColor: on ? o.color : 'transparent', color: on ? '#fff' : INK_SOFT }}
                       title={o.label}
                     >
