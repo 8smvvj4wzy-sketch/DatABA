@@ -314,6 +314,11 @@ comptabilisées à part.
    personnes, leurs objectifs, et les prioritaires. Au prochain choix de cet
    atelier, tout se recoche automatiquement.
 
+En haut de l'écran, **Relancer la dernière séance** reprend telle quelle la
+configuration de la précédente — mode, atelier, personnes, objectifs — sans
+qu'elle ait besoin d'avoir été mémorisée au préalable. Une personne ou un
+objectif supprimé depuis est simplement écarté.
+
 > **Les objectifs créés ensuite sont ajoutés d'office** au rappel de la
 > configuration, avec un message le signalant. En revanche, un objectif que vous
 > aviez volontairement décoché reste décoché.
