@@ -2141,14 +2141,19 @@ function AbaApp() {
   const [crises, setCrises] = useState([]);
 
   const [activeSession, setActiveSession] = useState(null);
-  const [crisis, setCrisis] = useState(null);
-  const [crisisMinimized, setCrisisMinimized] = useState(false);
+  /* Plusieurs crises ou observations peuvent être ouvertes en même temps :
+     chacune garde son propre chronomètre, une seule est affichée à la fois. */
+  const [openCrises, setOpenCrises] = useState([]);
+  const [activeCrisisId, setActiveCrisisId] = useState(null);
+  const crisis = openCrises.find((c) => c.id === activeCrisisId) || null;
+  const setCrisis = (maj) =>
+    setOpenCrises((l) => l.map((c) => (c.id === activeCrisisId ? (typeof maj === 'function' ? maj(c) : maj) : c)));
   const [crisisTick, setCrisisTick] = useState(Date.now());
   useEffect(() => {
-    if (!crisis || !crisisMinimized) return undefined;
+    if (!openCrises.length) return undefined;
     const id = setInterval(() => setCrisisTick(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [crisis, crisisMinimized]);
+  }, [openCrises.length]);
   const [toast, setToast] = useState(null);
   const rootRef = useRef(null);
   const contentRef = useRef(null);
@@ -2627,61 +2632,54 @@ function AbaApp() {
     notify('Séance supprimée');
   };
 
-  /* --- crise --- */
-  const openObservation = () => {
-    setCrisisMinimized(false);
-    setCrisis({
-      id: uid(),
-      date: new Date().toISOString(),
-      startedAt: Date.now(),
-      isNew: true,
-      kind: 'abc',
-      sessionId: (activeSession && activeSession.id) || null,
-      studentId: null,
-      atelierId: (activeSession && activeSession.atelierId) || null,
-      intervenantIds: activeSession && activeSession.intervenantId ? [activeSession.intervenantId] : [],
-      commentaire: '',
-      antecedent: '',
-      comportement: '',
-      consequence: '',
-      antecedentTags: [],
-      comportementTags: [],
-      consequenceTags: [],
-    });
-  };
+  /* --- crises et observations --- */
+  const nouvelleFiche = (kind) => ({
+    id: uid(),
+    date: new Date().toISOString(),
+    startedAt: Date.now(),
+    isNew: true,
+    kind,
+    sessionId: (activeSession && activeSession.id) || null,
+    studentId: null,
+    atelierId: (activeSession && activeSession.atelierId) || null,
+    intervenantIds: activeSession && activeSession.intervenantId ? [activeSession.intervenantId] : [],
+    commentaire: '',
+    antecedent: '',
+    comportement: '',
+    consequence: '',
+    antecedentTags: [],
+    comportementTags: [],
+    consequenceTags: [],
+  });
 
-  const openCrisis = () => {
-    setCrisisMinimized(false);
-    setCrisis({
-      id: uid(),
-      date: new Date().toISOString(),
-      startedAt: Date.now(),
-      isNew: true,
-      kind: 'crise',
-      sessionId: (activeSession && activeSession.id) || null,
-      studentId: null,
-      atelierId: (activeSession && activeSession.atelierId) || null,
-      intervenantIds: activeSession && activeSession.intervenantId ? [activeSession.intervenantId] : [],
-      commentaire: '',
-      antecedent: '',
-      comportement: '',
-      consequence: '',
-      antecedentTags: [],
-      comportementTags: [],
-      consequenceTags: [],
-    });
+  /* Une nouvelle fiche s'ajoute aux autres : celles déjà ouvertes continuent
+     de tourner, chacune avec son propre chronomètre. */
+  const ouvrirFiche = (kind) => {
+    const fiche = nouvelleFiche(kind);
+    setOpenCrises((l) => [...l, fiche]);
+    setActiveCrisisId(fiche.id);
   };
+  const openObservation = () => ouvrirFiche('abc');
+  const openCrisis = () => ouvrirFiche('crise');
 
   const editCrisis = (c) => {
-    setCrisisMinimized(false);
-    setCrisis({
+    const deja = openCrises.find((x) => x.id === c.id);
+    if (deja) { setActiveCrisisId(c.id); return; }
+    const fiche = {
       ...c,
       kind: c.kind || 'crise',
       isNew: false,
       atelierId: c.atelierId || null,
       intervenantIds: c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []),
       commentaire: c.commentaire || '',
-    });
+    };
+    setOpenCrises((l) => [...l, fiche]);
+    setActiveCrisisId(fiche.id);
+  };
+
+  const fermerFiche = (id) => {
+    setOpenCrises((l) => l.filter((x) => x.id !== id));
+    setActiveCrisisId((cur) => (cur === id ? null : cur));
   };
 
   const saveCrisis = (c) => {
@@ -2694,14 +2692,12 @@ function AbaApp() {
       setCrises((list) => list.map((x) => (x.id === rest.id ? { ...x, ...rest } : x)));
       notify(rest.kind === 'abc' ? 'Observation modifiée' : 'Crise modifiée');
     }
-    setCrisis(null);
-    setCrisisMinimized(false);
+    fermerFiche(c.id);
   };
 
   const deleteCrisis = (id) => {
     setCrises((list) => list.filter((x) => x.id !== id));
-    setCrisis(null);
-    setCrisisMinimized(false);
+    fermerFiche(id);
     notify('Enregistrement supprimé');
   };
 
@@ -2850,22 +2846,29 @@ function AbaApp() {
         style={{ background: `linear-gradient(to top, ${PAPER} 55%, transparent)`, paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)' }}
       >
         <div className="max-w-4xl mx-auto">
-        {crisis && crisisMinimized && (
-          <button
-            onClick={() => setCrisisMinimized(false)}
-            className="w-full mb-2 rounded-2xl px-4 py-2.5 text-white flex items-center gap-2 shadow-lg"
-            style={{ backgroundColor: crisis.kind === 'abc' ? '#B07A2E' : CRISIS, fontFamily: F_DISPLAY }}
-          >
-            {crisis.kind === 'abc' ? <ClipboardList size={16} /> : <AlertTriangle size={16} />}
-            <span className="text-sm">
-              {crisis.kind === 'abc' ? 'Observation en cours' : 'Crise en cours'} — reprendre la saisie
-            </span>
-            {crisis.kind !== 'abc' && crisis.isNew && (
-              <span className="ml-auto text-sm tabular-nums" style={{ fontFamily: F_MONO }}>
-                {fmtClock(Math.max(0, crisisTick - crisis.startedAt))}
-              </span>
-            )}
-          </button>
+        {/* Une pastille par fiche ouverte : chacune garde son chronomètre */}
+        {openCrises.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {openCrises.map((c) => {
+              const st = students.find((x) => x.id === c.studentId);
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => setActiveCrisisId(c.id)}
+                  className="rounded-2xl px-3 py-2 text-white flex items-center gap-1.5 shadow-lg text-sm"
+                  style={{ backgroundColor: c.kind === 'abc' ? '#B07A2E' : CRISIS, fontFamily: F_DISPLAY }}
+                >
+                  {c.kind === 'abc' ? <ClipboardList size={14} /> : <AlertTriangle size={14} />}
+                  <span>{st ? st.initials : c.kind === 'abc' ? 'Observation' : 'Crise'}</span>
+                  {c.kind !== 'abc' && c.isNew && (
+                    <span className="tabular-nums" style={{ fontFamily: F_MONO }}>
+                      {fmtClock(Math.max(0, crisisTick - c.startedAt))}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         )}
         <div className="flex gap-2">
           <button
@@ -2888,11 +2891,14 @@ function AbaApp() {
         </div>
       </div>
 
-      {crisis && !crisisMinimized && (
+      {crisis && (
         <CrisisOverlay
+          key={crisis.id}
           crisis={crisis} setCrisis={setCrisis}
           students={students} ateliers={ateliers} intervenants={intervenants} abcOptions={abcOptions}
-          onMinimize={() => setCrisisMinimized(true)}
+          nbAutres={openCrises.length - 1}
+          onMinimize={() => setActiveCrisisId(null)}
+          onAbandon={() => fermerFiche(crisis.id)}
           onSave={saveCrisis} onDelete={deleteCrisis}
         />
       )}
@@ -4787,12 +4793,34 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     session.studentIds.forEach((sid) => {
       (session.selectedObjectives[sid] || []).forEach((oid) => {
         const o = session.objectiveSnapshot[oid];
-        if (o && o.favorite) naturel.push(`${sid}|${oid}`);
+        if (!o) return;
+        /* En séance Balance Program, la cotation doit être accessible sans
+           passer par la vue par personne : elle figure d'office ici. */
+        const autoBalance = session.mode === 'balance' && o.type === 'balance';
+        if (o.favorite || autoBalance) naturel.push(`${sid}|${oid}`);
       });
     });
     const memorise = session.priorityOrder || [];
     return [...memorise.filter((k) => naturel.includes(k)), ...naturel.filter((k) => !memorise.includes(k))];
   })();
+
+  /* Zone dominante pour les Balance Program, zone latérale pour le reste */
+  const balanceKeys = priorityItems.filter((k) => {
+    const o = session.objectiveSnapshot[k.split('|')[1]];
+    return o && o.type === 'balance';
+  });
+  const autresKeys = priorityItems.filter((k) => !balanceKeys.includes(k));
+
+  function reorderPriority(sousEnsemble) {
+    setSession((s0) => {
+      const complet = s0.priorityOrder && s0.priorityOrder.length ? s0.priorityOrder.slice() : priorityItems.slice();
+      const positions = [];
+      complet.forEach((k, i) => { if (sousEnsemble.includes(k)) positions.push(i); });
+      const suite = complet.slice();
+      positions.forEach((pos, i) => { suite[pos] = sousEnsemble[i]; });
+      return { ...s0, priorityOrder: suite };
+    });
+  }
 
   function reorderObjectives(sid, nouvelOrdre) {
     setSession((s0) => {
@@ -5113,36 +5141,82 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           {viewMode === 'priority' ? (
             priorityItems.length === 0 ? (
               <Empty>Aucun objectif prioritaire parmi les personnes présentes.</Empty>
-            ) : (
-              <ReorderList
-                items={priorityItems}
-                keyOf={(k) => k}
-                onReorder={(next) => setSession((s0) => ({ ...s0, priorityOrder: next }))}
-                style={gridStyle}
-                itemStyle={gridItemStyle}
-                renderItem={(k) => {
-                  const [sid, oid] = k.split('|');
-                  const obj = session.objectiveSnapshot[oid];
-                  const st = students.find((x) => x.id === sid);
-                  if (!obj || !session.data[sid]) return null;
-                  return (
-                    <ObjectiveCard
-                      obj={obj}
-                      entry={session.data[sid][oid]}
-                      now={now} elapsed={elapsed}
-                      session={session} crises={crises} studentId={sid} guidances={guidances}
-                      studentLabel={st ? st.initials : null}
-                      paused={enRenfo(sid)}
-                      onStudentClick={() => { setCurrentId(sid); setViewMode('student'); }}
-                      hidden={hiddenFor(sid).includes(oid)}
-                      onToggleHidden={() => toggleHidden(sid, oid)}
-                      onExpand={() => setExpanded({ sid, oid })}
-                      onChange={(p) => updateEntry(sid, oid, p)}
+            ) : (() => {
+              /* Une fiche par objectif, rendue par les deux zones */
+              const carte = (k) => {
+                const [sid, oid] = k.split('|');
+                const obj = session.objectiveSnapshot[oid];
+                const st = students.find((x) => x.id === sid);
+                if (!obj || !session.data[sid]) return null;
+                return (
+                  <ObjectiveCard
+                    obj={obj}
+                    entry={session.data[sid][oid]}
+                    now={now} elapsed={elapsed}
+                    session={session} crises={crises} studentId={sid} guidances={guidances}
+                    studentLabel={st ? st.initials : null}
+                    paused={enRenfo(sid)}
+                    onStudentClick={() => { setCurrentId(sid); setViewMode('student'); }}
+                    hidden={hiddenFor(sid).includes(oid)}
+                    onToggleHidden={() => toggleHidden(sid, oid)}
+                    onExpand={() => setExpanded({ sid, oid })}
+                    onChange={(p) => updateEntry(sid, oid, p)}
+                  />
+                );
+              };
+
+              /* Sans Balance Program, un flux unique suffit. */
+              if (balanceKeys.length === 0) {
+                return (
+                  <ReorderList
+                    items={priorityItems}
+                    keyOf={(k) => k}
+                    onReorder={reorderPriority}
+                    style={gridStyle}
+                    itemStyle={gridItemStyle}
+                    renderItem={carte}
+                  />
+                );
+              }
+
+              /* Avec Balance Program : il occupe la zone principale, les autres
+                 objectifs prioritaires passent sur le côté. Deux Balance ou plus
+                 se placent côte à côte dans cette zone. */
+              const styleBalance = {
+                zoom,
+                columnWidth: balanceKeys.length > 1 ? '340px' : '100%',
+                columnGap: '0.75rem',
+              };
+              const styleCote = { zoom, columnWidth: '260px', columnGap: '0.75rem' };
+
+              return (
+                <div className="flex flex-col landscape:flex-row gap-3 items-start">
+                  <div className="w-full landscape:flex-[3] min-w-0">
+                    <ReorderList
+                      items={balanceKeys}
+                      keyOf={(k) => k}
+                      onReorder={reorderPriority}
+                      style={styleBalance}
+                      itemStyle={gridItemStyle}
+                      renderItem={carte}
                     />
-                  );
-                }}
-              />
-            )
+                  </div>
+                  {autresKeys.length > 0 && (
+                    <div className="w-full landscape:flex-1 min-w-0">
+                      <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Autres objectifs prioritaires</div>
+                      <ReorderList
+                        items={autresKeys}
+                        keyOf={(k) => k}
+                        onReorder={reorderPriority}
+                        style={styleCote}
+                        itemStyle={gridItemStyle}
+                        renderItem={carte}
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })()
           ) : (
             <div>
               <div className="mb-3">
@@ -6873,7 +6947,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
 
 
 /* ==================== Module crise ABC ==================== */
-function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, abcOptions, onMinimize, onSave, onDelete }) {
+function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, abcOptions, nbAutres, onMinimize, onAbandon, onSave, onDelete }) {
   const options = abcOptions || DEFAULT_ABC;
   const isNew = !!crisis.isNew;
   const [picker, setPicker] = useState(null); // zone dont les catégories sont ouvertes
@@ -6912,6 +6986,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
                 {isNew
                   ? (estObservation ? 'Comportement hors crise' : 'Grille ABC')
                   : `${new Date(crisis.date).toLocaleDateString('fr-FR')} à ${timeShort(crisis.date)}`}
+                {nbAutres > 0 && ` · ${nbAutres} autre${nbAutres > 1 ? 's' : ''} en cours`}
               </div>
             </div>
           </div>
@@ -7123,7 +7198,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
               ? (estObservation ? <><Save size={16} /> Enregistrer</> : <><Square size={16} /> Terminer et enregistrer</>)
               : <><Save size={16} /> Enregistrer les modifications</>}
           </Btn>
-          <Btn variant="ghost" onClick={() => setCrisis(null)}>{isNew ? 'Abandonner' : 'Annuler'}</Btn>
+          <Btn variant="ghost" onClick={onAbandon}>{isNew ? 'Abandonner' : 'Annuler'}</Btn>
         </div>
 
         {!isNew && (
