@@ -452,6 +452,16 @@ Les listes proposées se modifient dans **Gestion → Réponses ABC**.
 > Ce sont ces réponses cochées qui rendent les enregistrements comptables : un
 > texte seul ne s'agrège pas. Sans elles, l'écran Suivi n'a rien à analyser.
 
+### Enchaîner plusieurs ABC
+
+Le bouton **Enchaîner** enregistre la fiche en cours et en ouvre aussitôt une
+nouvelle dont **l'antécédent reprend la conséquence de la précédente** — tags
+cochés et texte libre. On documente ainsi une séquence entière : ce qui a suivi
+le premier épisode devient le point de départ du suivant.
+
+Les maillons partagent un identifiant de chaîne, visible dans la liste sous la
+forme `2/3`, et repris dans l'export avec deux colonnes **Chaîne** et **Rang**.
+
 Crises et observations se retrouvent **en bas de l'écran Export**, avec une
 pastille indiquant leur type. Appuyez sur l'une d'elles pour la modifier, y
 compris la date, l'heure et la durée si le bouton a été actionné en retard.
@@ -460,7 +470,7 @@ compris la date, l'heure et la durée si le bouton a été actionné en retard.
 
 ## 9. Écran Suivi
 
-Trois vues, au choix : **Objectifs**, **Crises** ou **Croisement**.
+Quatre vues, au choix : **Objectifs**, **Bilan**, **Crises** ou **Croisement**.
 
 ### Objectifs
 
@@ -476,6 +486,22 @@ Une courbe par objectif, avec :
 critère de zéro, par exemple après un changement de protocole. Les séances
 enregistrées ne sont **pas** supprimées : elles restent dans les exports, seule
 la date de reprise change.
+
+### Bilan
+
+Une vue d'ensemble de tout l'effectif, là où les autres écrans montrent une
+personne à la fois. Trois groupes :
+
+- **Bientôt acquis** — une séance de plus au seuil suffit. C'est le moment de
+  préparer la cible suivante ou une généralisation.
+- **En plateau** — au moins six séances, une moyenne récente à moins de vingt
+  points du seuil, sans jamais l'atteindre durablement. Un critère peut-être
+  trop haut, ou un objectif à retravailler.
+- **Sans cotation récente** — aucune donnée depuis plus de trois semaines alors
+  que l'objectif est toujours actif.
+
+> Ce bilan applique le critère défini pour chaque objectif. Il signale des
+> situations à regarder, il ne décide de rien à votre place.
 
 ### Crises
 
