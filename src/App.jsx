@@ -4456,6 +4456,26 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   const toggleAtelierFavorite = (oid) =>
     setAtelierFavorites((cur) => (cur.includes(oid) ? cur.filter((x) => x !== oid) : [...cur, oid]));
 
+  /* Relance de la dernière séance : reprend la même configuration (mode,
+     atelier, personnes, objectifs, prioritaires d'atelier), en écartant les
+     objectifs supprimés depuis — même logique de repli que la mémorisation
+     d'atelier. */
+  const derniereSeance = sessions && sessions.length
+    ? sessions.reduce((a, s) => (new Date(s.date) > new Date(a.date) ? s : a))
+    : null;
+
+  function relancerDerniere() {
+    const sess = derniereSeance;
+    if (!sess) return;
+    const ids = (sess.studentIds || []).filter((sid) => students.some((s) => s.id === sid));
+    if (!ids.length) return;
+    setMode(sess.mode === 'balance' ? 'balance' : 'atelier');
+    setAtelierId(sess.atelierId || null);
+    setIntervenantId(sess.intervenantId || null);
+    setAtelierFavorites([]);
+    applyGroup(ids, sess.selectedObjectives);
+  }
+
   const currentAtelier = ateliers.find((a) => a.id === atelierId);
 
   /* Le bouton de mémorisation n'apparaît que si la configuration en cours
@@ -4519,6 +4539,30 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   return (
     <div>
       <SectionTitle sub="Choisissez l'atelier, les personnes présentes et les objectifs travaillés.">Nouvelle session</SectionTitle>
+
+      {derniereSeance && (
+        <button
+          onClick={relancerDerniere}
+          className="w-full rounded-2xl border p-3.5 mb-4 flex items-center gap-3 text-left"
+          style={{ borderColor: BORDER, backgroundColor: CARD }}
+        >
+          <span className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: PAPER }}>
+            <RotateCcw size={16} style={{ color: INK }} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium">
+              Relancer la dernière séance
+            </span>
+            <span className="block text-xs truncate" style={{ color: INK_SOFT }}>
+              {(() => {
+                const a = ateliers.find((x) => x.id === derniereSeance.atelierId);
+                const nom = a ? a.name : derniereSeance.mode === 'balance' ? 'Balance Program' : 'Séance libre';
+                return `${nom} · ${new Date(derniereSeance.date).toLocaleDateString('fr-FR')} · ${derniereSeance.studentIds.length} personne${derniereSeance.studentIds.length !== 1 ? 's' : ''}`;
+              })()}
+            </span>
+          </span>
+        </button>
+      )}
 
       <div className="flex gap-1.5 mb-4">
         {[
