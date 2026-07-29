@@ -1,4 +1,4 @@
-# Cotations ABA — manuel d'utilisation
+# DatABA — manuel d'utilisation
 
 Application de recueil de données comportementales en contexte de groupe.
 Elle fonctionne **sans connexion** et les données restent **sur l'appareil** :
@@ -645,11 +645,17 @@ les champs de saisie gardent la priorité sur le balayage.
 ## 13. Sauvegarde
 
 **Gestion → Sauvegarde → Exporter** produit un fichier contenant tout :
-personnes, objectifs, séances, crises et observations. Il est **chiffré par un
-mot de passe** que vous choisissez, distinct du code de l'application.
+personnes, objectifs, séances, crises et observations. Deux formes possibles :
 
-> Ce mot de passe ne peut pas être récupéré. Conservez-le en lieu sûr, en
-> dehors de l'appareil.
+- **Chiffrée par mot de passe** (recommandé) — le fichier reste illisible sans
+  le mot de passe, y compris s'il est transmis par erreur. Ce mot de passe est
+  distinct du code de l'application.
+- **Sans chiffrement** — plus simple à relire, mais le fichier est lisible par
+  quiconque y a accès. À réserver à un transfert qui reste dans un espace déjà
+  protégé, comme un dossier partagé restreint.
+
+> Le mot de passe de chiffrement ne peut pas être récupéré. Conservez-le en
+> lieu sûr, en dehors de l'appareil.
 
 **Restaurer** demande ce mot de passe, puis remplace **toutes** les données de
 l'appareil après confirmation.
