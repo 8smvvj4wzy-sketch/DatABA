@@ -12,7 +12,7 @@
    APRÈS CHAQUE NOUVELLE MISE EN LIGNE : incrémentez CACHE_VERSION ci-dessous.
    Les anciens caches sont alors supprimés automatiquement. */
 
-const CACHE_VERSION = 'v41';
+const CACHE_VERSION = 'v42';
 const CACHE_NAME = `aba-${CACHE_VERSION}`;
 const NETWORK_TIMEOUT_MS = 2500;
 
@@ -34,6 +34,25 @@ self.addEventListener('activate', (event) => {
       .keys()
       .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
+  );
+});
+
+/* --- Mise en cache des fichiers compilés ---
+   Leur nom contient une empreinte qui change à chaque version : impossible de
+   les lister ici. La page envoie donc elle-même, une fois chargée, la liste
+   des fichiers qu'elle a réellement utilisés. Sans cela, seule la coquille
+   était mise en cache et l'application ne s'ouvrait pas hors connexion. */
+self.addEventListener('message', (event) => {
+  const data = event.data || {};
+  if (data.type !== 'cache-assets' || !Array.isArray(data.urls)) return;
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.all(
+        data.urls.map((url) =>
+          cache.match(url).then((deja) => (deja ? null : cache.add(url).catch(() => null)))
+        )
+      )
+    )
   );
 });
 
