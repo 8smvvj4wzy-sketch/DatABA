@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid, ScatterChart, Scatter, Cell, ComposedChart, Bar, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid } from 'recharts';
 import {
   Plus, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
-  Timer as TimerIcon, ListChecks, LayoutGrid, CheckCircle2, RotateCcw, Save,
-  Users, Layers, AlertTriangle, Trash2, FileSpreadsheet,
+  Timer as TimerIcon, LayoutGrid, CheckCircle2, RotateCcw, Save,
+  Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, BarChart3, ClipboardList, Activity, Link2,
+  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -185,6 +185,15 @@ const DEFAULT_ABC = {
   comportements: CRISIS_BEHAVIORS,
   consequences: CRISIS_CONSEQUENCES,
 };
+
+/* Intensité ressentie par l'intervenant. Volontairement à trois niveaux :
+   une échelle plus fine donnerait une fausse impression de précision sur un
+   jugement qui reste subjectif. */
+const CRISIS_INTENSITES = [
+  { n: 1, label: 'Légère', aide: 'Gérable, retour au calme rapide', color: '#7A9A3A' },
+  { n: 2, label: 'Modérée', aide: 'A demandé un accompagnement soutenu', color: '#D69A2D' },
+  { n: 3, label: 'Forte', aide: 'Difficilement contenue, retentissement marqué', color: '#A8402F' },
+];
 
 const CRISIS_FUNCTIONS = [
   { k: 'attention', label: 'Attention', color: '#2E6E8E' },
@@ -1400,7 +1409,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
-  const crisisRows = [['Type', 'Chaîne', 'Rang', 'Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Antécédents', 'Enchaînement des comportements', 'Premier comportement', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire']];
+  const crisisRows = [['Type', 'Chaîne', 'Rang', 'Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Intensité', 'Antécédents', 'Enchaînement des comportements', 'Premier comportement', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire']];
   crises.forEach((c) => {
     if (studentFilter && c.studentId && !studentFilter.includes(c.studentId)) return;
     const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
@@ -1417,6 +1426,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
       ids.map(intervenantName).join(', ') || '—',
       fmtDuration(c.durationMs),
       Math.round((c.durationMs || 0) / 1000),
+      c.intensite || '',
       (c.antecedentTags || []).join(' | '),
       (c.comportementTags || []).map((v, i) => `${i + 1}. ${v}`).join(' → '),
       (c.comportementTags || [])[0] || '',
@@ -1429,7 +1439,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
     ]);
   });
   const ws2 = XLSX.utils.aoa_to_sheet(crisisRows);
-  ws2['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 6 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 34 }, { wch: 44 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
+  ws2['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 6 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 34 }, { wch: 44 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
   XLSX.utils.book_append_sheet(wb, ws2, 'Crises et observations');
 
   const noteRows = [['Date', 'Heure', 'Atelier', 'Personne accompagnée', 'Note']];
@@ -2835,7 +2845,7 @@ function AbaApp() {
             }}
           />
         )}
-        {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} crises={crises} ateliers={ateliers} onResetTracking={resetTracking} />}
+        {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} onResetTracking={resetTracking} />}
         {tab === 'export' && (
           <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} onMarkSent={markSent} onExportManager={exportManager} />
         )}
@@ -6154,8 +6164,7 @@ function LatencyWidget({ entry, now, onChange }) {
 }
 
 /* ==================== Écran suivi : progression et maîtrise ==================== */
-function SuiviScreen({ students, sessions, guidances, crises, ateliers, onResetTracking }) {
-  const [vue, setVue] = useState('objectifs');
+function SuiviScreen({ students, sessions, guidances, onResetTracking }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
 
   if (students.length === 0) {
@@ -6171,31 +6180,9 @@ function SuiviScreen({ students, sessions, guidances, crises, ateliers, onResetT
 
   return (
     <div>
-      <SectionTitle sub="Évolution des objectifs et analyse des crises consignées.">Suivi</SectionTitle>
+      <SectionTitle sub="Où en est chaque objectif, et comment il évolue.">Suivi</SectionTitle>
 
-      <div className="flex gap-1.5 mb-4">
-        {[
-          { k: 'objectifs', label: 'Objectifs', icon: TrendingUp },
-          { k: 'bilan', label: 'Bilan', icon: ListChecks },
-          { k: 'crises', label: 'Crises', icon: BarChart3 },
-          { k: 'croisement', label: 'Croisement', icon: Activity },
-        ].map((v) => {
-          const Icon = v.icon;
-          const on = vue === v.k;
-          return (
-            <button key={v.k} onClick={() => setVue(v.k)}
-              className="flex-1 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-1.5 border"
-              style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
-              <Icon size={15} /> {v.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {vue === 'bilan' && <BilanScreen students={students} sessions={sessions} guidances={guidances} />}
-      {vue === 'crises' && <CrisisAnalysis crises={crises} students={students} ateliers={ateliers} />}
-      {vue === 'croisement' && <CrossAnalysis sessions={sessions} crises={crises} students={students} guidances={guidances} />}
-      {vue === 'objectifs' && (
+      <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} />
       <>
       <div className="space-y-3">
         {students.map((s) => {
@@ -6225,25 +6212,21 @@ function SuiviScreen({ students, sessions, guidances, crises, ateliers, onResetT
         })}
       </div>
       </>
-      )}
     </div>
   );
 }
 
-/* ==================== Bilan des objectifs ====================
-   Vue d'ensemble de tout l'effectif : ce qui est sur le point d'être acquis,
-   ce qui stagne juste sous le seuil, et ce qui n'a plus été coté depuis
-   longtemps. C'est la lecture qui manque quand on regarde une personne à la fois. */
-const PLATEAU_MIN_POINTS = 6;   // en deçà, il est trop tôt pour parler de plateau
-const PLATEAU_ECART_MAX = 20;   // « juste sous le seuil »
-const SANS_COTATION_JOURS = 21;
+/* ==================== Résumé des objectifs ====================
+   L'essentiel pour un éducateur : ce qui est acquis, ce qui va l'être, ce qui
+   stagne, et ce sur quoi on manque encore de données pour se prononcer.
+   Les analyses croisées et l'étude des crises vivent dans DatABA Manager. */
+const RESUME_PLATEAU_MIN = 6;
+const RESUME_ECART_MAX = 20;
+const RESUME_DORMANT_JOURS = 21;
 
-function bilanObjectifs(students, sessions, guidances) {
+function resumerObjectifs(students, sessions, guidances) {
   const ordered = sessions.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
-  const bientot = [];
-  const plateau = [];
-  const dormants = [];
-  let acquis = 0;
+  const groupes = { acquis: [], bientot: [], plateau: [], manque: [] };
 
   students.forEach((st) => {
     st.objectives.forEach((obj) => {
@@ -6254,324 +6237,92 @@ function bilanObjectifs(students, sessions, guidances) {
         objectif: obj.name,
         type: obj.type,
         cible: cible ? cible.name : null,
-        phase: currentPhase(obj).name,
         points: points.length,
       };
 
-      if (!points.length) return;
+      const etat = masteryStatus(obj, points);
+      if (!points.length) { groupes.manque.push({ ...base, raison: 'aucune cotation' }); return; }
 
-      const dernier = points[points.length - 1];
-      const jours = Math.floor((Date.now() - new Date(dernier.date)) / 86400000);
-      if (jours >= SANS_COTATION_JOURS) {
-        dormants.push({ ...base, jours, valeur: dernier.value });
+      const jours = Math.floor((Date.now() - new Date(points[points.length - 1].date)) / 86400000);
+      if (etat && etat.mastered) { groupes.acquis.push({ ...base, ...etat }); return; }
+
+      if (jours >= RESUME_DORMANT_JOURS) {
+        groupes.manque.push({ ...base, raison: `rien depuis ${jours} jours` });
         return;
       }
-
-      const st2 = masteryStatus(obj, points);
-      if (!st2) return;
-      if (st2.mastered) { acquis += 1; return; }
-
-      if (st2.streak >= st2.needed - 1 && st2.needed > 1) {
-        bientot.push({ ...base, ...st2, valeur: dernier.value });
+      if (etat && points.length < etat.needed) {
+        groupes.manque.push({ ...base, raison: `${points.length}/${etat.needed} séances` });
         return;
       }
-
-      if (points.length >= PLATEAU_MIN_POINTS) {
+      if (etat && etat.needed > 1 && etat.streak >= etat.needed - 1) {
+        groupes.bientot.push({ ...base, ...etat, valeur: points[points.length - 1].value });
+        return;
+      }
+      if (etat && points.length >= RESUME_PLATEAU_MIN) {
         const cinq = points.slice(-5);
         const moyenne = Math.round(cinq.reduce((a, p) => a + p.value, 0) / cinq.length);
-        const ecart = st2.threshold - moyenne;
-        if (ecart > 0 && ecart <= PLATEAU_ECART_MAX) {
-          plateau.push({ ...base, ...st2, moyenne, ecart });
+        const ecart = etat.threshold - moyenne;
+        if (ecart > 0 && ecart <= RESUME_ECART_MAX) {
+          groupes.plateau.push({ ...base, ...etat, moyenne });
         }
       }
     });
   });
-
-  bientot.sort((a, b) => b.valeur - a.valeur);
-  plateau.sort((a, b) => a.ecart - b.ecart);
-  dormants.sort((a, b) => b.jours - a.jours);
-  return { bientot, plateau, dormants, acquis };
+  return groupes;
 }
 
-function BilanScreen({ students, sessions, guidances }) {
-  const { bientot, plateau, dormants, acquis } = bilanObjectifs(students, sessions, guidances);
+function ResumeObjectifs({ students, sessions, guidances }) {
+  const [ouvert, setOuvert] = useState(null);
+  const g = resumerObjectifs(students, sessions, guidances);
 
-  const Groupe = ({ titre, aide, lignes, rendu, couleur }) => (
-    <div className="mb-4">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: couleur }} />
-        <span className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{titre}</span>
-        <span className="text-sm ml-auto" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{lignes.length}</span>
-      </div>
-      <p className="text-xs mb-2" style={{ color: INK_SOFT }}>{aide}</p>
-      {lignes.length === 0 ? (
-        <div className="rounded-xl border border-dashed px-3 py-3 text-center text-xs" style={{ borderColor: BORDER, color: INK_SOFT }}>
-          Aucun pour le moment.
-        </div>
-      ) : (
-        <div className="space-y-1.5">
-          {lignes.map((l, i) => (
-            <div key={i} className="rounded-xl border px-3 py-2.5 flex items-start justify-between gap-2" style={{ borderColor: BORDER, backgroundColor: CARD }}>
-              <div className="min-w-0">
-                <div className="text-sm break-words">
-                  <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{l.initials}</span> · {l.objectif}
-                </div>
-                <div className="text-xs" style={{ color: INK_SOFT }}>
-                  {l.phase}
-                  {l.cible && ` · cible ${l.cible}`}
-                  {` · ${l.points} séance${l.points !== 1 ? 's' : ''}`}
-                </div>
-              </div>
-              <span className="text-xs shrink-0 text-right" style={{ fontFamily: F_MONO, color: couleur }}>{rendu(l)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  const blocs = [
+    { k: 'acquis', label: 'Acquis', couleur: '#0F8B6C', aide: 'Le critère est atteint.', rendu: (l) => `${l.streak}/${l.needed}` },
+    { k: 'bientot', label: 'Bientôt acquis', couleur: '#3F9E7C', aide: 'Une séance de plus au seuil suffit.', rendu: (l) => `${l.streak}/${l.needed} · ${l.valeur} %` },
+    { k: 'plateau', label: 'En plateau', couleur: '#D69A2D', aide: 'Proche du seuil depuis plusieurs séances, sans l\'atteindre.', rendu: (l) => `${l.moyenne} % · seuil ${l.threshold} %` },
+    { k: 'manque', label: 'Manque de données', couleur: INK_SOFT, aide: 'Pas encore de quoi se prononcer.', rendu: (l) => l.raison },
+  ];
 
-  if (!students.length || !sessions.length) {
-    return <Empty>Enregistrez des séances pour voir apparaître le bilan.</Empty>;
-  }
+  if (!sessions.length) return null;
 
   return (
-    <div>
-      <Card className="mb-4">
-        <div className="text-sm">
-          <span style={{ fontFamily: F_MONO, fontSize: '1.25rem', color: '#0F8B6C' }}>{acquis}</span>{' '}
-          objectif{acquis !== 1 ? 's' : ''} au critère d'acquisition
-        </div>
-      </Card>
-
-      <Groupe
-        titre="Bientôt acquis"
-        aide="Une séance de plus au seuil suffit. C'est le moment de préparer la cible suivante ou une généralisation."
-        lignes={bientot}
-        couleur="#0F8B6C"
-        rendu={(l) => `${l.streak}/${l.needed} · dernier ${l.valeur} %`}
-      />
-
-      <Groupe
-        titre="En plateau"
-        aide={`Au moins ${PLATEAU_MIN_POINTS} séances, une moyenne récente à moins de ${PLATEAU_ECART_MAX} points du seuil, sans jamais l'atteindre durablement. Un critère trop haut, ou un objectif à retravailler.`}
-        lignes={plateau}
-        couleur="#D69A2D"
-        rendu={(l) => `${l.moyenne} % · seuil ${l.threshold} %`}
-      />
-
-      <Groupe
-        titre="Sans cotation récente"
-        aide={`Aucune donnée depuis plus de ${SANS_COTATION_JOURS} jours, alors que l'objectif est toujours actif.`}
-        lignes={dormants}
-        couleur={INK_SOFT}
-        rendu={(l) => `${l.jours} j`}
-      />
-
-      <p className="text-xs" style={{ color: INK_SOFT }}>
-        Ce bilan applique le critère défini pour chaque objectif. Il signale des situations
-        à regarder, il ne décide de rien à votre place.
-      </p>
-    </div>
-  );
-}
-
-/* ==================== Analyse des crises ==================== */
-function CrisisAnalysis({ crises, students, ateliers }) {
-  const [personne, setPersonne] = useState(null);
-  const [type, setType] = useState('crise');
-
-  const parType = crises.filter((c) => type === 'tout' || (c.kind || 'crise') === type);
-  const retenues = parType.filter((c) => !personne || c.studentId === personne);
-
-  if (crises.length === 0) {
-    return <Empty>Aucune crise ni observation consignée pour le moment.</Empty>;
-  }
-
-  /* Un point par crise : le jour en abscisse, l'heure en ordonnée. C'est la
-     représentation qui fait apparaître les motifs horaires ou hebdomadaires. */
-  const points = retenues.map((c) => {
-    const d = new Date(c.date);
-    const jour = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    return {
-      jour,
-      heure: d.getHours() + d.getMinutes() / 60,
-      duree: Math.round((c.durationMs || 0) / 60000),
-      fonction: c.fonction || 'indetermine',
-      label: `${d.toLocaleDateString('fr-FR')} ${timeShort(c.date)}`,
-    };
-  });
-
-  function compter(liste) {
-    const m = new Map();
-    liste.forEach((v) => m.set(v, (m.get(v) || 0) + 1));
-    return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
-  }
-  const parAntecedent = compter(retenues.flatMap((c) => c.antecedentTags || []));
-  const parComportement = compter(retenues.flatMap((c) => c.comportementTags || []));
-  const parPremier = compter(retenues.map((c) => (c.comportementTags || [])[0]).filter(Boolean));
-
-  /* Délai depuis le dernier enregistrement, par personne : indicateur simple
-     et parlant en réunion d'équipe. */
-  const delais = students
-    .map((st) => {
-      const siennes = parType.filter((c) => c.studentId === st.id);
-      if (!siennes.length) return null;
-      const derniere = siennes.reduce((a, c) => (new Date(c.date) > new Date(a.date) ? c : a));
-      const jours = Math.floor((Date.now() - new Date(derniere.date)) / 86400000);
-      return { initials: st.initials, jours, total: siennes.length, date: derniere.date };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.jours - a.jours);
-  const parConsequence = compter(retenues.flatMap((c) => c.consequenceTags || []));
-  const parFonction = compter(retenues.map((c) => c.fonction).filter(Boolean));
-  const parJour = compter(retenues.map((c) => new Date(c.date).toLocaleDateString('fr-FR', { weekday: 'long' })));
-  const parAtelier = compter(retenues.map((c) => {
-    const a = ateliers.find((x) => x.id === c.atelierId);
-    return a ? a.name : 'Hors atelier';
-  }));
-
-  const dureeMoy = retenues.length
-    ? Math.round(retenues.reduce((a, c) => a + (c.durationMs || 0), 0) / retenues.length / 60000)
-    : 0;
-
-  const Barres = ({ titre, donnees, total }) => (
-    donnees.length === 0 ? null : (
-      <Card className="mb-3">
-        <div className="text-xs mb-2" style={{ color: INK_SOFT }}>{titre}</div>
-        <div className="space-y-1.5">
-          {donnees.slice(0, 8).map(([nom, n]) => (
-            <div key={nom}>
-              <div className="flex items-center justify-between text-xs mb-0.5">
-                <span className="min-w-0 break-words pr-2">{nom}</span>
-                <span className="shrink-0" style={{ fontFamily: F_MONO, color: INK_SOFT }}>
-                  {n} · {Math.round((n / total) * 100)} %
-                </span>
-              </div>
-              <div className="h-1.5 rounded-full" style={{ backgroundColor: PAPER }}>
-                <div style={{ width: `${(n / donnees[0][1]) * 100}%`, height: '100%', borderRadius: 999, backgroundColor: CRISIS }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-    )
-  );
-
-  return (
-    <div>
-      <div className="flex gap-1.5 mb-3">
-        {[
-          { k: 'crise', l: 'Crises' },
-          { k: 'abc', l: 'Observations' },
-          { k: 'tout', l: 'Les deux' },
-        ].map((o) => (
-          <button key={o.k} onClick={() => setType(o.k)} className="flex-1 rounded-lg py-2 text-xs border"
-            style={{ borderColor: type === o.k ? INK : BORDER, backgroundColor: type === o.k ? INK : 'transparent', color: type === o.k ? '#fff' : INK_SOFT }}>
-            {o.l} ({crises.filter((c) => o.k === 'tout' || (c.kind || 'crise') === o.k).length})
-          </button>
-        ))}
+    <Card className="mb-5">
+      <div className="text-xs uppercase tracking-wide mb-3" style={{ color: INK_SOFT }}>Où en sont les objectifs</div>
+      <div className="flex flex-wrap gap-2 mb-1">
+        {blocs.map((b) => {
+          const n = g[b.k].length;
+          const on = ouvert === b.k;
+          return (
+            <button key={b.k} onClick={() => setOuvert(on ? null : b.k)} disabled={!n}
+              className="flex-1 min-w-[110px] rounded-xl px-3 py-2.5 border text-left disabled:opacity-50"
+              style={{ borderColor: on ? b.couleur : BORDER, backgroundColor: on ? b.couleur + '14' : 'transparent' }}>
+              <div className="text-2xl font-semibold" style={{ fontFamily: F_MONO, color: b.couleur }}>{n}</div>
+              <div className="text-xs" style={{ color: INK_SOFT }}>{b.label}</div>
+            </button>
+          );
+        })}
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-3">
-        <Chip label="Toutes" on={!personne} onClick={() => setPersonne(null)} />
-        {students.filter((st) => parType.some((c) => c.studentId === st.id)).map((st) => (
-          <Chip key={st.id} label={st.initials} on={personne === st.id} onClick={() => setPersonne(personne === st.id ? null : st.id)} />
-        ))}
-      </div>
-
-      <Card className="mb-3">
-        <div className="flex flex-wrap gap-4 text-sm">
-          <span>
-            <span style={{ fontFamily: F_MONO, fontSize: '1.25rem' }}>{retenues.length}</span>{' '}
-            {type === 'abc' ? `observation${retenues.length !== 1 ? 's' : ''}` : `enregistrement${retenues.length !== 1 ? 's' : ''}`}
-          </span>
-          {type !== 'abc' && dureeMoy > 0 && (
-            <span><span style={{ fontFamily: F_MONO, fontSize: '1.25rem' }}>{dureeMoy}</span> min en moyenne</span>
-          )}
-        </div>
-      </Card>
-
-      {points.length > 0 && (
-        <Card className="mb-3">
-          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
-            Répartition dans le temps — chaque point est un enregistrement, la couleur indique la fonction supposée
-          </div>
-          <div style={{ height: 240 }} data-no-swipe>
-            <ResponsiveContainer width="100%" height="100%">
-              <ScatterChart margin={{ top: 8, right: 12, bottom: 4, left: -18 }}>
-                <CartesianGrid stroke={BORDER} />
-                <XAxis
-                  type="number" dataKey="jour" name="Date"
-                  domain={['dataMin', 'dataMax']}
-                  tickFormatter={(v) => new Date(v).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}
-                  tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }}
-                  axisLine={{ stroke: BORDER }} tickLine={false}
-                />
-                <YAxis
-                  type="number" dataKey="heure" name="Heure"
-                  domain={[6, 20]} ticks={[8, 10, 12, 14, 16, 18]}
-                  tickFormatter={(v) => `${String(Math.floor(v)).padStart(2, '0')}h`}
-                  tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }}
-                  axisLine={false} tickLine={false} width={44}
-                />
-                <Tooltip
-                  cursor={{ strokeDasharray: '3 3' }}
-                  contentStyle={{ borderRadius: 12, border: `1px solid ${BORDER}`, fontFamily: 'IBM Plex Sans', fontSize: 12 }}
-                  formatter={(v, n, p) => [p.payload.label, `${p.payload.duree} min`]}
-                />
-                <Scatter data={points} isAnimationActive={false}>
-                  {points.map((pt, i) => {
-                    const f = CRISIS_FUNCTIONS.find((x) => x.k === pt.fonction) || CRISIS_FUNCTIONS[4];
-                    return <Cell key={i} fill={f.color} />;
-                  })}
-                </Scatter>
-              </ScatterChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="flex flex-wrap gap-2 mt-2">
-            {CRISIS_FUNCTIONS.map((f) => (
-              <span key={f.k} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
-                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: f.color }} /> {f.label}
-              </span>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      <Barres titre="Antécédents les plus fréquents" donnees={parAntecedent} total={retenues.length} />
-      {delais.length > 0 && (
-        <Card className="mb-3">
-          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
-            Délai depuis le dernier enregistrement
-          </div>
+      {ouvert && (
+        <div className="mt-3">
+          <p className="text-xs mb-2" style={{ color: INK_SOFT }}>{blocs.find((b) => b.k === ouvert).aide}</p>
           <div className="space-y-1.5">
-            {delais.map((d) => (
-              <div key={d.initials} className="flex items-center gap-2 rounded-lg px-2.5 py-2" style={{ backgroundColor: PAPER }}>
-                <span className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{d.initials}</span>
-                <span className="text-sm flex-1" style={{ fontFamily: F_MONO, color: d.jours >= 7 ? '#0F8B6C' : INK }}>
-                  {d.jours} jour{d.jours !== 1 ? 's' : ''}
-                </span>
-                <span className="text-xs" style={{ color: INK_SOFT }}>
-                  {d.total} au total · dernier le {new Date(d.date).toLocaleDateString('fr-FR')}
+            {g[ouvert].map((l, i) => (
+              <div key={i} className="rounded-xl px-3 py-2.5 flex items-start justify-between gap-2" style={{ backgroundColor: PAPER }}>
+                <div className="min-w-0">
+                  <div className="text-sm break-words">
+                    <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{l.initials}</span> · {l.objectif}
+                  </div>
+                  {l.cible && <div className="text-xs" style={{ color: INK_SOFT }}>cible {l.cible}</div>}
+                </div>
+                <span className="text-xs shrink-0" style={{ fontFamily: F_MONO, color: blocs.find((b) => b.k === ouvert).couleur }}>
+                  {blocs.find((b) => b.k === ouvert).rendu(l)}
                 </span>
               </div>
             ))}
           </div>
-        </Card>
+        </div>
       )}
-
-      <Barres titre="Premier comportement de l'enchaînement" donnees={parPremier} total={retenues.length} />
-      <Barres titre="Comportements observés, tous rangs confondus" donnees={parComportement} total={retenues.length} />
-      <Barres titre="Fonctions supposées" donnees={parFonction.map(([k, n]) => [(CRISIS_FUNCTIONS.find((x) => x.k === k) || {}).label || k, n])} total={retenues.length} />
-      <Barres titre="Conséquences observées" donnees={parConsequence} total={retenues.length} />
-      <Barres titre="Répartition par atelier" donnees={parAtelier} total={retenues.length} />
-      <Barres titre="Répartition par jour de la semaine" donnees={parJour} total={retenues.length} />
-
-      <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
-        Ces répartitions décrivent ce qui a été observé et coché. Elles orientent une hypothèse,
-        elles ne l'établissent pas : une analyse fonctionnelle reste du ressort du professionnel.
-      </p>
-    </div>
+    </Card>
   );
 }
 
@@ -6705,101 +6456,6 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
           </button>
         </div>
       )}
-    </div>
-  );
-}
-
-/* ==================== Croisement cotations et crises ====================
-   Les progrès s'accompagnent-ils d'une baisse des comportements-défis ?
-   On agrège par semaine : moyenne des cotations en pourcentage d'un côté,
-   nombre d'enregistrements de l'autre. */
-function CrossAnalysis({ sessions, crises, students, guidances }) {
-  const [personne, setPersonne] = useState(null);
-
-  const lundiDe = (d) => {
-    const x = new Date(d);
-    const j = (x.getDay() + 6) % 7; // lundi = 0
-    x.setDate(x.getDate() - j);
-    x.setHours(0, 0, 0, 0);
-    return x.getTime();
-  };
-
-  const semaines = new Map();
-  const touche = (cle) => {
-    if (!semaines.has(cle)) semaines.set(cle, { cle, somme: 0, n: 0, crises: 0 });
-    return semaines.get(cle);
-  };
-
-  sessions.forEach((sess) => {
-    const cle = lundiDe(sess.date);
-    (sess.studentIds || []).forEach((sid) => {
-      if (personne && sid !== personne) return;
-      (sess.selectedObjectives[sid] || []).forEach((oid) => {
-        const obj = sess.objectiveSnapshot[oid];
-        if (!obj) return;
-        const sc = objectiveScore(obj, (sess.data[sid] || {})[oid], guidances);
-        if (!sc || !sc.percent) return;
-        const e = touche(cle);
-        e.somme += sc.value;
-        e.n += 1;
-      });
-    });
-  });
-
-  crises.forEach((c) => {
-    if (personne && c.studentId !== personne) return;
-    touche(lundiDe(c.date)).crises += 1;
-  });
-
-  const donnees = Array.from(semaines.values())
-    .sort((a, b) => a.cle - b.cle)
-    .map((e) => ({
-      label: new Date(e.cle).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }),
-      autonomie: e.n ? Math.round(e.somme / e.n) : null,
-      crises: e.crises,
-    }));
-
-  if (donnees.length < 2) {
-    return <Empty>Il faut au moins deux semaines de données pour un croisement lisible.</Empty>;
-  }
-
-  return (
-    <div>
-      <div className="flex flex-wrap gap-2 mb-3">
-        <Chip label="Toutes" on={!personne} onClick={() => setPersonne(null)} />
-        {students.map((st) => (
-          <Chip key={st.id} label={st.initials} on={personne === st.id} onClick={() => setPersonne(personne === st.id ? null : st.id)} />
-        ))}
-      </div>
-
-      <Card className="mb-3">
-        <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
-          Par semaine : taux d'autonomie moyen (courbe) et nombre de crises et observations (barres)
-        </div>
-        <div style={{ height: 260 }} data-no-swipe>
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={donnees} margin={{ top: 8, right: 8, bottom: 4, left: -18 }}>
-              <CartesianGrid stroke={BORDER} vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }} axisLine={{ stroke: BORDER }} tickLine={false} />
-              <YAxis yAxisId="g" domain={[0, 100]} tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }} axisLine={false} tickLine={false} width={44} />
-              <YAxis yAxisId="d" orientation="right" allowDecimals={false} tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }} axisLine={false} tickLine={false} width={32} />
-              <Tooltip
-                contentStyle={{ borderRadius: 12, border: `1px solid ${BORDER}`, fontFamily: 'IBM Plex Sans', fontSize: 12 }}
-                labelFormatter={(l) => `Semaine du ${l}`}
-              />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar yAxisId="d" dataKey="crises" name="Crises et observations" fill={CRISIS} radius={[4, 4, 0, 0]} isAnimationActive={false} />
-              <Line yAxisId="g" type="monotone" dataKey="autonomie" name="Autonomie (%)" stroke="#0F8B6C" strokeWidth={2.5} dot={{ r: 3 }} connectNulls isAnimationActive={false} />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
-
-      <p className="text-xs" style={{ color: INK_SOFT }}>
-        Une évolution parallèle des deux courbes n'établit aucun lien de cause à effet : d'autres
-        facteurs — changement d'équipe, période de l'année, santé — pèsent aussi. Le graphique sert
-        à repérer un moment à examiner, pas à conclure.
-      </p>
     </div>
   );
 }
@@ -7043,6 +6699,12 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                         })()}
                       </span>
                     )}
+                    {c.intensite && (
+                      <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5"
+                        style={{ backgroundColor: (CRISIS_INTENSITES.find((x) => x.n === c.intensite) || {}).color, color: '#fff' }}>
+                        {c.intensite}
+                      </span>
+                    )}
                     {c.kind !== 'abc' && (
                       <span className="text-xs shrink-0" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{fmtDuration(c.durationMs)}</span>
                     )}
@@ -7088,7 +6750,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
     set({ intervenantIds: selectedIntervenants.includes(id) ? selectedIntervenants.filter((x) => x !== id) : [...selectedIntervenants, id] });
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto" style={{ backgroundColor: PAPER }}>
+    <div className="fixed inset-0 z-50 overflow-y-auto overflow-x-hidden" style={{ backgroundColor: PAPER }}>
       <div
         className="sticky top-0 px-4 pb-4 text-white"
         style={{ backgroundColor: estObservation ? '#B07A2E' : CRISIS, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
@@ -7305,6 +6967,28 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
           </div>
         </div>
 
+        {!estObservation && (
+          <div>
+            <div className="text-sm font-medium mb-1" style={{ fontFamily: F_DISPLAY }}>Intensité ressentie</div>
+            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
+              Appréciation de l'intervenant sur le moment, non une mesure
+            </div>
+            <div className="flex gap-2">
+              {CRISIS_INTENSITES.map((i) => {
+                const on = crisis.intensite === i.n;
+                return (
+                  <button key={i.n} onClick={() => set({ intensite: on ? null : i.n })}
+                    className="flex-1 rounded-xl px-2 py-2.5 border text-left"
+                    style={{ borderColor: i.color, backgroundColor: on ? i.color : 'transparent', color: on ? '#fff' : i.color }}>
+                    <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{i.n} · {i.label}</div>
+                    <div className="text-[10px] leading-tight" style={{ opacity: 0.85 }}>{i.aide}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div>
           <div className="text-sm font-medium mb-1" style={{ fontFamily: F_DISPLAY }}>Commentaire</div>
           <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Contexte, hypothèses, suites à donner</div>
@@ -7317,28 +7001,33 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
           />
         </div>
 
-        <div className="flex gap-2 pt-1">
-          {onChain && (
-            <Btn
-              variant="outline"
-              onClick={() => {
-                if ((crisis.consequenceTags || []).length === 0 && !(crisis.consequence || '').trim()) {
-                  if (!window.confirm("Aucune conséquence renseignée : le maillon suivant démarrera sans antécédent repris.\n\nContinuer ?")) return;
-                }
-                onChain(crisis);
-              }}
-              className="text-sm py-2.5"
-              title="Enregistrer et enchaîner : la conséquence devient l'antécédent du maillon suivant"
-            >
-              <Link2 size={16} /> Enchaîner
-            </Btn>
-          )}
-          <Btn onClick={() => onSave(crisis)} className="flex-1" style={{ backgroundColor: estObservation ? '#B07A2E' : CRISIS }}>
+        {/* Enregistrer occupe toute la largeur ; les deux actions secondaires
+            se partagent la ligne suivante. Sur trois boutons côte à côte, le
+            dernier débordait de l'écran. */}
+        <div className="pt-1">
+          <Btn onClick={() => onSave(crisis)} className="w-full mb-2" style={{ backgroundColor: estObservation ? '#B07A2E' : CRISIS }}>
             {isNew
               ? (estObservation ? <><Save size={16} /> Enregistrer</> : <><Square size={16} /> Terminer et enregistrer</>)
               : <><Save size={16} /> Enregistrer les modifications</>}
           </Btn>
-          <Btn variant="ghost" onClick={onAbandon}>{isNew ? 'Abandonner' : 'Annuler'}</Btn>
+          <div className="flex gap-2">
+            {onChain && (
+              <Btn
+                variant="outline"
+                onClick={() => {
+                  if ((crisis.consequenceTags || []).length === 0 && !(crisis.consequence || '').trim()) {
+                    if (!window.confirm("Aucune conséquence renseignée : le maillon suivant démarrera sans antécédent repris.\n\nContinuer ?")) return;
+                  }
+                  onChain(crisis);
+                }}
+                className="flex-1 text-sm py-2.5"
+                title="Enregistrer et enchaîner : la conséquence devient l'antécédent du maillon suivant"
+              >
+                <Link2 size={16} /> Enchaîner
+              </Btn>
+            )}
+            <Btn variant="ghost" onClick={onAbandon} className="flex-1">{isNew ? 'Abandonner' : 'Annuler'}</Btn>
+          </div>
         </div>
 
         {!isNew && (
