@@ -36,7 +36,7 @@ Cinq écrans, accessibles par les onglets du haut ou par balayage horizontal :
 | **Gestion** | Personnes, ateliers, intervenants, guidances, réponses ABC, sécurité, sauvegarde |
 | **Personnes** | Définir les objectifs de chacun et leur mode de cotation |
 | **Session** | Préparer et coter une séance |
-| **Suivi** | Courbes de progression et analyse des crises |
+| **Suivi** | Où en sont les objectifs, et leurs courbes de progression |
 | **Export** | Produire et transmettre les rapports Excel |
 
 Deux boutons sont présents en bas de tous les écrans : **CRISE** et **ABC**.
@@ -440,6 +440,10 @@ Les deux ouvrent la même grille :
 - **C — Conséquence** : ce qui a suivi, réaction de l'environnement ;
 - **Fonction supposée** : attention, échappement, tangible, sensoriel ou
   indéterminée ;
+- **Intensité ressentie**, de 1 à 3 — légère, modérée, forte. C'est une
+  appréciation de l'intervenant sur le moment, pas une mesure : trois niveaux
+  suffisent, une échelle plus fine donnerait une fausse impression de
+  précision. Reprise dans DatABA Manager ;
 - **Commentaire** : contexte, hypothèses, suites à donner.
 
 Chaque zone A, B et C porte un bouton **+** qui déplie les réponses à cocher,
@@ -470,11 +474,16 @@ compris la date, l'heure et la durée si le bouton a été actionné en retard.
 
 ## 9. Écran Suivi
 
-Quatre vues, au choix : **Objectifs**, **Bilan**, **Crises** ou **Croisement**.
+En haut, **où en sont les objectifs** : quatre compteurs qui se déplient.
 
-### Objectifs
+| Groupe | Ce qu'il signale |
+|---|---|
+| **Acquis** | Le critère est atteint. |
+| **Bientôt acquis** | Une séance de plus au seuil suffit. |
+| **En plateau** | Proche du seuil depuis plusieurs séances, sans l'atteindre. |
+| **Manque de données** | Pas encore de quoi se prononcer : trop peu de séances, ou plus rien depuis trois semaines. |
 
-Une courbe par objectif, avec :
+En dessous, une courbe par objectif, avec :
 
 - le **seuil d'acquisition** en pointillé ;
 - un badge **Acquis**, ou l'avancement (« 2/3 séances à 80 % ») ;
@@ -486,55 +495,6 @@ Une courbe par objectif, avec :
 critère de zéro, par exemple après un changement de protocole. Les séances
 enregistrées ne sont **pas** supprimées : elles restent dans les exports, seule
 la date de reprise change.
-
-### Bilan
-
-Une vue d'ensemble de tout l'effectif, là où les autres écrans montrent une
-personne à la fois. Trois groupes :
-
-- **Bientôt acquis** — une séance de plus au seuil suffit. C'est le moment de
-  préparer la cible suivante ou une généralisation.
-- **En plateau** — au moins six séances, une moyenne récente à moins de vingt
-  points du seuil, sans jamais l'atteindre durablement. Un critère peut-être
-  trop haut, ou un objectif à retravailler.
-- **Sans cotation récente** — aucune donnée depuis plus de trois semaines alors
-  que l'objectif est toujours actif.
-
-> Ce bilan applique le critère défini pour chaque objectif. Il signale des
-> situations à regarder, il ne décide de rien à votre place.
-
-### Crises
-
-Une analyse d'ensemble, filtrable par type (crises, observations, ou les deux)
-et par personne :
-
-- un **nuage de points temporel** — le jour en abscisse, l'heure en ordonnée,
-  une couleur par fonction supposée. C'est la représentation qui fait
-  apparaître les motifs : les crises de fin de matinée, celles d'un jour
-  précis, celles qui suivent un même moment de la journée ;
-- le **délai depuis le dernier enregistrement** pour chaque personne, avec le
-  total et la date — un indicateur simple et parlant en réunion d'équipe ;
-- le **premier comportement de l'enchaînement**, qui indique par quoi
-  l'escalade démarre le plus souvent ;
-- le **classement des antécédents**, des **comportements observés**, des
-  **fonctions supposées** et des **conséquences**, en nombre et en pourcentage ;
-- la **répartition par atelier** et **par jour de la semaine** ;
-- le nombre d'enregistrements et leur durée moyenne.
-
-> Ces répartitions décrivent ce qui a été observé et coché. Elles orientent une
-> hypothèse, elles ne l'établissent pas : une analyse fonctionnelle reste du
-> ressort du professionnel.
-
-### Croisement
-
-Un graphique hebdomadaire superposant le **taux d'autonomie moyen** (courbe) et
-le **nombre de crises et observations** (barres), filtrable par personne. Il
-répond à une question clinique directe : les progrès s'accompagnent-ils d'une
-baisse des comportements-défis ?
-
-> Une évolution parallèle des deux courbes n'établit aucun lien de cause à
-> effet : d'autres facteurs — changement d'équipe, période de l'année, santé —
-> pèsent aussi. Le graphique sert à repérer un moment à examiner, pas à conclure.
 
 ---
 
