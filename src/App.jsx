@@ -2606,13 +2606,11 @@ function ownsHorizontalGesture(target, boundary, ignoreNoSwipe) {
    Le contenu suit le doigt de façon amortie et plafonnée : assez pour que le
    geste soit tangible, sans déplacer toute la page hors de l'écran — ce qui
    provoquait des blancs de rendu sur iOS. */
-function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument = false, ignoreNoSwipe = false, peek = false, measureRef = null }) {
+function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument = false, ignoreNoSwipe = false }) {
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
-  const [largeur, setLargeur] = useState(0);
   const [el, setEl] = useState(null);
   const state = useRef(null);
-  const coast = useRef(null); // id de la course animée en fin de geste, pour l'annuler si un nouveau geste démarre avant qu'elle finisse
 
   /* L'élément peut n'apparaître qu'à un rendu ultérieur (écran de chargement
      affiché en premier). On le suit à chaque rendu ; React ignore un état
@@ -2628,19 +2626,14 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
     const boundary = onDocument ? null : el;
 
     const MAX = 80;
-    const largeurRef = () => {
-      const m = measureRef && measureRef.current ? measureRef.current.clientWidth : el ? el.clientWidth : window.innerWidth;
-      return m || window.innerWidth;
-    };
 
     function start(e) {
       if (e.touches.length !== 1 || reorderDragging || ownsHorizontalGesture(e.target, boundary, ignoreNoSwipe)) {
         state.current = null;
         return;
       }
-      if (coast.current) { cancelAnimationFrame(coast.current); coast.current = null; }
       const t = e.touches[0];
-      state.current = { x: t.clientX, y: t.clientY, axis: null, dx: 0, time: Date.now(), largeur: largeurRef() };
+      state.current = { x: t.clientX, y: t.clientY, axis: null, dx: 0, time: Date.now() };
     }
 
     function move(e) {
@@ -2659,58 +2652,23 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
       if (!g.axis) {
         if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
         g.axis = Math.abs(dx) > Math.abs(dy) + 4 ? 'x' : 'y';
-        if (g.axis === 'x') { setDragging(true); if (peek) setLargeur(g.largeur); }
+        if (g.axis === 'x') setDragging(true);
       }
       if (g.axis !== 'x') return;
       if (e.cancelable) e.preventDefault();
       g.dx = dx;
-      // Sans aperçu : léger suivi amorti, juste de quoi sentir le geste.
-      // Avec aperçu : le doigt mène jusqu'au bord, sans amortissement — la
-      // résistance vient de l'écran voisin qui se dévoile, pas d'un facteur.
-      setOffset(peek ? Math.max(-g.largeur, Math.min(g.largeur, dx)) : Math.sign(dx) * Math.min(Math.abs(dx) * 0.45, MAX));
+      setOffset(Math.sign(dx) * Math.min(Math.abs(dx) * 0.45, MAX));
     }
 
     function end() {
       const g = state.current;
       state.current = null;
-      if (!g || g.axis !== 'x') { setDragging(false); setOffset(0); return; }
+      setDragging(false);
+      setOffset(0);
+      if (!g || g.axis !== 'x') return;
       const speed = Math.abs(g.dx) / Math.max(1, Date.now() - g.time);
-      // Seuil volontairement bas : un geste qui n'aboutit pas au premier essai
-      // se ressent comme deux actions au lieu d'une, ce qui est pire qu'un
-      // seuil trop permissif.
-      const seuil = peek ? Math.min(g.largeur * 0.2, 90) : 55;
-      if (Math.abs(g.dx) < seuil && speed < 0.35) { setDragging(false); setOffset(0); return; }
-      const sens = g.dx < 0 ? -1 : 1;
-      if (!peek) {
-        setDragging(false);
-        setOffset(0);
-        if (sens < 0) { if (onLeft) onLeft(); } else if (onRight) onRight();
-        return;
-      }
-      // Termine la course jusqu'au bord dans la continuité du doigt — animée
-      // image par image plutôt que par une transition CSS lancée en parallèle
-      // d'un minuteur : les deux dérivaient l'un de l'autre, ce qui donnait
-      // l'impression d'un geste en deux temps plutôt qu'un mouvement continu.
-      // `dragging` reste vrai tout du long pour que le rendu n'applique aucune
-      // transition CSS par-dessus cette animation pilotée en JS.
-      const depart = g.dx;
-      const cible = sens * g.largeur;
-      const t0 = performance.now();
-      const duree = 180;
-      const pas = (maintenant) => {
-        const p = Math.min(1, (maintenant - t0) / duree);
-        const e = 1 - (1 - p) * (1 - p); // accélération puis freinage en douceur
-        setOffset(depart + (cible - depart) * e);
-        if (p < 1) {
-          coast.current = requestAnimationFrame(pas);
-        } else {
-          coast.current = null;
-          setDragging(false);
-          setOffset(0);
-          if (sens < 0) { if (onLeft) onLeft(); } else if (onRight) onRight();
-        }
-      };
-      coast.current = requestAnimationFrame(pas);
+      if (Math.abs(g.dx) < 55 && speed < 0.4) return;
+      if (g.dx < 0) { if (onLeft) onLeft(); } else if (onRight) onRight();
     }
 
     target.addEventListener('touchstart', start, { passive: true });
@@ -2718,15 +2676,14 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
     target.addEventListener('touchend', end, { passive: true });
     target.addEventListener('touchcancel', end, { passive: true });
     return () => {
-      if (coast.current) { cancelAnimationFrame(coast.current); coast.current = null; }
       target.removeEventListener('touchstart', start);
       target.removeEventListener('touchmove', move);
       target.removeEventListener('touchend', end);
       target.removeEventListener('touchcancel', end);
     };
-  }, [el, onLeft, onRight, enabled, onDocument, ignoreNoSwipe, peek, measureRef]);
+  }, [el, onLeft, onRight, enabled, onDocument, ignoreNoSwipe]);
 
-  return { offset, dragging, largeur };
+  return { offset, dragging };
 }
 
 /* Glissement vertical de haut en bas, engagé depuis une zone de préhension
@@ -2971,29 +2928,14 @@ function AbaApp() {
      action, ouvrir le tiroir, quel que soit l'endroit d'où elle part. */
   const ouvrirMenu = React.useCallback(() => { setEcran(null); setTiroir(true); }, []);
 
-  /* Changement d'onglet déclenché par le geste, pas par un tap sur la barre :
-     l'aperçu qui suit le doigt joue déjà le rôle d'animation d'arrivée, donc
-     contrairement à goTab on ne pose pas `dir` — ça éviterait de rejouer le
-     fondu par-dessus un mouvement déjà terminé. */
-  const avancerOngletParGeste = React.useCallback(
-    (delta) => {
-      const i = TAB_ORDER.indexOf(tab);
-      const next = i + delta;
-      if (next < 0 || next >= TAB_ORDER.length) return;
-      setTab(TAB_ORDER[next]);
-    },
-    [tab]
-  );
-
   const onLeft = React.useCallback(() => {
     if (tiroir) { if (TIROIR_FERME_AU_BALAYAGE) setTiroir(false); return; }
-    setDir(0);
     // Depuis un écran ouvert par le tiroir : retour direct à l'onglet
     // d'origine (celui d'où le bouton Menu ou le balayage a été déclenché),
     // sans repasser par le tiroir — `tab` n'a jamais changé entre-temps.
     if (ecran) { setEcran(null); return; }
-    avancerOngletParGeste(1);
-  }, [tiroir, ecran, avancerOngletParGeste]);
+    goTab(1);
+  }, [tiroir, ecran, goTab]);
 
   /* Depuis Suivi — l'extrémité gauche — il n'y a pas d'onglet précédent : le
      balayage vers la droite y est libre, c'est lui qui ouvre le tiroir. Depuis
@@ -3001,15 +2943,12 @@ function AbaApp() {
      symétrique avec le bouton Menu, pas avec le retour de gauche. */
   const onRight = React.useCallback(() => {
     if (tiroir) return;
-    setDir(0);
     if (ecran) { ouvrirMenu(); return; }
     if (tab === TAB_ORDER[0]) { setTiroir(true); return; }
-    avancerOngletParGeste(-1);
-  }, [tiroir, ecran, tab, ouvrirMenu, avancerOngletParGeste]);
+    goTab(-1);
+  }, [tiroir, ecran, tab, ouvrirMenu, goTab]);
 
-  const { offset, dragging, largeur } = useHorizontalSwipe(null, {
-    onLeft, onRight, onDocument: true, enabled: swipeActif, peek: true, measureRef: contentRef,
-  });
+  const { offset, dragging } = useHorizontalSwipe(null, { onLeft, onRight, onDocument: true, enabled: swipeActif });
 
   /* La barre se réduit pendant le défilement et reprend sa taille à l'arrêt —
      sauf là où elle est figée. */
@@ -3958,31 +3897,6 @@ function AbaApp() {
   );
 
   const cleCourante = ecran || tab;
-  const sensGeste = offset < 0 ? -1 : offset > 0 ? 1 : 0;
-  /* Écran qui se dévoilerait si le geste en cours allait à son terme — null
-     quand il n'y en a pas (bord de la liste d'onglets, ou balayage qui ouvre
-     le tiroir plutôt qu'un écran) : dans ce cas on retombe sur le simple
-     suivi amorti de l'écran courant, sans aperçu. */
-  const cleVoisine =
-    !sensGeste || tiroir
-      ? null
-      : ecran
-      ? sensGeste < 0
-        ? tab
-        : null
-      : (() => {
-          const i = TAB_ORDER.indexOf(tab);
-          return sensGeste < 0 ? (i < TAB_ORDER.length - 1 ? TAB_ORDER[i + 1] : null) : i > 0 ? TAB_ORDER[i - 1] : null;
-        })();
-  const offsetSansApercu = Math.sign(offset) * Math.min(Math.abs(offset) * 0.45, 80);
-
-  /* Les deux volets ne sont recalculés que si l'écran qu'ils affichent
-     change, pas à chaque frame du geste. Sans ça, Export et Session — les
-     plus chargés en calcul (tri des séances, regroupement des objectifs) —
-     retraversaient tout leur rendu à chaque déplacement du doigt, ce qui se
-     ressentait comme un décalage du geste plutôt qu'un mouvement fluide. */
-  const panneauCourant = React.useMemo(() => volet(cleCourante), [cleCourante]);
-  const panneauVoisin = React.useMemo(() => (cleVoisine ? volet(cleVoisine) : null), [cleVoisine]);
 
   if (!securityLoaded) {
     return (
@@ -4021,46 +3935,26 @@ function AbaApp() {
 
   return (
     <div ref={rootRef} className="min-h-screen" style={{ background: PAPER, color: INK, fontFamily: F_BODY }}>
-      {/* Contenu : l'onglet courant, ou un écran ouvert depuis le tiroir.
-          Pendant un balayage qui a un voisin défini, les deux volets sont
-          montés côte à côte et translatés ensemble : le geste dévoile
-          progressivement l'écran suivant au lieu de le faire apparaître
-          d'un coup à la fin. Sans voisin (bord de liste, ouverture du
-          tiroir), on retombe sur le simple suivi amorti de l'écran courant. */}
+      {/* Contenu : l'onglet courant, ou un écran ouvert depuis le tiroir */}
       <div
         ref={contentRef}
         className="max-w-4xl mx-auto px-4 pb-44"
         style={{
           paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)',
-          overflowX: cleVoisine ? 'hidden' : 'visible',
+          // Tiroir ouvert, le contenu ne doit pas suivre le doigt : il est
+          // rendu hors du panneau et glisserait dans la bande visible à droite.
+          transform: offset && !tiroir ? `translateX(${offset}px)` : 'none',
+          transition: dragging ? 'none' : 'transform .2s ease-out',
         }}
       >
-        {cleVoisine ? (
-          <div
-            style={{
-              display: 'flex',
-              transform: `translateX(${(sensGeste < 0 ? offset : offset - largeur) || 0}px)`,
-              transition: dragging ? 'none' : 'transform .2s ease-out',
-            }}
-          >
-            <div style={{ flex: '0 0 100%', minWidth: 0 }}>{sensGeste < 0 ? panneauCourant : panneauVoisin}</div>
-            <div style={{ flex: '0 0 100%', minWidth: 0 }}>{sensGeste < 0 ? panneauVoisin : panneauCourant}</div>
-          </div>
-        ) : (
-          <div
-            key={cleCourante}
-            style={{
-              // Tiroir ouvert, le contenu ne doit pas suivre le doigt : il
-              // est rendu hors du panneau et glisserait dans la bande
-              // visible à droite.
-              transform: offset && !tiroir ? `translateX(${offsetSansApercu}px)` : 'none',
-              transition: dragging ? 'none' : 'transform .2s ease-out',
-              animation: dir === 0 ? 'none' : `${dir > 0 ? 'abaInFromRight' : 'abaInFromLeft'} .18s ease-out`,
-            }}
-          >
-            {panneauCourant}
-          </div>
-        )}
+        <div
+          key={cleCourante}
+          style={{
+            animation: dir === 0 ? 'none' : `${dir > 0 ? 'abaInFromRight' : 'abaInFromLeft'} .18s ease-out`,
+          }}
+        >
+          {volet(cleCourante)}
+        </div>
       </div>
 
       {/* ==================== Barre du bas ====================
