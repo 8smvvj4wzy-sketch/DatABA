@@ -986,6 +986,224 @@ function finalizeSession(session) {
   return { ...session, data, reinforcement, endedAt: session.isEdit ? session.endedAt || stamp : stamp };
 }
 
+/* ==================== Séance mouvante ====================
+   Sur le terrain une séance ne se déroule pas comme elle a été configurée :
+   un jeune part, un autre arrive, un atelier en enchaîne un autre. Ces
+   fonctions décrivent ces mouvements sur l'objet séance, hors de tout
+   affichage — elles sont couvertes par tests/test_seance_souple.mjs. */
+
+/* Fenêtre de présence d'une personne. Une séance enregistrée avant l'arrivée
+   des entrées et sorties en cours de route n'a pas de champ `presence` : tout
+   le monde y est réputé présent d'un bout à l'autre. */
+function fenetrePresence(session, sid) {
+  const debut = session ? session.startedAt : 0;
+  const fin = session && session.endedAt ? session.endedAt : null;
+  const p = session && session.presence && session.presence[sid];
+  if (!p) return { from: debut, to: fin };
+  return { from: p.from == null ? debut : p.from, to: p.to == null ? fin : p.to };
+}
+
+function estPresent(session, sid) {
+  const p = session && session.presence && session.presence[sid];
+  return !p || p.to == null;
+}
+
+/* Fenêtres de pause closes. La pause encore ouverte est bornée à `fin`, sans
+   quoi une séance enregistrée alors qu'elle est en pause ne verrait jamais sa
+   dernière pause décomptée. */
+function fenetresPause(session, fin) {
+  const bornes = [];
+  ((session && session.pauses) || []).forEach((p) => {
+    if (!p || p.from == null) return;
+    const to = p.to == null ? fin : p.to;
+    if (to != null && to > p.from) bornes.push({ from: p.from, to });
+  });
+  return bornes;
+}
+
+function chevauchementMs(a, b) {
+  return Math.max(0, Math.min(a.to, b.to) - Math.max(a.from, b.from));
+}
+
+/* Durée de présence effective, pauses déduites. C'est elle qui fonde le temps
+   d'activité à l'export : sans elle, une personne arrivée en cours de séance
+   se verrait créditer la séance entière.
+
+   Repli pour les séances antérieures à l'historique des pauses : elles n'ont
+   qu'un `pausedMs` global, retiré tel quel dès lors que la personne a été
+   présente d'un bout à l'autre. C'est le calcul qui avait cours jusqu'ici, et
+   il reste exact dans ce cas précis. */
+function dureePresence(session, sid) {
+  if (!session || !session.startedAt) return 0;
+  const finSeance = session.endedAt || session.startedAt;
+  const f = fenetrePresence(session, sid);
+  const debut = Math.max(f.from == null ? session.startedAt : f.from, session.startedAt);
+  const fin = Math.min(f.to == null ? finSeance : f.to, finSeance);
+  const brut = Math.max(0, fin - debut);
+  if (!brut) return 0;
+  const pauses = fenetresPause(session, finSeance);
+  if (!pauses.length) {
+    const couvreTout = debut <= session.startedAt && fin >= finSeance;
+    return Math.max(0, brut - (couvreTout ? session.pausedMs || 0 : 0));
+  }
+  const enPause = pauses.reduce((n, p) => n + chevauchementMs({ from: debut, to: fin }, p), 0);
+  return Math.max(0, brut - enPause);
+}
+
+/* Objectifs cochés d'office pour une personne dans un atelier : ce qui a été
+   mémorisé pour elle dans cet atelier, à défaut ses objectifs prioritaires, à
+   défaut tous. Ajouter quelqu'un en pleine séance ne doit pas renvoyer à
+   l'écran de configuration. */
+function objectifsParDefaut(student, atelier, mode) {
+  if (!student) return [];
+  const visibles = (student.objectives || []).filter((o) => (mode === 'balance' ? o.type === 'balance' : true));
+  const ids = visibles.map((o) => o.id);
+  const memorise = atelier && atelier.usualObjectives && atelier.usualObjectives[student.id];
+  const retenus = memorise ? memorise.filter((oid) => ids.includes(oid)) : [];
+  if (retenus.length) return retenus;
+  const prioritaires = visibles.filter((o) => o.favorite).map((o) => o.id);
+  return prioritaires.length ? prioritaires : ids;
+}
+
+/* Monte l'instantané des objectifs et les cotations vides. Un seul endroit
+   sait le faire : le lancement, l'arrivée d'une personne en cours de route et
+   le passage à l'atelier suivant s'appuient tous dessus. */
+function construireDonneesSeance(students, studentIds, selected, favorisAtelier, mode) {
+  const snapshot = {};
+  const data = {};
+  (studentIds || []).forEach((sid) => {
+    const st = (students || []).find((s) => s.id === sid);
+    if (!st) return;
+    data[sid] = {};
+    ((selected && selected[sid]) || []).forEach((oid) => {
+      const obj = (st.objectives || []).find((o) => o.id === oid);
+      if (!obj) return;
+      const cible = currentTarget(obj);
+      // Prioritaire si l'objectif l'est en soi, ou s'il l'est pour cet atelier
+      const favorite = !!obj.favorite || (mode !== 'balance' && (favorisAtelier || []).includes(oid));
+      snapshot[oid] = { ...obj, favorite, activeTargetName: cible ? cible.name : null, activePhaseName: currentPhase(obj).name };
+      data[sid][oid] = { ...emptyEntry(obj), targetId: cible ? cible.id : null };
+    });
+  });
+  return { snapshot, data };
+}
+
+/* Arrivée en cours de séance. Une personne déjà passée par là et repartie
+   retrouve sa place : ses cotations sont conservées, rien n'est recréé. */
+function ajouterPersonne(session, student, oids, stamp, favorisAtelier) {
+  if (!session || !student) return session;
+  const sid = student.id;
+  const presence = { ...(session.presence || {}) };
+  if ((session.studentIds || []).includes(sid)) {
+    presence[sid] = { from: presence[sid] && presence[sid].from != null ? presence[sid].from : stamp, to: null };
+    return { ...session, presence };
+  }
+  const { snapshot, data } = construireDonneesSeance([student], [sid], { [sid]: oids }, favorisAtelier, session.mode);
+  presence[sid] = { from: stamp, to: null };
+  return {
+    ...session,
+    studentIds: [...(session.studentIds || []), sid],
+    selectedObjectives: { ...(session.selectedObjectives || {}), [sid]: Object.keys(data[sid] || {}) },
+    objectiveSnapshot: { ...(session.objectiveSnapshot || {}), ...snapshot },
+    data: { ...(session.data || {}), [sid]: data[sid] || {} },
+    presence,
+  };
+}
+
+/* Départ en cours de séance : les cotations restent acquises, les
+   chronomètres et le renforcement s'arrêtent là. À distinguer de la
+   suppression, qui efface — d'où deux fonctions et deux commandes. */
+function retirerPersonne(session, sid, stamp) {
+  if (!session) return session;
+  const presence = { ...(session.presence || {}) };
+  const actuelle = presence[sid];
+  presence[sid] = { from: actuelle && actuelle.from != null ? actuelle.from : session.startedAt, to: stamp };
+
+  const maj = {};
+  Object.entries((session.data || {})[sid] || {}).forEach(([oid, e]) => {
+    maj[oid] = figerChronos(e, stamp, false);
+  });
+
+  const reinforcement = { ...(session.reinforcement || {}) };
+  const r = reinforcement[sid];
+  if (r && r.running && r.startedAt) {
+    reinforcement[sid] = { running: false, startedAt: null, totalMs: (r.totalMs || 0) + (stamp - r.startedAt) };
+  }
+  return { ...session, presence, data: { ...(session.data || {}), [sid]: maj }, reinforcement };
+}
+
+/* Suppression : la personne n'aurait pas dû figurer dans cette séance. Tout ce
+   qui la concerne s'en va, y compris les objectifs devenus orphelins de
+   l'instantané. Destructif — l'appelant demande confirmation. */
+function supprimerPersonne(session, sid) {
+  if (!session) return session;
+  const sansElle = (obj) => {
+    const n = { ...(obj || {}) };
+    delete n[sid];
+    return n;
+  };
+  const studentIds = (session.studentIds || []).filter((x) => x !== sid);
+  const selectedObjectives = sansElle(session.selectedObjectives);
+  const encoreUtilises = new Set();
+  studentIds.forEach((x) => (selectedObjectives[x] || []).forEach((oid) => encoreUtilises.add(oid)));
+  const objectiveSnapshot = {};
+  Object.entries(session.objectiveSnapshot || {}).forEach(([oid, o]) => {
+    if (encoreUtilises.has(oid)) objectiveSnapshot[oid] = o;
+  });
+  return {
+    ...session,
+    studentIds,
+    selectedObjectives,
+    objectiveSnapshot,
+    data: sansElle(session.data),
+    notes: sansElle(session.notes),
+    reinforcement: sansElle(session.reinforcement),
+    hidden: sansElle(session.hidden),
+    presence: sansElle(session.presence),
+    priorityOrder: (session.priorityOrder || []).filter((k) => k.split('|')[0] !== sid),
+  };
+}
+
+/* Passage à l'atelier suivant. La séance en cours est close et enregistrée
+   telle quelle, une nouvelle s'ouvre sur le nouvel atelier : l'atelier reste
+   une propriété de la séance, ce qu'attendent l'export et DatABA Manager, et
+   une fiche de crise ouverte reste rattachée à l'atelier où elle a commencé.
+   `chainId` relie les deux séances, sur le principe des crises enchaînées.
+
+   Contrepartie assumée : nouveau chronomètre, temps de renforcement repartis
+   de zéro. Un atelier a sa durée propre. */
+function chainerAtelier(session, atelierId, plan, stamp) {
+  const chainId = session.chainId || session.id;
+  const close = finalizeSession({ ...session, chainId, chainIndex: session.chainIndex || 1 });
+  const studentIds = (plan && plan.studentIds) || [];
+  const { snapshot, data } = construireDonneesSeance(plan.students, studentIds, plan.selected, plan.favorites, session.mode);
+  const presence = {};
+  const selectedObjectives = {};
+  studentIds.forEach((sid) => {
+    presence[sid] = { from: stamp, to: null };
+    selectedObjectives[sid] = Object.keys(data[sid] || {});
+  });
+  const next = {
+    id: uid(),
+    date: new Date(stamp).toISOString(),
+    startedAt: stamp,
+    mode: session.mode,
+    atelierId: session.mode === 'balance' ? null : atelierId,
+    intervenantId: session.intervenantId || null,
+    doubleCotation: !!session.doubleCotation,
+    chainId,
+    chainIndex: (session.chainIndex || 1) + 1,
+    studentIds,
+    selectedObjectives,
+    objectiveSnapshot: snapshot,
+    notes: {},
+    data,
+    presence,
+    pauses: [],
+  };
+  return { close, next };
+}
+
 /* Pas d'un relevé par intervalle, en secondes. Les objectifs enregistrés avant
    la durée libre n'ont qu'un nombre de minutes : on le convertit. */
 function intervalStepSec(obj) {
@@ -1403,15 +1621,34 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   }
 
   sessions.forEach((sess) => {
-    // Temps de renforcement et temps d'activité, par personne
     const dureeSeance = sess.endedAt && sess.startedAt
       ? Math.max(0, sess.endedAt - sess.startedAt - (sess.pausedMs || 0))
       : 0;
+
+    /* Présence : une seule ligne, et seulement quand la personne n'a pas
+       couvert toute la séance. Sans elle, un faible nombre d'essais se lit
+       comme un mauvais résultat alors que la personne n'était pas là. */
+    (sess.studentIds || []).forEach((sid) => {
+      if (studentFilter && !studentFilter.includes(sid)) return;
+      const presence = dureePresence(sess, sid);
+      if (!dureeSeance || presence >= dureeSeance) return;
+      const f = fenetrePresence(sess, sid);
+      rows.push([
+        ...base(sess, sid, { name: 'Présence', activeTargetName: null, activePhaseName: '—', config: {} }),
+        'Présence', 1, '',
+        `Présent ${Math.round(presence / 60000)} min sur ${Math.round(dureeSeance / 60000)} — de ${timeShort(f.from)} à ${timeShort(f.to || sess.endedAt)}`,
+        '', '', '', Math.round(presence / 1000), '', '',
+      ]);
+    });
+
+    /* Temps de renforcement et temps d'activité, par personne. L'activité se
+       compte sur la présence réelle : une personne arrivée en cours de séance
+       ne doit pas se voir créditer la séance entière. */
     Object.entries(sess.reinforcement || {}).forEach(([sid, r]) => {
       if (studentFilter && !studentFilter.includes(sid)) return;
       const renfo = Math.round((r.totalMs || 0) / 1000);
       if (!renfo) return;
-      const activite = Math.max(0, Math.round(dureeSeance / 1000) - renfo);
+      const activite = Math.max(0, Math.round(dureePresence(sess, sid) / 1000) - renfo);
       rows.push([
         ...base(sess, sid, { name: 'Temps de renforcement', activeTargetName: null, activePhaseName: '—', config: {} }),
         'Renforcement', 1, '',
@@ -2711,14 +2948,19 @@ function AbaApp() {
   const addAtelier = (name) => setAteliers((a) => [...a, { id: uid(), name }]);
   const removeAtelier = (id) => setAteliers((a) => a.filter((x) => x.id !== id));
   const renameAtelier = (id, name) => setAteliers((a) => a.map((x) => (x.id === id ? { ...x, name } : x)));
+  /* Mémorisation cumulative : la liste des personnes habituelles et celle des
+     prioritaires sont remplacées, mais les objectifs mémorisés des personnes
+     absentes ce jour-là sont conservés. Sans ça, une personne qui manque le
+     jour de la mémorisation perd sa liste — et l'ajouter en pleine séance
+     obligerait à repasser par l'écran de configuration. */
   const setAtelierGroup = (id, config) =>
     setAteliers((a) => a.map((x) => (x.id === id
       ? {
           ...x,
           usualStudentIds: config.studentIds,
-          usualObjectives: config.objectives,
+          usualObjectives: { ...(x.usualObjectives || {}), ...config.objectives },
           favoriteObjectiveIds: config.favorites,
-          knownObjectiveIds: config.known,
+          knownObjectiveIds: Array.from(new Set([...(x.knownObjectiveIds || []), ...(config.known || [])])),
         }
       : x)));
   const addIntervenant = (name) => setIntervenants((l) => [...l, { id: uid(), name }]);
@@ -3230,9 +3472,11 @@ function AbaApp() {
             onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => setEcran('personnes')}
             onOuvrirMenu={ouvrirMenu}
             activeSession={activeSession} setActiveSession={setActiveSession}
-            onFinish={(session) => {
+            onFinish={(session, suivante) => {
               const { isEdit, ...rest } = session;
-              setActiveSession(null);
+              // Passage à l'atelier suivant : la nouvelle séance remplace l'active,
+              // au lieu de repasser par l'écran de configuration.
+              setActiveSession(suivante || null);
               const nextSessions = isEdit
                 ? sessions.map((s) => (s.id === rest.id ? rest : s))
                 : [rest, ...sessions];
@@ -3248,7 +3492,7 @@ function AbaApp() {
                     ? `${a.initials} — « ${a.target} » acquise${a.next ? `, passage à « ${a.next} »` : ', dernière cible'}`
                     : `${achieved.length} cibles acquises`
                 );
-              } else {
+              } else if (!suivante) {
                 notify(isEdit ? 'Séance corrigée' : 'Séance enregistrée');
               }
             }}
@@ -4986,7 +5230,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 /* ==================== Écran 3 : session ==================== */
 function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
-    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} onFinish={onFinish} />;
+    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} notify={notify} onFinish={onFinish} />;
   }
   return (
     <SessionSetup
@@ -5117,32 +5361,25 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
 
   function start() {
     primeAudio();
-    const snapshot = {};
-    const data = {};
-    studentIds.forEach((sid) => {
-      const st = students.find((s) => s.id === sid);
-      data[sid] = {};
-      (selected[sid] || []).forEach((oid) => {
-        const obj = st.objectives.find((o) => o.id === oid);
-        const cible = currentTarget(obj);
-        // Prioritaire si l'objectif l'est en soi, ou s'il l'est pour cet atelier
-        const favorite = !!obj.favorite || (mode === 'atelier' && atelierFavorites.includes(oid));
-        snapshot[oid] = { ...obj, favorite, activeTargetName: cible ? cible.name : null, activePhaseName: currentPhase(obj).name };
-        data[sid][oid] = { ...emptyEntry(obj), targetId: cible ? cible.id : null };
-      });
-    });
+    const stamp = Date.now();
+    const { snapshot, data } = construireDonneesSeance(students, studentIds, selected, atelierFavorites, mode);
+    const presence = {};
+    studentIds.forEach((sid) => { presence[sid] = { from: stamp, to: null }; });
     onStart({
       id: uid(),
-      date: new Date().toISOString(),
-      startedAt: Date.now(),
+      date: new Date(stamp).toISOString(),
+      startedAt: stamp,
       mode,
       atelierId: mode === 'balance' ? null : atelierId,
       intervenantId,
+      doubleCotation,
       studentIds,
       selectedObjectives: selected,
       objectiveSnapshot: snapshot,
       notes: {},
       data,
+      presence,
+      pauses: [],
     });
   }
 
@@ -5442,7 +5679,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   );
 }
 
-function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, onFinish }) {
+function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, notify, onFinish }) {
   const isEdit = !!session.isEdit;
   const [currentId, setCurrentId] = useState(session.studentIds[0]);
   const [viewMode, setViewMode] = useState('priority');
@@ -5452,6 +5689,11 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const [wakeOk, setWakeOk] = useState(false);
   const stepsRef = useRef({});
   const [expanded, setExpanded] = useState(null); // { sid, oid } de l'objectif agrandi
+
+  /* Feuilles de commande, une seule ouverte à la fois : 'reglages' (ce qui a
+     quitté la barre du haut), 'atelier' (passage à l'atelier suivant),
+     'ajout' (arrivée d'une personne), ou { personne: sid }. */
+  const [feuille, setFeuille] = useState(null);
 
   /* Densité d'affichage. Réduire la taille agrandit d'autant la largeur
      disponible en pixels de mise en page : la grille place alors davantage de
@@ -5490,6 +5732,18 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   };
   const cotationRef = useRef(null);
 
+  /* Personnes dont les cotations sont à l'écran. Une personne repartie sort de
+     la zone de cotation mais reste dans la séance — en correction, tout le
+     monde est coté, sinon on ne pourrait plus reprendre les relevés de
+     quelqu'un qui a quitté l'atelier. */
+  const aCoter = session.studentIds.filter((sid) => isEdit || estPresent(session, sid));
+
+  /* La personne affichée a pu quitter l'atelier ou être retirée : on se rabat
+     sur la première encore à l'écran plutôt que de rendre une vue vide. */
+  useEffect(() => {
+    if (aCoter.length && !aCoter.includes(currentId)) setCurrentId(aCoter[0]);
+  }, [aCoter.join('|'), currentId]);
+
   /* Réordonne les objectifs d'une personne. En vue Prioritaires on ne déplace
      qu'un sous-ensemble : les positions occupées par ce sous-ensemble dans la
      liste complète sont réutilisées, l'ordre des autres reste intact. */
@@ -5498,7 +5752,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      qui n'y figurent pas encore sont ajoutés à la suite. */
   const priorityItems = (() => {
     const naturel = [];
-    session.studentIds.forEach((sid) => {
+    aCoter.forEach((sid) => {
       (session.selectedObjectives[sid] || []).forEach((oid) => {
         const o = session.objectiveSnapshot[oid];
         if (!o) return;
@@ -5601,13 +5855,20 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const objIds = session.selectedObjectives[currentId] || [];
   const hasInterval = Object.values(session.objectiveSnapshot || {}).some((o) => o && o.type === 'interval');
 
+  /* Les pauses sont historisées en plus du cumul `pausedMs` : une personne
+     arrivée ou repartie en cours de séance ne doit se voir décompter que les
+     pauses qui recoupent réellement sa présence. */
   function togglePause() {
     setSession((s0) => {
+      const stamp = Date.now();
       if (s0.pausedAt) {
-        return { ...s0, pausedMs: (s0.pausedMs || 0) + (Date.now() - s0.pausedAt), pausedAt: null };
+        const pauses = (s0.pauses || []).slice();
+        const i = pauses.findIndex((p) => p.from === s0.pausedAt && p.to == null);
+        if (i >= 0) pauses[i] = { ...pauses[i], to: stamp };
+        else pauses.push({ from: s0.pausedAt, to: stamp });
+        return { ...s0, pauses, pausedMs: (s0.pausedMs || 0) + (stamp - s0.pausedAt), pausedAt: null };
       }
       // On arrête les chronomètres en cours pour ne pas compter le temps de pause
-      const stamp = Date.now();
       const data = {};
       Object.entries(s0.data || {}).forEach(([sid, objs]) => {
         data[sid] = {};
@@ -5615,7 +5876,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           data[sid][oid] = figerChronos(e, stamp, false);
         });
       });
-      return { ...s0, data, pausedAt: stamp };
+      return { ...s0, data, pausedAt: stamp, pauses: [...(s0.pauses || []), { from: stamp, to: null }] };
     });
   }
 
@@ -5668,17 +5929,71 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     }));
   }
 
+  /* Arrivée, départ, suppression : la logique vit dans les fonctions de
+     premier niveau (App.jsx), ici seulement le geste et le retour visuel. */
+  function ajouter(sid, oids) {
+    const st = students.find((s) => s.id === sid);
+    if (!st) return;
+    const atelier = ateliers.find((a) => a.id === session.atelierId);
+    setSession((s0) => ajouterPersonne(s0, st, oids, Date.now(), (atelier && atelier.favoriteObjectiveIds) || []));
+    setFeuille(null);
+    if (notify) notify(`${st.initials} — ajout à la séance`);
+  }
+  function partir(sid) {
+    setSession((s0) => retirerPersonne(s0, sid, Date.now()));
+    setFeuille(null);
+  }
+  function fairRevenir(sid) {
+    const st = students.find((s) => s.id === sid);
+    if (!st) return;
+    setSession((s0) => ajouterPersonne(s0, st, s0.selectedObjectives[sid] || [], Date.now(), []));
+  }
+  function supprimer(sid) {
+    setSession((s0) => supprimerPersonne(s0, sid));
+    setFeuille(null);
+  }
+
   const pausedTotal = session.pausedMs || 0;
   const isPaused = !!session.pausedAt;
   const elapsed = isEdit
     ? Math.max(0, (session.endedAt || session.startedAt) - session.startedAt - pausedTotal)
     : Math.max(0, (isPaused ? session.pausedAt : now) - session.startedAt - pausedTotal);
 
+  const nbMasques = Object.values(session.hidden || {}).reduce((a, l) => a + l.length, 0);
+
+  function abandonner() {
+    if (window.confirm('Abandonner cette séance ? Toutes les cotations en cours seront perdues.')) setSession(null);
+  }
+
+  function changerAtelier(atelierId, keepIds) {
+    const cible = ateliers.find((a) => a.id === atelierId);
+    const selected = {};
+    keepIds.forEach((sid) => {
+      selected[sid] = objectifsParDefaut(students.find((s) => s.id === sid), cible, session.mode);
+    });
+    const { close, next } = chainerAtelier(session, atelierId, {
+      students, studentIds: keepIds, selected, favorites: (cible && cible.favoriteObjectiveIds) || [],
+    }, Date.now());
+    setFeuille(null);
+    onFinish(close, next);
+  }
+
   return (
     <div>
       <div className="flex flex-col gap-2 mb-4 landscape:flex-row landscape:items-start landscape:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>{atelier ? atelier.name : session.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</h1>
+          {isEdit ? (
+            <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>
+              {atelier ? atelier.name : session.mode === 'balance' ? 'Balance Program' : 'Séance libre'}
+            </h1>
+          ) : (
+            <button onClick={() => setFeuille('atelier')} className="flex items-center gap-1 max-w-full text-left" title="Changer d'atelier">
+              <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>
+                {atelier ? atelier.name : session.mode === 'balance' ? 'Balance Program' : 'Séance libre'}
+              </h1>
+              <ChevronDown size={16} style={{ color: INK_SOFT }} className="shrink-0" />
+            </button>
+          )}
           <p className="text-sm" style={{ color: INK_SOFT }}>
             {isEdit ? <>Correction · {new Date(session.date).toLocaleDateString('fr-FR')} {timeShort(session.date)}</> : <span style={{ fontFamily: F_MONO }}>{fmtClock(elapsed)}</span>}
             {intervenant && <> · {intervenant.name}</>}
@@ -5686,41 +6001,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           </p>
         </div>
         <div className="flex flex-wrap gap-2 shrink-0">
-          {hasInterval && !isEdit && (
-            <button
-              onClick={() => { const next = !soundOn; setSoundOn(next); if (next) { primeAudio(); beep(); } }}
-              className="rounded-xl px-3 py-2.5 border"
-              style={{ borderColor: BORDER, color: soundOn ? INK : INK_SOFT, backgroundColor: CARD }}
-              title={soundOn ? 'Alerte sonore activée' : 'Alerte sonore coupée'}
-            >
-              {soundOn ? <Volume2 size={17} /> : <VolumeX size={17} />}
-            </button>
-          )}
-          {hasInterval && !isEdit && vibrateSupported() && (
-            <button
-              onClick={() => {
-                const next = !vibrateOn;
-                setVibrateOn(next);
-                if (next) { try { navigator.vibrate([200, 100, 200]); } catch (e) {} }
-              }}
-              className="rounded-xl px-3 py-2.5 border"
-              style={{ borderColor: BORDER, color: vibrateOn ? INK : INK_SOFT, backgroundColor: CARD }}
-              title={vibrateOn ? 'Vibration activée' : 'Vibration coupée'}
-            >
-              <Vibrate size={17} />
-            </button>
-          )}
           {isEdit && (
             <Btn variant="ghost" onClick={() => setSession(null)} className="text-sm py-2.5">Annuler</Btn>
           )}
-          <button
-            onClick={cycleZoom}
-            className="rounded-xl px-3 py-2.5 border text-xs font-medium"
-            style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD, fontFamily: F_MONO }}
-            title="Densité d'affichage : plus d'objectifs à l'écran"
-          >
-            {(ZOOM_LEVELS.find((z) => z.v === zoom) || ZOOM_LEVELS[0]).l}
-          </button>
           {!isEdit && (
             <button
               onClick={togglePause}
@@ -5733,14 +6016,17 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           )}
           {!isEdit && (
             <button
-              onClick={() => {
-                if (window.confirm('Abandonner cette séance ? Toutes les cotations en cours seront perdues.')) setSession(null);
-              }}
-              className="rounded-xl px-3 py-2.5 border"
+              onClick={() => setFeuille('reglages')}
+              className="rounded-xl px-3 py-2.5 border relative"
               style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-              title="Abandonner la séance"
+              title="Réglages de la séance"
             >
-              <X size={17} />
+              <SlidersHorizontal size={17} />
+              {nbMasques > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center" style={{ backgroundColor: INK, color: '#fff', fontFamily: F_MONO }}>
+                  {nbMasques}
+                </span>
+              )}
             </button>
           )}
           <Btn variant="outline" onClick={() => onFinish(finalizeSession(session))} className="text-sm py-2.5">
@@ -5748,19 +6034,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           </Btn>
         </div>
       </div>
-
-      {(() => {
-        const nb = Object.values(session.hidden || {}).reduce((a, l) => a + l.length, 0);
-        return nb > 0 ? (
-          <button
-            onClick={() => setSession((s0) => ({ ...s0, hidden: {} }))}
-            className="w-full rounded-xl border px-3 py-2 mb-4 text-xs flex items-center justify-center gap-1.5"
-            style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-          >
-            <Eye size={13} /> {nb} objectif{nb > 1 ? 's' : ''} masqué{nb > 1 ? 's' : ''} — tout réafficher
-          </button>
-        ) : null;
-      })()}
 
       {isPaused && (
         <div className="rounded-xl px-3 py-2.5 mb-4 flex items-center gap-2 text-sm" style={{ backgroundColor: INK, color: '#fff' }}>
@@ -5798,35 +6071,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           })}
         </div>
       </div>
-
-      {!isEdit && (
-        <div className="flex flex-wrap gap-1.5 mb-3">
-          {session.studentIds.map((sid) => {
-            const st = students.find((x) => x.id === sid);
-            if (!st) return null;
-            const actif = enRenfo(sid);
-            const total = renfoTotal(sid);
-            return (
-              <button
-                key={sid}
-                onClick={() => toggleRenfo(sid)}
-                className="rounded-xl px-3 py-2 text-sm flex items-center gap-1.5 border"
-                style={{
-                  fontFamily: F_DISPLAY,
-                  borderColor: actif ? '#D69A2D' : BORDER,
-                  backgroundColor: actif ? '#D69A2D' : CARD,
-                  color: actif ? '#fff' : INK_SOFT,
-                }}
-                title={actif ? 'Reprendre les cotations' : 'Mettre en renforcement'}
-              >
-                <span className="font-semibold">{st.initials}</span>
-                <Gift size={14} />
-                {total > 0 && <span style={{ fontFamily: F_MONO }}>{fmtClock(total)}</span>}
-              </button>
-            );
-          })}
-        </div>
-      )}
 
       <div
         className="flex gap-3"
@@ -6004,28 +6248,350 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           </div>
         )}
 
-        {/* Rail de navigation entre personnes */}
-        <div className="shrink-0 flex flex-col gap-2 sticky top-20 self-start">
+        {/* Rail de personnes : navigation, renforcement, arrivée et départ —
+            les trois se jouaient auparavant à trois endroits de l'écran. */}
+        <div className="shrink-0 flex flex-col gap-1.5 sticky top-20 self-start">
           {session.studentIds.map((sid) => {
             const st = students.find((s) => s.id === sid);
             if (!st) return null;
+            const present = isEdit || estPresent(session, sid);
             const on = viewMode === 'student' && sid === currentId;
+            const actif = enRenfo(sid);
+            const total = renfoTotal(sid);
             return (
-              <button
-                key={sid}
-                onClick={() => { setCurrentId(sid); setViewMode('student'); }}
-                className="w-14 h-14 rounded-full flex items-center justify-center text-sm font-semibold border-2 transition-transform active:scale-95"
-                style={{
-                  fontFamily: F_DISPLAY,
-                  backgroundColor: on ? INK : CARD,
-                  color: on ? '#fff' : INK_SOFT,
-                  borderColor: on ? INK : BORDER,
-                }}
-              >
-                {st.initials.replace(/\./g, '').slice(0, 3)}
-              </button>
+              <div key={sid} className="flex flex-col items-center gap-0.5">
+                <button
+                  onClick={() => {
+                    if (!present) { fairRevenir(sid); return; }
+                    setCurrentId(sid); setViewMode('student');
+                  }}
+                  className="relative w-14 h-14 rounded-full flex items-center justify-center text-sm font-semibold border-2 transition-transform active:scale-95"
+                  style={{
+                    fontFamily: F_DISPLAY,
+                    opacity: present ? 1 : 0.45,
+                    backgroundColor: actif ? '#D69A2D' : on ? INK : CARD,
+                    color: actif || on ? '#fff' : INK_SOFT,
+                    borderColor: actif ? '#D69A2D' : on ? INK : BORDER,
+                  }}
+                  title={!present ? 'Reparti de l’atelier — appuyer pour faire revenir' : undefined}
+                >
+                  {st.initials.replace(/\./g, '').slice(0, 3)}
+                  {actif && (
+                    <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: '#D69A2D', color: '#fff', border: `2px solid ${CARD}` }}>
+                      <Gift size={10} />
+                    </span>
+                  )}
+                </button>
+                {actif && total > 0 && (
+                  <span className="text-[10px]" style={{ fontFamily: F_MONO, color: '#D69A2D' }}>{fmtClock(total)}</span>
+                )}
+                {!isEdit && (
+                  <button onClick={() => setFeuille({ personne: sid })} style={{ color: INK_SOFT }} title="Options">
+                    <ChevronDown size={14} />
+                  </button>
+                )}
+              </div>
             );
           })}
+          {!isEdit && students.some((s) => !session.studentIds.includes(s.id)) && (
+            <button
+              onClick={() => setFeuille('ajout')}
+              className="w-14 h-14 rounded-full flex items-center justify-center border-2 border-dashed mt-1"
+              style={{ borderColor: BORDER, color: INK_SOFT }}
+              title="Ajouter une personne"
+            >
+              <Plus size={20} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {feuille === 'reglages' && (
+        <FeuilleReglages
+          hasInterval={hasInterval}
+          soundOn={soundOn} setSoundOn={setSoundOn}
+          vibrateOn={vibrateOn} setVibrateOn={setVibrateOn}
+          zoom={zoom} cycleZoom={cycleZoom}
+          hiddenCount={nbMasques}
+          onReafficher={() => { setSession((s0) => ({ ...s0, hidden: {} })); setFeuille(null); }}
+          onAbandon={() => { setFeuille(null); abandonner(); }}
+          onClose={() => setFeuille(null)}
+        />
+      )}
+
+      {feuille === 'atelier' && (
+        <FeuilleAtelier
+          session={session} ateliers={ateliers} students={students} aCoter={aCoter}
+          onClose={() => setFeuille(null)}
+          onConfirm={changerAtelier}
+        />
+      )}
+
+      {feuille === 'ajout' && (
+        <FeuilleAjout
+          session={session} students={students}
+          atelier={ateliers.find((a) => a.id === session.atelierId)}
+          onClose={() => setFeuille(null)}
+          onConfirm={ajouter}
+        />
+      )}
+
+      {feuille && feuille.personne && (
+        <FeuillePersonne
+          sid={feuille.personne}
+          students={students}
+          present={isEdit || estPresent(session, feuille.personne)}
+          renfoActif={enRenfo(feuille.personne)}
+          renfoTotalMs={renfoTotal(feuille.personne)}
+          onToggleRenfo={() => { toggleRenfo(feuille.personne); setFeuille(null); }}
+          onPartir={() => partir(feuille.personne)}
+          onFaireRevenir={() => { fairRevenir(feuille.personne); setFeuille(null); }}
+          onSupprimer={() => supprimer(feuille.personne)}
+          onClose={() => setFeuille(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* --- Feuilles de commande de la séance en cours ---
+   Composants à part entière (et non des fonctions imbriquées) pour que leurs
+   propres useState ne soient montés que le temps où la feuille est ouverte. */
+
+function FeuilleReglages({ hasInterval, soundOn, setSoundOn, vibrateOn, setVibrateOn, zoom, cycleZoom, hiddenCount, onReafficher, onAbandon, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Réglages de la séance</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        <div className="space-y-1.5">
+          <button onClick={cycleZoom} className="w-full rounded-xl px-3 py-2.5 flex items-center justify-between border text-sm" style={{ borderColor: BORDER }}>
+            <span className="flex items-center gap-2"><SlidersHorizontal size={16} /> Densité d'affichage</span>
+            <span style={{ fontFamily: F_MONO, color: INK_SOFT }}>{(ZOOM_LEVELS.find((z) => z.v === zoom) || ZOOM_LEVELS[0]).l}</span>
+          </button>
+          {hasInterval && (
+            <button
+              onClick={() => { const next = !soundOn; setSoundOn(next); if (next) { primeAudio(); beep(); } }}
+              className="w-full rounded-xl px-3 py-2.5 flex items-center justify-between border text-sm" style={{ borderColor: BORDER }}
+            >
+              <span className="flex items-center gap-2">{soundOn ? <Volume2 size={16} /> : <VolumeX size={16} />} Alerte sonore</span>
+              <span style={{ color: INK_SOFT }}>{soundOn ? 'Activée' : 'Coupée'}</span>
+            </button>
+          )}
+          {hasInterval && vibrateSupported() && (
+            <button
+              onClick={() => { const next = !vibrateOn; setVibrateOn(next); if (next) { try { navigator.vibrate([200, 100, 200]); } catch (e) {} } }}
+              className="w-full rounded-xl px-3 py-2.5 flex items-center justify-between border text-sm" style={{ borderColor: BORDER }}
+            >
+              <span className="flex items-center gap-2"><Vibrate size={16} /> Vibration</span>
+              <span style={{ color: INK_SOFT }}>{vibrateOn ? 'Activée' : 'Coupée'}</span>
+            </button>
+          )}
+          {hiddenCount > 0 && (
+            <button onClick={onReafficher} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm" style={{ borderColor: BORDER }}>
+              <Eye size={16} /> {hiddenCount} objectif{hiddenCount > 1 ? 's' : ''} masqué{hiddenCount > 1 ? 's' : ''} — tout réafficher
+            </button>
+          )}
+          <button onClick={onAbandon} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 text-sm" style={{ color: CRISIS }}>
+            <X size={16} /> Abandonner la séance
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Passage à l'atelier suivant : la séance en cours est enregistrée telle
+   quelle, une nouvelle démarre sur l'atelier choisi. Précoché par défaut :
+   les personnes présentes qui sont aussi habituées du nouvel atelier ; les
+   habituées absentes de la séance en cours restent proposées, décochées. */
+function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfirm }) {
+  const [atelierId, setAtelierId] = useState(null);
+  const [checked, setChecked] = useState(() => new Set(aCoter));
+  const atelier = ateliers.find((a) => a.id === atelierId);
+
+  function choisir(id) {
+    setAtelierId(id);
+    const cible = ateliers.find((a) => a.id === id);
+    const usual = (cible && cible.usualStudentIds) || [];
+    setChecked(new Set(usual.length ? aCoter.filter((sid) => usual.includes(sid)) : aCoter));
+  }
+
+  const candidats = atelier
+    ? students.filter((s) => aCoter.includes(s.id) || (atelier.usualStudentIds || []).includes(s.id))
+    : [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="rounded-2xl p-5 max-w-sm w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Passer à l'atelier suivant</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          La séance en cours est enregistrée telle quelle. La nouvelle démarre avec un
+          chronomètre et un temps de renforcement remis à zéro.
+        </p>
+        {ateliers.filter((a) => a.id !== session.atelierId).length === 0 ? (
+          <Empty>Aucun autre atelier n'est configuré.</Empty>
+        ) : (
+          <div className="space-y-1.5 mb-3">
+            {ateliers.filter((a) => a.id !== session.atelierId).map((a) => (
+              <button
+                key={a.id} onClick={() => choisir(a.id)}
+                className="w-full rounded-xl px-3 py-2.5 text-left border"
+                style={{ borderColor: atelierId === a.id ? INK : BORDER, backgroundColor: atelierId === a.id ? INK : 'transparent', color: atelierId === a.id ? '#fff' : INK }}
+              >
+                {a.name}
+              </button>
+            ))}
+          </div>
+        )}
+        {atelier && (
+          <>
+            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Personnes à reporter</div>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {candidats.map((s) => {
+                const on = checked.has(s.id);
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => setChecked((c) => { const n = new Set(c); if (n.has(s.id)) n.delete(s.id); else n.add(s.id); return n; })}
+                    className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
+                    style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}
+                  >
+                    {s.initials}
+                  </button>
+                );
+              })}
+            </div>
+            <Btn onClick={() => onConfirm(atelierId, Array.from(checked))} disabled={checked.size === 0} className="w-full">
+              <Play size={16} /> Enregistrer et lancer « {atelier.name} »
+            </Btn>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* Arrivée en cours de séance : objectifs précochés d'après ce qui est
+   mémorisé pour cet atelier, à défaut les objectifs prioritaires. */
+function FeuilleAjout({ session, students, atelier, onClose, onConfirm }) {
+  const absents = students.filter((s) => !session.studentIds.includes(s.id));
+  const [sid, setSid] = useState(absents[0] ? absents[0].id : null);
+  const st = students.find((s) => s.id === sid);
+  const [oids, setOids] = useState(() => objectifsParDefaut(st, atelier, session.mode));
+
+  function choisir(id) {
+    setSid(id);
+    setOids(objectifsParDefaut(students.find((s) => s.id === id), atelier, session.mode));
+  }
+
+  if (!absents.length) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+        <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
+          <div className="flex items-center justify-between mb-3">
+            <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Ajouter une personne</span>
+            <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+          </div>
+          <Empty>Toutes les personnes enregistrées sont déjà dans cette séance.</Empty>
+        </div>
+      </div>
+    );
+  }
+
+  const visibles = st ? (session.mode === 'balance' ? st.objectives.filter((o) => o.type === 'balance') : st.objectives) : [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="rounded-2xl p-5 max-w-sm w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Ajouter une personne</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {absents.map((s) => (
+            <button
+              key={s.id} onClick={() => choisir(s.id)}
+              className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
+              style={{ fontFamily: F_DISPLAY, borderColor: sid === s.id ? INK : BORDER, backgroundColor: sid === s.id ? INK : 'transparent', color: sid === s.id ? '#fff' : INK_SOFT }}
+            >
+              {s.initials}
+            </button>
+          ))}
+        </div>
+        {st && (
+          visibles.length === 0 ? (
+            <Empty>Aucun objectif défini pour cette personne.</Empty>
+          ) : (
+            <div className="space-y-1.5 mb-4">
+              {visibles.map((o) => {
+                const on = oids.includes(o.id);
+                const meta = typeMeta(o.type);
+                const Icon = meta.icon;
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => setOids((l) => (l.includes(o.id) ? l.filter((x) => x !== o.id) : [...l, o.id]))}
+                    className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left"
+                    style={{ borderColor: on ? meta.color : BORDER, backgroundColor: on ? meta.color + '14' : 'transparent' }}
+                  >
+                    <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
+                    <span className="flex-1 min-w-0">{o.name}</span>
+                    {on && <Check size={15} style={{ color: meta.color }} className="shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          )
+        )}
+        <Btn onClick={() => onConfirm(sid, oids)} disabled={!st || oids.length === 0} className="w-full">
+          <Plus size={16} /> Ajouter à la séance
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+/* Actions propres à une personne de la séance. Départ (cotations conservées)
+   et suppression (destructif) sont volontairement deux commandes distinctes :
+   un bouton unique aurait effacé des données sans le dire clairement. */
+function FeuillePersonne({ sid, students, present, renfoActif, renfoTotalMs, onToggleRenfo, onPartir, onFaireRevenir, onSupprimer, onClose }) {
+  const st = students.find((s) => s.id === sid);
+  if (!st) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{st.initials}</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        <div className="space-y-1.5">
+          {present && (
+            <button onClick={onToggleRenfo} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left" style={{ borderColor: BORDER }}>
+              <Gift size={16} /> {renfoActif ? `Reprendre les cotations (${fmtClock(renfoTotalMs)} de renforcement)` : 'Mettre en renforcement'}
+            </button>
+          )}
+          {present ? (
+            <button onClick={onPartir} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left" style={{ borderColor: BORDER }}>
+              <Users size={16} /> A quitté l'atelier — garder ses cotations
+            </button>
+          ) : (
+            <button onClick={onFaireRevenir} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left" style={{ borderColor: BORDER }}>
+              <Users size={16} /> Faire revenir dans l'atelier
+            </button>
+          )}
+          <button
+            onClick={() => { if (window.confirm(`Retirer ${st.initials} de cette séance ? Ses cotations seront perdues.`)) onSupprimer(); }}
+            className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 text-sm text-left"
+            style={{ color: CRISIS }}
+          >
+            <Trash2 size={16} /> Retirer de la séance — supprime ses cotations
+          </button>
         </div>
       </div>
     </div>

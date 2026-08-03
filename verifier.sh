@@ -134,6 +134,34 @@ else
   echo "  ✓ hooks appelés inconditionnellement"
 fi
 
+# ── 2 ter. Séance finalisée avant d'être écrite ────────────────────────
+# Une séance écrite dans la liste persistée sans être passée par
+# finalizeSession garde ses chronomètres en cours au moment de
+# l'enregistrement — plus rien ne les arrête ensuite. Le chaînage d'atelier a
+# donné à onFinish() un deuxième site d'appel ; ce contrôle vaut pour
+# chacun, présent ou futur.
+echo
+echo "── 2 ter. Séance finalisée avant d'être écrite ──"
+FAUTIFS=""
+while IFS=: read -r num ligne; do
+  echo "$ligne" | grep -q "finalizeSession(" && continue
+  # Seule exception tolérée : l'argument « close » produit par chainerAtelier,
+  # qui finalise en interne — vérifié séparément ici plutôt que supposé.
+  if echo "$ligne" | grep -qE '\bonFinish\(close\b' \
+    && awk '/^function chainerAtelier\(/,/^}/' src/App.jsx | grep -q "finalizeSession("; then
+    continue
+  fi
+  FAUTIFS="${FAUTIFS}      ligne ${num} : ${ligne}
+"
+done < <(grep -n "onFinish(" src/App.jsx)
+if [ -n "$FAUTIFS" ]; then
+  echo "  ✗ séance écrite sans passer par finalizeSession :"
+  echo -n "$FAUTIFS"
+  ECHECS=$((ECHECS + 1))
+else
+  echo "  ✓ toute séance écrite est finalisée"
+fi
+
 # ── 3. Tests ───────────────────────────────────────────────────────────
 echo
 echo "── 3. Tests ──"
