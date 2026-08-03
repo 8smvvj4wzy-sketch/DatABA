@@ -219,12 +219,7 @@ Une réponse par essai, avec son niveau de guidance. Nombre d'essais **sans
 limite** par défaut, ou nombre prévu (3, 5, 8, 10, 20 ou libre) servant de
 simple repère : rien n'empêche de dépasser.
 
-Option : **chronométrer chaque essai**. Le temps court à partir de la consigne
-et se fige dès que l'essai est coté ; chaque essai conserve sa durée, affichée
-sous sa case et reprise dans les rapports. Au choix chronomètre libre, ou temps
-limite avec son et vibration à échéance.
-
-→ Score : pourcentage de réponses autonomes. La durée moyenne s'affiche à côté.
+→ Score : pourcentage de réponses autonomes.
 
 ### Niveau par intervalle
 Relevé périodique du niveau de fonctionnement. Le **pas est libre, de 10
@@ -282,9 +277,23 @@ mélangés à un score ni à une courbe de progression.
 Dès qu'une option est activée sur un objectif, une icône discrète apparaît sur
 sa carte pendant la séance. Un appui déplie un petit panneau sous la carte
 (compteur avec correction à la baisse, ou chrono démarrer/arrêter/remettre à
-zéro), qu'un bouton discret **Enregistrer** valide et horodate. Une mesure non
-validée reste modifiable ; une mesure jamais prise n'apparaît nulle part dans
-les rapports — elle n'est pas confondue avec une mesure à zéro.
+zéro), qu'un bouton discret **Enregistrer** valide et horodate. Les deux
+panneaux se déplient indépendamment et peuvent rester ouverts ensemble, l'un
+sous l'autre — compter et chronométrer en même temps sans repasser par
+l'icône à chaque fois. Une mesure non validée reste modifiable ; une mesure
+jamais prise n'apparaît nulle part dans les rapports — elle n'est pas
+confondue avec une mesure à zéro.
+
+Le chrono admet un second mode, **temps limite** : une durée fixée à
+l'avance, avec son et vibration une fois écoulée — le chrono se fige sans se
+valider seul, pour ne rien enregistrer sans confirmation.
+
+Sur **essai par essai, chaînage et Balance Program** (pas sur l'intervalle, qui
+mesure des tops de temps et non des essais discrets), chaque option admet en
+plus **Relancer à chaque essai** : le compteur ou le chrono se fige et se
+range sous l'essai qu'on vient de coter, puis repart de zéro pour le suivant.
+Chaque essai garde ainsi sa propre mesure, reprise dans la feuille « Détail par
+essai » de l'export.
 
 ---
 
@@ -544,8 +553,13 @@ sans aucune formule à écrire :
 Les étapes manquées laissent cette colonne **vide** plutôt qu'à 0, pour ne pas
 fausser les moyennes.
 
-Une colonne **Durée (s)** accompagne les cotations chronométrées : essais
-chronométrés et périodes d'intervalle.
+Une colonne **Durée (s)** accompagne les périodes d'intervalle saisies à la
+main (elle peut aussi contenir des durées d'essais chronométrés dans un export
+antérieur à la suppression de cette option).
+
+Deux colonnes **Compteur** et **Chrono (s)** reprennent, pour l'essai ou
+l'étape concerné, la mesure auxiliaire capturée quand l'option **Relancer à
+chaque essai** est active — vides sinon.
 
 ### Copier rapidement vers un tableau de bord
 
