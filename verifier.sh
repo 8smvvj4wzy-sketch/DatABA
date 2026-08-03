@@ -2,10 +2,12 @@
 # Vérification avant livraison — à lancer depuis la racine d'un dépôt.
 #   usage : ./verifier.sh
 #
-# Trois contrôles, dans l'ordre où ils attrapent le plus de choses :
+# Contrôles, dans l'ordre où ils attrapent le plus de choses :
 #   1. syntaxe et références (tsc en mode JS permissif — le projet n'est pas
 #      en TypeScript, tsc ne sert ici que de vérificateur)
 #   2. doublons de premier niveau (function, const) ET blocs de rendu dupliqués
+#   2 bis. ordre des hooks React
+#   2 ter. renommages laissés incomplets (vocabulaire résiduel)
 #   3. suite de tests Node autonome
 
 set -u
@@ -133,6 +135,35 @@ if [ -n "$FAUTIFS" ]; then
 else
   echo "  ✓ hooks appelés inconditionnellement"
 fi
+
+# ── 2 ter. Renommages laissés incomplets ───────────────────────────────
+# Un renommage à l'échelle du fichier (ex. « suivi de stabilité » → « suivi
+# continu ») laisse facilement une trace : un libellé, un commentaire, un nom
+# de fonction oublié pendant qu'un autre a bien été renommé. Le vocabulaire
+# retiré n'a le droit de survivre que dans les identifiants explicitement
+# transitoires — clé de stockage historique, alias de compatibilité vers
+# DatABA Manager. Tout le reste est un résidu.
+#
+# Cette liste est le registre des renommages complets déjà vérifiés : chaque
+# terme retiré du produit y gagne une ligne, avec ses exceptions légitimes.
+echo
+echo "── 2 ter. Renommages laissés incomplets ──"
+RENOMMAGES=0
+
+# « suivi de stabilité » → « suivi continu ». Exceptions : la clé de stockage
+# aba:stabilite (conservée le temps que toutes les tablettes migrent), l'alias
+# de compatibilité vers un DatABA Manager pas encore mis à jour (le champ
+# `stabilite` du payload, sa lecture `d.stabilite` à la restauration, et la
+# fonction qui le construit), et le champ `suiviStabilite` tel qu'il apparaît
+# dans la fonction qui le migre.
+RESIDUS_STABILITE=$(grep -niP 'stabilit' src/App.jsx | grep -viE "aba:stabilite|stabilite:|d\.stabilite|releverAliasStabilite|suiviStabilite")
+if [ -n "$RESIDUS_STABILITE" ]; then
+  echo "  ✗ vocabulaire « stabilité » résiduel (suivi continu attendu) :"
+  echo "$RESIDUS_STABILITE" | sed 's/^/      /' | head -10
+  RENOMMAGES=1
+fi
+
+[ "$RENOMMAGES" -eq 0 ] && echo "  ✓ aucun résidu détecté" || ECHECS=$((ECHECS + 1))
 
 # ── 3. Tests ───────────────────────────────────────────────────────────
 echo
