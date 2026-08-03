@@ -3297,6 +3297,13 @@ function AbaApp() {
   const toggleSuiviStabilite = (id) =>
     setStudents((l) => l.map((x) => (x.id === id ? { ...x, suiviStabilite: !x.suiviStabilite } : x)));
 
+  /* --- suivi de renforcement ---
+     Hors activation, aucun bouton de renforcement n'apparaît en séance : tout
+     le monde n'en a pas besoin, et l'ajouter par défaut aurait encombré la
+     fiche de chaque personne pour rien. */
+  const toggleSuiviRenforcement = (id) =>
+    setStudents((l) => l.map((x) => (x.id === id ? { ...x, suiviRenforcement: !x.suiviRenforcement } : x)));
+
   /* Un relevé s'ajoute simplement à la suite : il vaut jusqu'au suivant.
      L'état « crise » crée en plus une fiche crise minimale dans le tableau
      habituel — la même fiche que celle du bouton CRISE, pas une seconde
@@ -3425,7 +3432,7 @@ function AbaApp() {
             students={students} guidances={guidances} templates={objectiveTemplates}
             premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
-            onToggleStabilite={toggleSuiviStabilite}
+            onToggleStabilite={toggleSuiviStabilite} onToggleRenforcement={toggleSuiviRenforcement}
             addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective}
             duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase}
             onSaveTemplate={saveTemplate}
@@ -4299,7 +4306,7 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
    distance, une carte dans Gestion et une carte dans Personnes. */
 function PanneauPersonnes({
   students, guidances, templates, premiereConfiguration,
-  addStudent, removeStudent, renameStudent, onToggleStabilite,
+  addStudent, removeStudent, renameStudent, onToggleStabilite, onToggleRenforcement,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
 }) {
   const [openId, setOpenId] = useState(null);
@@ -4364,6 +4371,7 @@ function PanneauPersonnes({
                   <span className="block text-xs" style={{ color: INK_SOFT }}>
                     {s.objectives.length} objectif{s.objectives.length !== 1 ? 's' : ''}
                     {s.suiviStabilite && ' · stabilité suivie'}
+                    {s.suiviRenforcement && ' · renforcement suivi'}
                   </span>
                 </span>
               </span>
@@ -4389,6 +4397,19 @@ function PanneauPersonnes({
                       <span className="block text-xs" style={{ color: INK_SOFT }}>
                         Ajoute une pastille en bas d'écran pour noter à tout moment son état — stable,
                         pré-crise, crise, post-crise. Sans activation, aucune pastille n'apparaît.
+                      </span>
+                    </span>
+                  </button>
+                  <button onClick={() => onToggleRenforcement(s.id)} className="flex items-start gap-2.5 text-left w-full mt-2.5">
+                    <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: s.suiviRenforcement ? INK : BORDER }}>
+                      <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: s.suiviRenforcement ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Suivi de renforcement</span>
+                      <span className="block text-xs" style={{ color: INK_SOFT }}>
+                        Ajoute en séance un bouton pour mettre la personne en renforcement — les
+                        cotations sont alors suspendues et le temps décompté. Sans activation, le
+                        bouton n'apparaît pas.
                       </span>
                     </span>
                   </button>
@@ -6341,6 +6362,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           sid={feuille.personne}
           students={students}
           present={isEdit || estPresent(session, feuille.personne)}
+          renfoSuivi={!!(students.find((s) => s.id === feuille.personne) || {}).suiviRenforcement}
           renfoActif={enRenfo(feuille.personne)}
           renfoTotalMs={renfoTotal(feuille.personne)}
           onToggleRenfo={() => { toggleRenfo(feuille.personne); setFeuille(null); }}
@@ -6560,7 +6582,7 @@ function FeuilleAjout({ session, students, atelier, onClose, onConfirm }) {
 /* Actions propres à une personne de la séance. Départ (cotations conservées)
    et suppression (destructif) sont volontairement deux commandes distinctes :
    un bouton unique aurait effacé des données sans le dire clairement. */
-function FeuillePersonne({ sid, students, present, renfoActif, renfoTotalMs, onToggleRenfo, onPartir, onFaireRevenir, onSupprimer, onClose }) {
+function FeuillePersonne({ sid, students, present, renfoSuivi, renfoActif, renfoTotalMs, onToggleRenfo, onPartir, onFaireRevenir, onSupprimer, onClose }) {
   const st = students.find((s) => s.id === sid);
   if (!st) return null;
   return (
@@ -6571,7 +6593,7 @@ function FeuillePersonne({ sid, students, present, renfoActif, renfoTotalMs, onT
           <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
         </div>
         <div className="space-y-1.5">
-          {present && (
+          {present && (renfoSuivi || renfoActif) && (
             <button onClick={onToggleRenfo} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left" style={{ borderColor: BORDER }}>
               <Gift size={16} /> {renfoActif ? `Reprendre les cotations (${fmtClock(renfoTotalMs)} de renforcement)` : 'Mettre en renforcement'}
             </button>
