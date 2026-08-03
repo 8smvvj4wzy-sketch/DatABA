@@ -3,11 +3,11 @@ import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid } from 'recharts';
 import {
   Plus, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
-  Timer as TimerIcon, LayoutGrid, CheckCircle2, RotateCcw, Save,
+  Timer as TimerIcon, LayoutGrid, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
-  Menu, ChevronLeft, ChevronDown, Activity, Database,
+  ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
+  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -124,14 +124,23 @@ function isIndependentCode(guidances, code) {
 
 const TYPES = {
   trials: { label: 'Essai par essai', short: 'Essais', icon: ListChecks, color: '#7A6A9A' },
-  probe: { label: 'Probe (1 / 0)', short: 'Probe', icon: CheckCircle2, color: '#2E6E8E' },
-  occurrence: { label: 'Par occurrence', short: 'Occurrence', icon: Hash, color: '#0F8B6C' },
-  timer: { label: 'Timer (durée)', short: 'Timer', icon: TimerIcon, color: '#C36A2E' },
   interval: { label: 'Niveau par intervalle', short: 'Intervalle', icon: LayoutGrid, color: '#6B5178' },
   chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: '#2E8B7A' },
-  latency: { label: 'Latence', short: 'Latence', icon: Gauge, color: '#B07A2E' },
   balance: { label: 'Balance Program', short: 'Balance', icon: Route, color: '#A0567A' },
 };
+
+/* Couleur commune à tout ce qui mesure une durée : le chronomètre par essai
+   d'un objectif « essai par essai » et le chronomètre auxiliaire. */
+const COLOR_CHRONO = '#C36A2E';
+/* Couleur du compteur auxiliaire. */
+const COLOR_COMPTEUR = '#0F8B6C';
+
+/* Un objectif enregistré avant la refonte peut porter un type retiré. On ne le
+   ressuscite pas — on évite seulement qu'il fasse planter l'affichage. */
+const TYPE_INCONNU = { label: 'Mode retiré', short: '—', icon: HelpCircle, color: INK_SOFT };
+function typeMeta(type) {
+  return TYPES[type] || TYPE_INCONNU;
+}
 
 /* Ce que mesure réellement un relevé par intervalle : à préciser pour que les données soient comparables */
 const INTERVAL_MODES = [
@@ -239,9 +248,9 @@ const DEFAULT_INTERVAL_LEVELS = [
 const LEVEL_COLORS = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
 
 /* Types dont le score est un pourcentage : seuls ceux-là admettent un critère de maîtrise */
-const PERCENT_TYPES = ['trials', 'probe', 'interval', 'chaining', 'balance'];
+const PERCENT_TYPES = ['trials', 'interval', 'chaining', 'balance'];
 /* Types dont la cotation repose sur des niveaux de guidance */
-const USES_GUIDANCE = ['trials', 'chaining', 'probe'];
+const USES_GUIDANCE = ['trials', 'chaining'];
 const DEFAULT_MASTERY = { threshold: 80, sessions: 3, unit: 'sessions' };
 
 /* ==================== Sécurité : code PIN et sauvegarde chiffrée ====================
@@ -834,16 +843,40 @@ function fromLocalInput(value) {
   return isNaN(d) ? null : d.toISOString();
 }
 
+/* Compteur et chronomètre auxiliaires : une donnée à part de la cotation
+   elle-même, dans la même forme sur une entrée de séance et sur une fiche
+   crise/ABC. `valideA` distingue « pas encore mesuré » (null) de « mesuré à
+   zéro ». */
+function mesuresVides() {
+  return {
+    compteur: { total: 0, valideA: null },
+    chrono: { elapsedMs: 0, running: false, startedAt: null, valideA: null },
+  };
+}
+
+/* Cellules d'export d'une mesure auxiliaire : vides tant que rien n'a été
+   validé, jamais un zéro par défaut — la distinction compte pour Manager. */
+function mesuresExport(mesures) {
+  const compteur = mesures && mesures.compteur;
+  const chrono = mesures && mesures.chrono;
+  const dates = [compteur && compteur.valideA, chrono && chrono.valideA].filter(Boolean).sort();
+  return {
+    compteurTotal: compteur && compteur.valideA ? compteur.total : '',
+    chronoSecondes: chrono && chrono.valideA ? Math.round((chrono.elapsedMs || 0) / 1000) : '',
+    valideA: dates.length ? timeShort(dates[dates.length - 1]) : '',
+  };
+}
+
 function emptyEntry(obj) {
-  if (obj.type === 'trials') return { trials: obj.config.trialCount ? Array(obj.config.trialCount).fill(null) : [], running: false, startedAt: null, pendingMs: 0 };
-  if (obj.type === 'probe') return { value: null, guidance: null };
-  if (obj.type === 'occurrence') return { count: 0 };
-  if (obj.type === 'timer') return { elapsedMs: 0, running: false, startedAt: null };
-  if (obj.type === 'interval') return { marks: {}, segments: [] };
-  if (obj.type === 'chaining') return { steps: {} };
-  if (obj.type === 'latency') return { latencies: [], running: false, startedAt: null };
-  if (obj.type === 'balance') return { trials: [{ steps: {} }] };
-  return {};
+  const base = (() => {
+    if (obj.type === 'trials') return { trials: obj.config.trialCount ? Array(obj.config.trialCount).fill(null) : [], running: false, startedAt: null, pendingMs: 0 };
+    if (obj.type === 'interval') return { marks: {}, segments: [] };
+    if (obj.type === 'chaining') return { steps: {} };
+    if (obj.type === 'balance') return { trials: [{ steps: {} }] };
+    return null;
+  })();
+  if (!base) return {};
+  return { ...base, mesures: mesuresVides() };
 }
 
 /* Un essai est enregistré soit comme un simple code (format d'origine), soit
@@ -860,14 +893,34 @@ function trialMs(t) {
 function entryMatches(obj, entry) {
   if (!entry) return false;
   if (obj.type === 'trials') return Array.isArray(entry.trials);
-  if (obj.type === 'probe') return entry.value === 0 || entry.value === 1 || entry.value === null || 'guidance' in entry;
-  if (obj.type === 'occurrence') return typeof entry.count === 'number';
-  if (obj.type === 'timer') return typeof entry.elapsedMs === 'number';
   if (obj.type === 'interval') return !!entry.marks;
   if (obj.type === 'chaining') return !!entry.steps;
-  if (obj.type === 'latency') return Array.isArray(entry.latencies);
   if (obj.type === 'balance') return Array.isArray(entry.trials) || !!entry.steps;
   return false;
+}
+
+/* Fige les chronomètres encore en cours d'une cotation : celui des essais, à
+   plat sur l'entrée, et celui de la mesure auxiliaire, imbriqué dans
+   `mesures.chrono`. `cumulePending` n'est vrai que pour le renforcement, qui
+   décompte à part le temps figé pendant que les cotations sont suspendues. */
+function figerChronos(entry, stamp, cumulePending) {
+  if (!entry) return entry;
+  let next = entry;
+  if (entry.running && entry.startedAt) {
+    next = { ...next, running: false, elapsedMs: (entry.elapsedMs || 0) + (stamp - entry.startedAt), startedAt: null };
+    if (cumulePending) next.pendingMs = (entry.pendingMs || 0) + (stamp - entry.startedAt);
+  }
+  const chrono = entry.mesures && entry.mesures.chrono;
+  if (chrono && chrono.running && chrono.startedAt) {
+    next = {
+      ...next,
+      mesures: {
+        ...next.mesures,
+        chrono: { ...chrono, running: false, elapsedMs: (chrono.elapsedMs || 0) + (stamp - chrono.startedAt), startedAt: null },
+      },
+    };
+  }
+  return next;
 }
 
 /* Arrête les chronomètres encore en cours au moment de l'enregistrement */
@@ -877,10 +930,7 @@ function finalizeSession(session) {
   Object.entries(session.data || {}).forEach(([sid, objs]) => {
     data[sid] = {};
     Object.entries(objs).forEach(([oid, entry]) => {
-      data[sid][oid] =
-        entry && entry.running && entry.startedAt
-          ? { ...entry, running: false, elapsedMs: (entry.elapsedMs || 0) + (stamp - entry.startedAt), startedAt: null }
-          : entry;
+      data[sid][oid] = figerChronos(entry, stamp, false);
     });
   });
   const reinforcement = {};
@@ -1047,24 +1097,6 @@ function summarize(obj, entry, guidances) {
         .join(' '),
     };
   }
-  if (obj.type === 'probe') {
-    if (obj.config && obj.config.useGuidance) {
-      if (!entry.guidance) return { result: 'Non coté', detail: '' };
-      const g = guidanceByCode(gList, entry.guidance);
-      return { result: g ? `${g.label} (${g.code})` : entry.guidance, detail: entry.guidance };
-    }
-    return { result: entry.value === 1 ? 'Réussi (1)' : entry.value === 0 ? 'Échoué (0)' : 'Non coté', detail: '' };
-  }
-  if (obj.type === 'occurrence') {
-    return { result: `${entry.count} occurrence${entry.count !== 1 ? 's' : ''}`, detail: '' };
-  }
-  if (obj.type === 'timer') {
-    const base = entry.elapsedMs ? fmtDuration(entry.elapsedMs) : 'Non démarré';
-    const cible = obj.config && obj.config.timerMode === 'countdown' && obj.config.timerSeconds
-      ? ` / ${fmtDuration(obj.config.timerSeconds * 1000)}`
-      : '';
-    return { result: `${base}${cible}`, detail: `${Math.round((entry.elapsedMs || 0) / 1000)} s` };
-  }
   if (obj.type === 'interval') {
     const levels = obj.config.levels || [];
     const { totals, total } = intervalTotals(obj, entry);
@@ -1114,15 +1146,6 @@ function summarize(obj, entry, guidances) {
       detail: `${detail}${st.renforts.length ? ` — renforcé : ${st.renforts.join(', ')}` : ''}`,
     };
   }
-  if (obj.type === 'latency') {
-    const n = entry.latencies.length;
-    if (!n) return { result: 'Non coté', detail: '' };
-    const avg = entry.latencies.reduce((a, b) => a + b, 0) / n / 1000;
-    return {
-      result: `${n} mesure${n !== 1 ? 's' : ''} · moyenne ${avg.toFixed(1)} s`,
-      detail: entry.latencies.map((ms) => `${(ms / 1000).toFixed(1)} s`).join(' | '),
-    };
-  }
   return { result: '—', detail: '' };
 }
 
@@ -1134,14 +1157,6 @@ function objectiveScore(obj, entry, guidances) {
     const done = entry.trials.filter((t) => trialCode(t));
     if (!done.length) return null;
     return { value: Math.round((done.filter((t) => isIndependentCode(gList, trialCode(t))).length / done.length) * 100), percent: true, unit: '%' };
-  }
-  if (obj.type === 'probe') {
-    if (obj.config && obj.config.useGuidance) {
-      if (!entry.guidance) return null;
-      return { value: isIndependentCode(gList, entry.guidance) ? 100 : 0, percent: true, unit: '%' };
-    }
-    if (entry.value !== 0 && entry.value !== 1) return null;
-    return { value: entry.value * 100, percent: true, unit: '%' };
   }
   if (obj.type === 'interval') {
     const { totals, total } = intervalTotals(obj, entry);
@@ -1161,16 +1176,6 @@ function objectiveScore(obj, entry, guidances) {
     const st = balanceStats(obj, entry);
     if (!st.notes) return null;
     return { value: st.pct, percent: true, unit: '%' };
-  }
-  if (obj.type === 'latency') {
-    if (!entry.latencies.length) return null;
-    const avg = entry.latencies.reduce((a, b) => a + b, 0) / entry.latencies.length / 1000;
-    return { value: Math.round(avg * 10) / 10, percent: false, unit: 's' };
-  }
-  if (obj.type === 'occurrence') return { value: entry.count, percent: false, unit: 'occ.' };
-  if (obj.type === 'timer') {
-    if (!entry.elapsedMs) return null;
-    return { value: Math.round(entry.elapsedMs / 1000), percent: false, unit: 's' };
   }
   return null;
 }
@@ -1411,17 +1416,6 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
           });
         }
 
-        if (obj.type === 'timer' && (entry.elapsedMs || 0) > 0) {
-          const secondes = Math.round((entry.elapsedMs || 0) / 1000);
-          rows.push([...b, 'Timer', 1, '', `${secondes} s`, '', '', '', secondes]);
-        }
-
-        if (obj.type === 'latency') {
-          (entry.latencies || []).forEach((ms, i) => {
-            rows.push([...b, 'Latence', i + 1, '', `${(ms / 1000).toFixed(1)} s`, '', '', '', Math.round(ms / 1000)]);
-          });
-        }
-
         if (obj.type === 'interval') {
           const levels = obj.config.levels || [];
           Object.entries(entry.marks || {}).forEach(([n, lid]) => {
@@ -1446,7 +1440,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Type de cotation', 'Résultat', 'Score', 'Détail']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Type de cotation', 'Résultat', 'Score', 'Détail', 'Comptage', 'Chrono (s)', 'Mesures validées à']];
   sessions.forEach((s) => {
     const d = new Date(s.date);
     (s.studentIds || []).forEach((sid) => {
@@ -1466,6 +1460,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
             fullDetail = `${detail}${detail ? ' — ' : ''}CRISE sur ${set.size > 1 ? 'les intervalles' : "l'intervalle"} ${list}`;
           }
         }
+        const mesures = mesuresExport(entry && entry.mesures);
         rows.push([
           d.toLocaleDateString('fr-FR'),
           timeShort(s.date),
@@ -1474,10 +1469,13 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
           studentName(sid),
           obj.name,
           obj.activeTargetName || '—',
-          TYPES[obj.type].label,
+          typeMeta(obj.type).label,
           result,
           score ? score.value : '',
           fullDetail,
+          mesures.compteurTotal,
+          mesures.chronoSecondes,
+          mesures.valideA,
         ]);
       });
     });
@@ -1485,7 +1483,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }];
+  ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }, { wch: 9 }, { wch: 10 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Cotations');
 
   const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter);
@@ -1494,11 +1492,12 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
-  const crisisRows = [['Type', 'Chaîne', 'Rang', 'Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Intensité', 'Antécédents', 'Enchaînement des comportements', 'Premier comportement', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire']];
+  const crisisRows = [['Type', 'Chaîne', 'Rang', 'Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Intensité', 'Antécédents', 'Enchaînement des comportements', 'Premier comportement', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire', 'Comptage annexe', 'Chrono annexe (s)', 'Mesures validées à']];
   crises.forEach((c) => {
     if (studentFilter && c.studentId && !studentFilter.includes(c.studentId)) return;
     const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
     const f = c.fonction ? CRISIS_FUNCTIONS.find((x) => x.k === c.fonction) : null;
+    const mesures = mesuresExport(c.mesures);
     crisisRows.push([
       c.kind === 'abc' ? 'Observation' : 'Crise',
       c.chainId ? c.chainId.slice(0, 6) : '',
@@ -1521,10 +1520,13 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
       c.comportement || '',
       c.consequence || '',
       c.commentaire || '',
+      mesures.compteurTotal,
+      mesures.chronoSecondes,
+      mesures.valideA,
     ]);
   });
   const ws2 = XLSX.utils.aoa_to_sheet(crisisRows);
-  ws2['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 6 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 34 }, { wch: 44 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
+  ws2['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 6 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 34 }, { wch: 44 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 9 }, { wch: 10 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws2, 'Crises et observations');
 
   const noteRows = [['Date', 'Heure', 'Atelier', 'Personne accompagnée', 'Note']];
@@ -2890,6 +2892,7 @@ function AbaApp() {
     antecedentTags: [],
     comportementTags: [],
     consequenceTags: [],
+    mesures: mesuresVides(),
   });
 
   /* Une nouvelle fiche s'ajoute aux autres : celles déjà ouvertes continuent
@@ -2924,7 +2927,7 @@ function AbaApp() {
     const { isNew, ...rest } = c;
     const chainId = c.chainId || uid();
     const rang = c.chainIndex || 1;
-    const maillon = { ...rest, chainId, chainIndex: rang };
+    const maillon = figerChronos({ ...rest, chainId, chainIndex: rang }, Date.now());
 
     if (isNew) {
       const duree = rest.kind === 'abc' ? 0 : Date.now() - c.startedAt;
@@ -2955,7 +2958,8 @@ function AbaApp() {
   };
 
   const saveCrisis = (c) => {
-    const { isNew, ...rest } = c;
+    const { isNew, ...restBrut } = c;
+    const rest = figerChronos(restBrut, Date.now());
     if (isNew) {
       const duree = rest.kind === 'abc' ? 0 : Date.now() - c.startedAt;
       setCrises((list) => [{ ...rest, durationMs: duree }, ...list]);
@@ -3655,7 +3659,7 @@ function PanneauModeles({ templates, onRemove }) {
         ) : (
           <div className="space-y-1.5">
             {templates.map((t) => {
-              const meta = TYPES[t.type];
+              const meta = typeMeta(t.type);
               const Icon = meta.icon;
               return (
                 <div key={t.id} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
@@ -4071,7 +4075,7 @@ function PanneauPersonnes({
                 </div>
                 <div className="space-y-1.5 mb-3">
                   {s.objectives.map((o) => {
-                    const meta = TYPES[o.type];
+                    const meta = typeMeta(o.type);
                     const Icon = meta.icon;
                     if (editingObj === o.id) {
                       return (
@@ -4120,9 +4124,6 @@ function PanneauPersonnes({
                                   : ' · chronométré')}
                                 {o.type === 'interval' && ` · toutes les ${fmtDuration(intervalStepSec(o) * 1000)} · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
                                 {(o.type === 'chaining' || o.type === 'balance') && ` · ${(o.config.steps || []).length} étapes`}
-                                {o.type === 'timer' && (o.config.timerMode === 'countdown' && o.config.timerSeconds
-                                  ? ` · ${fmtDuration(o.config.timerSeconds * 1000)}`
-                                  : ' · chronomètre')}
                                 {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions} ${o.config.mastery.unit === 'days' ? 'jours' : 'séances'}`}
                                 {objectiveTargets(o).length > 0 && ` · ${(o.masteredTargetIds || []).length}/${objectiveTargets(o).length} cibles acquises`}
                               </div>
@@ -4214,7 +4215,7 @@ function ObjectiveEditor({ guidances, templates, onAdd }) {
               </div>
               <div className="space-y-1.5">
                 {templates.map((t) => {
-                  const meta = TYPES[t.type];
+                  const meta = typeMeta(t.type);
                   const Icon = meta.icon;
                   return (
                     <button key={t.id}
@@ -4291,7 +4292,6 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const [rLabel, setRLabel] = useState('');
   const [rColor, setRColor] = useState(GUIDANCE_PALETTE[0]);
   const [rIndep, setRIndep] = useState(false);
-  const [useGuidance, setUseGuidance] = useState(!!initConfig.useGuidance);
   const [phaseName, setPhaseName] = useState(
     init.phaseHistory && init.phaseHistory.length ? init.phaseHistory[init.phaseHistory.length - 1].name : DEFAULT_PHASES[0]
   );
@@ -4299,6 +4299,8 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const [timerMode, setTimerMode] = useState(initConfig.timerMode || 'chrono');
   const [timerMin, setTimerMin] = useState(initConfig.timerSeconds ? Math.floor(initConfig.timerSeconds / 60) : 5);
   const [timerSec, setTimerSec] = useState(initConfig.timerSeconds ? initConfig.timerSeconds % 60 : 0);
+  const [avecCompteur, setAvecCompteur] = useState(!!initConfig.avecCompteur);
+  const [avecChrono, setAvecChrono] = useState(!!initConfig.avecChrono);
   const [levels, setLevels] = useState(initConfig.levels || DEFAULT_INTERVAL_LEVELS);
   const [newLevel, setNewLevel] = useState('');
   const [targetLevelId, setTargetLevelId] = useState(
@@ -4331,15 +4333,8 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
     }
     if (type === 'chaining' || type === 'balance') config.steps = steps;
     if (type === 'balance' && balanceSet.length) config.balanceOutcomes = balanceSet;
-    if (type === 'probe') config.useGuidance = useGuidance;
-    if (type === 'timer') {
-      config.timerMode = timerMode;
-      if (timerMode === 'countdown') {
-        const m = Number(timerMin) || 0;
-        const sec = Number(timerSec) || 0;
-        config.timerSeconds = Math.min(3600, Math.max(5, m * 60 + sec));
-      }
-    }
+    if (avecCompteur) config.avecCompteur = true;
+    if (avecChrono) config.avecChrono = true;
     if (USES_GUIDANCE.includes(type) && guidanceSet.length) config.guidanceSet = guidanceSet;
     if (PERCENT_TYPES.includes(type)) {
       config.mastery = {
@@ -4567,64 +4562,6 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
         </div>
       )}
 
-      {type === 'timer' && (
-        <div className="space-y-3">
-          <div>
-            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Fonctionnement</div>
-            <div className="flex gap-1.5">
-              {[{ k: 'chrono', l: 'Chronomètre' }, { k: 'countdown', l: 'Temps fixé' }].map((m) => (
-                <button key={m.k} onClick={() => setTimerMode(m.k)} className="flex-1 rounded-lg py-2.5 text-sm border"
-                  style={{ borderColor: timerMode === m.k ? INK : BORDER, backgroundColor: timerMode === m.k ? INK : 'transparent', color: timerMode === m.k ? '#fff' : INK_SOFT }}>
-                  {m.l}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {timerMode === 'countdown' && (
-            <div>
-              <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Durée, 60 minutes au maximum</div>
-              <div className="flex gap-1.5 flex-wrap mb-2">
-                {[30, 60, 90, 120, 300, 600].map((total) => {
-                  const m = Math.floor(total / 60);
-                  const sec = total % 60;
-                  const on = Number(timerMin) * 60 + Number(timerSec) === total;
-                  return (
-                    <button key={total} onClick={() => { setTimerMin(m); setTimerSec(sec); }}
-                      className="rounded-lg px-3 py-2 text-sm border"
-                      style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT, fontFamily: F_MONO }}>
-                      {m ? `${m} min` : ''}{sec ? `${m ? ' ' : ''}${sec} s` : ''}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="flex gap-2 items-center">
-                <input
-                  type="number" inputMode="numeric" min="0" max="60" value={timerMin}
-                  onChange={(e) => setTimerMin(e.target.value === '' ? '' : Number(e.target.value))}
-                  onBlur={() => setTimerMin((v) => (v === '' || v === null ? 0 : Math.min(60, Math.max(0, Number(v)))))}
-                  className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
-                  style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
-                />
-                <span className="text-xs" style={{ color: INK_SOFT }}>min</span>
-                <input
-                  type="number" inputMode="numeric" min="0" max="59" value={timerSec}
-                  onChange={(e) => setTimerSec(e.target.value === '' ? '' : Number(e.target.value))}
-                  onBlur={() => setTimerSec((v) => (v === '' || v === null ? 0 : Math.min(59, Math.max(0, Number(v)))))}
-                  className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
-                  style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
-                />
-                <span className="text-xs" style={{ color: INK_SOFT }}>s</span>
-                <span className="text-xs ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
-                  = {fmtDuration(Math.min(3600, Math.max(5, (Number(timerMin) || 0) * 60 + (Number(timerSec) || 0))) * 1000)}
-                </span>
-              </div>
-            </div>
-          )}
-
-        </div>
-      )}
-
       {(type === 'chaining' || type === 'balance') && (
         <div>
           <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Étapes de la séquence, dans l'ordre</div>
@@ -4657,17 +4594,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
             <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Réponses possibles</span>
           </div>
 
-          {type === 'probe' && (
-            <button onClick={() => setUseGuidance((v) => !v)} className="flex items-center gap-1.5 text-sm my-2">
-              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: useGuidance ? INK : BORDER }}>
-                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: useGuidance ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-              </span>
-              Coter par guidance plutôt qu'en 1 / 0
-            </button>
-          )}
-
-          {(type !== 'probe' || useGuidance) && (
-            <>
+          <>
               <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
                 Appui long sur une réponse pour la déplacer. L'étoile désigne ce qui compte
                 comme réussite autonome, pour cette personne et cet objectif précis.
@@ -4768,7 +4695,6 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
                 </Btn>
               )}
             </>
-          )}
         </div>
       )}
 
@@ -4932,6 +4858,26 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
           </div>
         </div>
       )}
+
+      <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
+        <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
+          Mesures annexes — à part de la cotation, indépendantes l'une de l'autre
+        </div>
+        <div className="space-y-2">
+          <button onClick={() => setAvecCompteur((v) => !v)} className="flex items-center gap-1.5 text-sm">
+            <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecCompteur ? INK : BORDER }}>
+              <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecCompteur ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+            </span>
+            Compteur
+          </button>
+          <button onClick={() => setAvecChrono((v) => !v)} className="flex items-center gap-1.5 text-sm">
+            <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecChrono ? INK : BORDER }}>
+              <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecChrono ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+            </span>
+            Chronomètre
+          </button>
+        </div>
+      </div>
 
       <div className="flex gap-2">
         <Btn onClick={submit} disabled={!name.trim() || (type === 'interval' && levels.length === 0) || ((type === 'chaining' || type === 'balance') && steps.length === 0)} className="flex-1 text-sm">
@@ -5271,7 +5217,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                 </div>
                 <div className="space-y-1.5">
                   {lignesNeuves.map((l) => {
-                    const meta = TYPES[l.type];
+                    const meta = typeMeta(l.type);
                     const Icon = meta.icon;
                     return (
                       <div key={l.cle} className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm" style={{ backgroundColor: PAPER }}>
@@ -5306,7 +5252,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
               <div className="space-y-1.5">
                 {visibleObjectives(st).map((o) => {
                   const on = (selected[sid] || []).includes(o.id);
-                  const meta = TYPES[o.type];
+                  const meta = typeMeta(o.type);
                   const Icon = meta.icon;
                   const favAtelier = atelierFavorites.includes(o.id);
                   return (
@@ -5565,10 +5511,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
       Object.entries(s0.data || {}).forEach(([sid, objs]) => {
         data[sid] = {};
         Object.entries(objs).forEach(([oid, e]) => {
-          data[sid][oid] =
-            e && e.running && e.startedAt
-              ? { ...e, running: false, elapsedMs: (e.elapsedMs || 0) + (stamp - e.startedAt), startedAt: null }
-              : e;
+          data[sid][oid] = figerChronos(e, stamp, false);
         });
       });
       return { ...s0, data, pausedAt: stamp };
@@ -5598,9 +5541,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
         const objs = s0.data[sid] || {};
         const maj = {};
         Object.entries(objs).forEach(([oid, e]) => {
-          maj[oid] = e && e.running && e.startedAt
-            ? { ...e, running: false, elapsedMs: (e.elapsedMs || 0) + (stamp - e.startedAt), pendingMs: (e.pendingMs || 0) + (stamp - e.startedAt), startedAt: null }
-            : e;
+          maj[oid] = figerChronos(e, stamp, true);
         });
         data = { ...s0.data, [sid]: maj };
       }
@@ -6014,7 +5955,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
   if (!obj) return null;
   const crisisSet =
     obj.type === 'interval' ? crisisIntervals(session, crises, intervalStepSec(obj) / 60, studentId) : null;
-  const meta = TYPES[obj.type];
+  const meta = typeMeta(obj.type);
   const Icon = meta.icon;
 
   if (hidden) {
@@ -6082,20 +6023,31 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
       )}
       <div className="mt-3" style={paused && !forcer ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
         {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} now={now} onChange={onChange} />}
-        {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
-        {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
-        {obj.type === 'timer' && <TimerWidget obj={obj} entry={entry} now={now} onChange={onChange} />}
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
         {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
-        {obj.type === 'latency' && <LatencyWidget entry={entry} now={now} onChange={onChange} />}
         {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} />}
+        {!TYPES[obj.type] && (
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            Ce mode de cotation a été retiré. L'objectif est à recréer dans un mode disponible.
+          </div>
+        )}
+        {(obj.config.avecCompteur || obj.config.avecChrono) && (
+          <MesuresAuxiliaires
+            mesures={entry && entry.mesures}
+            avecCompteur={!!obj.config.avecCompteur}
+            avecChrono={!!obj.config.avecChrono}
+            now={now}
+            couleur={meta.color}
+            onChange={(mesures) => onChange({ mesures })}
+          />
+        )}
       </div>
     </Card>
   );
 }
 
 function ObjectiveHeader({ obj, entry, guidances }) {
-  const meta = TYPES[obj.type];
+  const meta = typeMeta(obj.type);
   const Icon = meta.icon;
   const { result } = summarize(obj, entry, guidances);
   const cible = obj.activeTargetName;
@@ -6113,6 +6065,119 @@ function ObjectiveHeader({ obj, entry, guidances }) {
           <div className="text-xs mt-0.5" style={{ color: INK_SOFT }}>{result}</div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* --- Compteur et chronomètre auxiliaires ---
+   Une donnée à part de la cotation : disponible sur les quatre modes de
+   cotation (si l'option est paramétrée sur l'objectif) et, sans réglage,
+   sur les fiches crise et ABC. Composant unique pour les deux emplacements
+   — CLAUDE.md interdit les implémentations parallèles. */
+function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, now, couleur, onChange }) {
+  const [ouvert, setOuvert] = useState(null); // null | 'compteur' | 'chrono'
+  const m = mesures || mesuresVides();
+  const compteur = m.compteur || mesuresVides().compteur;
+  const chrono = m.chrono || mesuresVides().chrono;
+
+  function ecrire(patch) {
+    onChange({ ...m, ...patch });
+  }
+
+  function ajusterCompteur(delta) {
+    ecrire({ compteur: { total: Math.max(0, compteur.total + delta), valideA: null } });
+  }
+  function validerCompteur() {
+    ecrire({ compteur: { ...compteur, valideA: new Date().toISOString() } });
+    setOuvert(null);
+  }
+
+  function basculerChrono() {
+    if (chrono.running) {
+      ecrire({ chrono: { ...chrono, running: false, elapsedMs: (chrono.elapsedMs || 0) + (Date.now() - chrono.startedAt), startedAt: null, valideA: null } });
+    } else {
+      ecrire({ chrono: { ...chrono, running: true, startedAt: Date.now(), valideA: null } });
+    }
+  }
+  function validerChrono() {
+    const fige = chrono.running
+      ? { ...chrono, running: false, elapsedMs: (chrono.elapsedMs || 0) + (Date.now() - chrono.startedAt), startedAt: null }
+      : chrono;
+    ecrire({ chrono: { ...fige, valideA: new Date().toISOString() } });
+    setOuvert(null);
+  }
+  const chronoAffiche = chrono.running ? (chrono.elapsedMs || 0) + (now - chrono.startedAt) : (chrono.elapsedMs || 0);
+
+  if (!avecCompteur && !avecChrono) return null;
+
+  return (
+    <div className="mt-2.5">
+      <div className="flex items-center gap-3">
+        {avecCompteur && (
+          <button
+            onClick={() => setOuvert((v) => (v === 'compteur' ? null : 'compteur'))}
+            className="flex items-center gap-1 text-xs"
+            style={{ color: INK_SOFT }}
+            title="Compteur auxiliaire"
+          >
+            <Hash size={13} />
+            {compteur.total > 0 && <span style={{ fontFamily: F_MONO }}>{compteur.total}</span>}
+            {compteur.valideA && <Check size={11} style={{ color: COLOR_COMPTEUR }} />}
+          </button>
+        )}
+        {avecChrono && (
+          <button
+            onClick={() => setOuvert((v) => (v === 'chrono' ? null : 'chrono'))}
+            className="flex items-center gap-1 text-xs"
+            style={{ color: INK_SOFT }}
+            title="Chronomètre auxiliaire"
+          >
+            <TimerIcon size={13} />
+            {chronoAffiche > 0 && <span style={{ fontFamily: F_MONO }}>{fmtClock(chronoAffiche)}</span>}
+            {chrono.valideA && <Check size={11} style={{ color: COLOR_CHRONO }} />}
+          </button>
+        )}
+      </div>
+
+      {ouvert === 'compteur' && (
+        <div className="mt-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+          <div className="flex items-center gap-3">
+            <button onClick={() => ajusterCompteur(-1)} disabled={compteur.total === 0}
+              className="w-10 h-10 rounded-lg border flex items-center justify-center text-lg disabled:opacity-30"
+              style={{ borderColor: BORDER, color: INK_SOFT }}>−</button>
+            <button onClick={() => ajusterCompteur(1)}
+              className="flex-1 rounded-lg py-3 text-white active:scale-95 transition-transform"
+              style={{ backgroundColor: COLOR_COMPTEUR }}>
+              <span className="text-xl font-semibold" style={{ fontFamily: F_MONO }}>{compteur.total}</span>
+              <span className="text-xs ml-2 opacity-90">+1</span>
+            </button>
+          </div>
+          <button onClick={validerCompteur} className="mt-2 w-full text-xs flex items-center justify-center gap-1.5 py-1.5" style={{ color: INK_SOFT }}>
+            <Check size={12} /> Enregistrer ce comptage
+          </button>
+        </div>
+      )}
+
+      {ouvert === 'chrono' && (
+        <div className="mt-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+          <div className="flex items-center gap-3">
+            <span className="text-xl font-semibold tabular-nums" style={{ fontFamily: F_MONO, color: INK }}>{fmtClock(chronoAffiche)}</span>
+            <button onClick={basculerChrono}
+              className="ml-auto rounded-lg px-4 py-2.5 text-white flex items-center gap-1.5 active:scale-95 transition-transform"
+              style={{ backgroundColor: chrono.running ? '#A8402F' : COLOR_CHRONO, fontFamily: F_DISPLAY }}>
+              {chrono.running ? <><Pause size={15} /> Arrêter</> : <><Play size={15} /> Démarrer</>}
+            </button>
+            {(chronoAffiche > 0 || chrono.running) && (
+              <button onClick={() => ecrire({ chrono: { elapsedMs: 0, running: false, startedAt: null, valideA: null } })} style={{ color: INK_SOFT }}>
+                <RotateCcw size={15} />
+              </button>
+            )}
+          </div>
+          <button onClick={validerChrono} className="mt-2 w-full text-xs flex items-center justify-center gap-1.5 py-1.5" style={{ color: INK_SOFT }}>
+            <Check size={12} /> Enregistrer cette durée
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -6200,7 +6265,7 @@ function TrialsWidget({ obj, entry, guidances, now, onChange }) {
     <div>
       {withTimer && (
         <div className="flex items-center gap-2 mb-2.5 rounded-xl px-3 py-2" style={{ backgroundColor: PAPER }}>
-          <span className="text-xl font-semibold tabular-nums" style={{ fontFamily: F_MONO, color: ecoule ? TYPES.timer.color : INK }}>
+          <span className="text-xl font-semibold tabular-nums" style={{ fontFamily: F_MONO, color: ecoule ? COLOR_CHRONO : INK }}>
             {fmtClock(countdown ? Math.max(0, targetMs - chrono) : chrono)}
           </span>
           <span className="text-xs" style={{ color: INK_SOFT }}>
@@ -6209,7 +6274,7 @@ function TrialsWidget({ obj, entry, guidances, now, onChange }) {
           <button
             onClick={toggleChrono}
             className="ml-auto rounded-lg px-3 py-2 text-white text-sm flex items-center gap-1.5 active:scale-95 transition-transform"
-            style={{ backgroundColor: enCours ? '#A8402F' : TYPES.timer.color, fontFamily: F_DISPLAY }}
+            style={{ backgroundColor: enCours ? '#A8402F' : COLOR_CHRONO, fontFamily: F_DISPLAY }}
           >
             {enCours ? <><Pause size={15} /> Arrêter</> : <><Play size={15} /> {chrono > 0 ? 'Reprendre' : 'Consigne'}</>}
           </button>
@@ -6276,138 +6341,6 @@ function TrialsWidget({ obj, entry, guidances, now, onChange }) {
           </button>
         )}
       </div>
-    </div>
-  );
-}
-
-function ProbeWidget({ obj, entry, guidances, onChange }) {
-  if (obj && obj.config && obj.config.useGuidance) {
-    const list = objectiveGuidances(obj, guidances);
-    return (
-      <div className="flex flex-wrap gap-1.5">
-        {list.map((g) => {
-          const on = entry.guidance === g.code;
-          return (
-            <button
-              key={g.code}
-              onClick={() => onChange({ guidance: on ? null : g.code, value: on ? null : (isIndependentCode(list, g.code) ? 1 : 0) })}
-              className="flex-1 min-w-[72px] rounded-xl py-3 border-2 active:scale-95 transition-transform"
-              style={{ borderColor: g.color, backgroundColor: on ? g.color : 'transparent', color: on ? '#fff' : g.color }}
-            >
-              <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
-              <div className="text-[10px] opacity-90 leading-tight break-words" style={{ overflowWrap: 'anywhere' }}>{g.label}</div>
-            </button>
-          );
-        })}
-      </div>
-    );
-  }
-  return (
-    <div className="flex gap-2">
-      <button onClick={() => onChange({ value: entry.value === 1 ? null : 1 })}
-        className="flex-1 rounded-xl py-4 font-semibold border-2 active:scale-95 transition-transform"
-        style={{ fontFamily: F_DISPLAY, borderColor: '#0F8B6C', backgroundColor: entry.value === 1 ? '#0F8B6C' : 'transparent', color: entry.value === 1 ? '#fff' : '#0F8B6C' }}>
-        1 · Réussi
-      </button>
-      <button onClick={() => onChange({ value: entry.value === 0 ? null : 0 })}
-        className="flex-1 rounded-xl py-4 font-semibold border-2 active:scale-95 transition-transform"
-        style={{ fontFamily: F_DISPLAY, borderColor: '#A8402F', backgroundColor: entry.value === 0 ? '#A8402F' : 'transparent', color: entry.value === 0 ? '#fff' : '#A8402F' }}>
-        0 · Échoué
-      </button>
-    </div>
-  );
-}
-
-function OccurrenceWidget({ entry, onChange }) {
-  return (
-    <div className="flex items-center gap-3">
-      <button onClick={() => onChange({ count: Math.max(0, entry.count - 1) })} disabled={entry.count === 0}
-        className="w-12 h-12 rounded-xl border flex items-center justify-center text-xl disabled:opacity-30"
-        style={{ borderColor: BORDER, color: INK_SOFT }}>−</button>
-      <button onClick={() => onChange({ count: entry.count + 1 })}
-        className="flex-1 rounded-xl py-4 text-white active:scale-95 transition-transform"
-        style={{ backgroundColor: TYPES.occurrence.color }}>
-        <span className="text-2xl font-semibold" style={{ fontFamily: F_MONO }}>{entry.count}</span>
-        <span className="text-sm ml-2 opacity-90">+1</span>
-      </button>
-    </div>
-  );
-}
-
-function TimerWidget({ obj, entry, now, onChange }) {
-  const cfg = (obj && obj.config) || {};
-  const countdown = cfg.timerMode === 'countdown' && cfg.timerSeconds > 0;
-  const targetMs = (cfg.timerSeconds || 0) * 1000;
-  const raw = entry.running ? (entry.elapsedMs || 0) + (now - entry.startedAt) : (entry.elapsedMs || 0);
-  const fired = useRef(false);
-
-  /* Fin du compte à rebours : on arrête le chronomètre et on signale,
-     comme pour un changement d'intervalle. */
-  useEffect(() => {
-    if (!countdown || !entry.running || fired.current) return;
-    if (raw >= targetMs) {
-      fired.current = true;
-      alertInterval({ soundOn: true, vibrateOn: true });
-      onChange({ running: false, elapsedMs: targetMs, startedAt: null });
-    }
-  });
-  useEffect(() => {
-    if (!entry.running) fired.current = false;
-  }, [entry.running]);
-
-  const finished = countdown && raw >= targetMs;
-  const display = countdown ? Math.max(0, targetMs - raw) : raw;
-
-  function toggle() {
-    if (entry.running) {
-      onChange({ running: false, elapsedMs: (entry.elapsedMs || 0) + (Date.now() - entry.startedAt), startedAt: null });
-      return;
-    }
-    // Relancer après la fin d'un compte à rebours repart de zéro
-    if (countdown && (entry.elapsedMs || 0) >= targetMs) {
-      fired.current = false;
-      onChange({ running: true, startedAt: Date.now(), elapsedMs: 0 });
-      return;
-    }
-    onChange({ running: true, startedAt: Date.now() });
-  }
-
-  return (
-    <div>
-      <div className="flex items-center gap-3">
-        <div>
-          <div className="text-3xl font-semibold tabular-nums leading-none" style={{ fontFamily: F_MONO, color: finished ? TYPES.timer.color : INK }}>
-            {fmtClock(display)}
-          </div>
-          {countdown && (
-            <div className="text-xs mt-1" style={{ color: INK_SOFT }}>
-              {finished ? 'Temps écoulé' : `sur ${fmtDuration(targetMs)}`}
-            </div>
-          )}
-        </div>
-        <button onClick={toggle}
-          className="ml-auto rounded-xl px-5 py-3 text-white flex items-center gap-2 active:scale-95 transition-transform"
-          style={{ backgroundColor: entry.running ? '#A8402F' : TYPES.timer.color, fontFamily: F_DISPLAY }}>
-          {entry.running ? <><Pause size={17} /> Arrêter</> : <><Play size={17} /> {finished ? 'Relancer' : 'Démarrer'}</>}
-        </button>
-        {((entry.elapsedMs || 0) > 0 || entry.running) && (
-          <button onClick={() => { fired.current = false; onChange({ running: false, elapsedMs: 0, startedAt: null }); }} className="p-2" style={{ color: INK_SOFT }}>
-            <RotateCcw size={16} />
-          </button>
-        )}
-      </div>
-
-      {countdown && (
-        <div className="h-1.5 rounded-full mt-2.5 overflow-hidden" style={{ backgroundColor: PAPER }}>
-          <div style={{
-            width: `${Math.min(100, (raw / targetMs) * 100)}%`,
-            height: '100%',
-            backgroundColor: TYPES.timer.color,
-            transition: 'width 1s linear',
-          }} />
-        </div>
-      )}
-
     </div>
   );
 }
@@ -6772,51 +6705,6 @@ function BalanceWidget({ obj, entry, onChange }) {
   );
 }
 
-function LatencyWidget({ entry, now, onChange }) {
-  const running = entry.running;
-  const live = running ? now - entry.startedAt : 0;
-
-  function toggle() {
-    if (running) onChange({ running: false, startedAt: null, latencies: [...entry.latencies, Date.now() - entry.startedAt] });
-    else onChange({ running: true, startedAt: Date.now() });
-  }
-
-  return (
-    <div>
-      <button onClick={toggle}
-        className="w-full rounded-xl py-4 text-white flex items-center justify-center gap-2 active:scale-95 transition-transform"
-        style={{ backgroundColor: running ? '#A8402F' : TYPES.latency.color, fontFamily: F_DISPLAY }}>
-        {running ? (
-          <><Square size={17} /> Réponse — <span style={{ fontFamily: F_MONO }}>{(live / 1000).toFixed(1)} s</span></>
-        ) : (
-          <><Play size={17} /> Consigne donnée</>
-        )}
-      </button>
-
-      {entry.latencies.length > 0 && (
-        <div className="mt-2">
-          <div className="flex flex-wrap gap-1.5 mb-1">
-            {entry.latencies.map((ms, i) => (
-              <button key={i}
-                onClick={() => onChange({ latencies: entry.latencies.filter((_, j) => j !== i) })}
-                className="rounded-lg px-2.5 py-1.5 text-xs border"
-                style={{ fontFamily: F_MONO, borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-                title="Appuyer pour supprimer cette mesure">
-                {(ms / 1000).toFixed(1)} s
-              </button>
-            ))}
-          </div>
-          <div className="text-xs" style={{ color: INK_SOFT }}>
-            Moyenne <span style={{ fontFamily: F_MONO }}>
-              {(entry.latencies.reduce((a, b) => a + b, 0) / entry.latencies.length / 1000).toFixed(1)} s
-            </span> · appuyez sur une mesure pour la retirer
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ==================== Écran suivi : progression et maîtrise ==================== */
 function SuiviScreen({ students, sessions, guidances, onResetTracking, onOuvrirMenu }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
@@ -7000,7 +6888,7 @@ function ResumeObjectifs({ students, sessions, guidances }) {
 }
 
 function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
-  const meta = TYPES[obj.type];
+  const meta = typeMeta(obj.type);
   const Icon = meta.icon;
 
   /* Repères de phase : on place la ligne sur la première séance postérieure au
@@ -7415,11 +7303,15 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
   const estObservation = crisis.kind === 'abc';
   const [now, setNow] = useState(Date.now());
 
+  /* Le chrono de la fiche ne tourne que pour une crise en cours ; le chrono
+     auxiliaire, lui, peut tourner sur une observation ABC — il lui faut le
+     même tic. */
+  const chronoAuxTourne = !!(crisis.mesures && crisis.mesures.chrono && crisis.mesures.chrono.running);
   useEffect(() => {
-    if (!isNew || crisis.kind === 'abc') return undefined;
+    if (!chronoAuxTourne && (!isNew || crisis.kind === 'abc')) return undefined;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [isNew, crisis.kind]);
+  }, [isNew, crisis.kind, chronoAuxTourne]);
 
   const elapsed = isNew ? now - crisis.startedAt : crisis.durationMs || 0;
   const set = (patch) => setCrisis((c) => ({ ...c, ...patch }));
@@ -7511,6 +7403,20 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
             </div>
           </div>
         )}
+
+        <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
+          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
+            Mesures annexes — un comptage et une durée, indépendants de la grille ABC
+          </div>
+          <MesuresAuxiliaires
+            mesures={crisis.mesures}
+            avecCompteur
+            avecChrono
+            now={now}
+            couleur={estObservation ? '#B07A2E' : CRISIS}
+            onChange={(mesures) => set({ mesures })}
+          />
+        </div>
 
         <div>
           <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Personne concernée</div>
