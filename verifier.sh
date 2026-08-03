@@ -134,12 +134,44 @@ else
   echo "  ✓ hooks appelés inconditionnellement"
 fi
 
+# ── 2 ter. Séance finalisée avant d'être écrite ────────────────────────
+# Une séance écrite dans la liste persistée sans être passée par
+# finalizeSession garde ses chronomètres en cours au moment de
+# l'enregistrement — plus rien ne les arrête ensuite. Le chaînage d'atelier a
+# donné à onFinish() un deuxième site d'appel ; ce contrôle vaut pour
+# chacun, présent ou futur.
+echo
+echo "── 2 ter. Séance finalisée avant d'être écrite ──"
+FAUTIFS=""
+while IFS=: read -r num ligne; do
+  echo "$ligne" | grep -q "finalizeSession(" && continue
+  # Seule exception tolérée : l'argument « close » produit par chainerAtelier,
+  # qui finalise en interne — vérifié séparément ici plutôt que supposé.
+  if echo "$ligne" | grep -qE '\bonFinish\(close\b' \
+    && awk '/^function chainerAtelier\(/,/^}/' src/App.jsx | grep -q "finalizeSession("; then
+    continue
+  fi
+  FAUTIFS="${FAUTIFS}      ligne ${num} : ${ligne}
+"
+done < <(grep -n "onFinish(" src/App.jsx)
+if [ -n "$FAUTIFS" ]; then
+  echo "  ✗ séance écrite sans passer par finalizeSession :"
+  echo -n "$FAUTIFS"
+  ECHECS=$((ECHECS + 1))
+else
+  echo "  ✓ toute séance écrite est finalisée"
+fi
+
 # ── 3. Tests ───────────────────────────────────────────────────────────
 echo
 echo "── 3. Tests ──"
-if [ -d tests ] && ls tests/*.mjs >/dev/null 2>&1; then
+DOSSIER_TESTS=""
+for d in tests test; do
+  if [ -d "$d" ] && ls "$d"/*.mjs >/dev/null 2>&1; then DOSSIER_TESTS="$d"; break; fi
+done
+if [ -n "$DOSSIER_TESTS" ]; then
   N_OK=0; N_KO=0
-  for t in tests/*.mjs; do
+  for t in "$DOSSIER_TESTS"/*.mjs; do
     if SORTIE=$(node "$t" 2>&1); then
       N_OK=$((N_OK + 1))
     else
@@ -151,7 +183,11 @@ if [ -d tests ] && ls tests/*.mjs >/dev/null 2>&1; then
   echo "  $N_OK suite(s) au vert, $N_KO en échec"
   [ "$N_KO" -gt 0 ] && ECHECS=$((ECHECS + 1))
 else
-  echo "  ⚠ aucun test trouvé dans tests/"
+  # Aucun test trouvé : un vérificateur qui reste vert sans jamais exécuter de
+  # test ne vérifie rien. C'est ce qui a laissé passer l'oubli du dossier
+  # tests/ (pluriel) pendant que le dépôt écrivait test/ (singulier).
+  echo "  ✗ aucun test trouvé dans tests/ ni test/"
+  ECHECS=$((ECHECS + 1))
 fi
 
 echo

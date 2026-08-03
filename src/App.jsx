@@ -3,11 +3,11 @@ import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid } from 'recharts';
 import {
   Plus, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
-  Timer as TimerIcon, LayoutGrid, CheckCircle2, RotateCcw, Save,
+  Timer as TimerIcon, LayoutGrid, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
-  Menu, ChevronLeft, ChevronDown, Activity, Database,
+  ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
+  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -124,14 +124,23 @@ function isIndependentCode(guidances, code) {
 
 const TYPES = {
   trials: { label: 'Essai par essai', short: 'Essais', icon: ListChecks, color: '#7A6A9A' },
-  probe: { label: 'Probe (1 / 0)', short: 'Probe', icon: CheckCircle2, color: '#2E6E8E' },
-  occurrence: { label: 'Par occurrence', short: 'Occurrence', icon: Hash, color: '#0F8B6C' },
-  timer: { label: 'Timer (durée)', short: 'Timer', icon: TimerIcon, color: '#C36A2E' },
   interval: { label: 'Niveau par intervalle', short: 'Intervalle', icon: LayoutGrid, color: '#6B5178' },
   chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: '#2E8B7A' },
-  latency: { label: 'Latence', short: 'Latence', icon: Gauge, color: '#B07A2E' },
   balance: { label: 'Balance Program', short: 'Balance', icon: Route, color: '#A0567A' },
 };
+
+/* Couleur commune à tout ce qui mesure une durée : le chronomètre par essai
+   d'un objectif « essai par essai » et le chronomètre auxiliaire. */
+const COLOR_CHRONO = '#C36A2E';
+/* Couleur du compteur auxiliaire. */
+const COLOR_COMPTEUR = '#0F8B6C';
+
+/* Un objectif enregistré avant la refonte peut porter un type retiré. On ne le
+   ressuscite pas — on évite seulement qu'il fasse planter l'affichage. */
+const TYPE_INCONNU = { label: 'Mode retiré', short: '—', icon: HelpCircle, color: INK_SOFT };
+function typeMeta(type) {
+  return TYPES[type] || TYPE_INCONNU;
+}
 
 /* Ce que mesure réellement un relevé par intervalle : à préciser pour que les données soient comparables */
 const INTERVAL_MODES = [
@@ -239,9 +248,9 @@ const DEFAULT_INTERVAL_LEVELS = [
 const LEVEL_COLORS = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
 
 /* Types dont le score est un pourcentage : seuls ceux-là admettent un critère de maîtrise */
-const PERCENT_TYPES = ['trials', 'probe', 'interval', 'chaining', 'balance'];
+const PERCENT_TYPES = ['trials', 'interval', 'chaining', 'balance'];
 /* Types dont la cotation repose sur des niveaux de guidance */
-const USES_GUIDANCE = ['trials', 'chaining', 'probe'];
+const USES_GUIDANCE = ['trials', 'chaining'];
 const DEFAULT_MASTERY = { threshold: 80, sessions: 3, unit: 'sessions' };
 
 /* ==================== Sécurité : code PIN et sauvegarde chiffrée ====================
@@ -834,16 +843,40 @@ function fromLocalInput(value) {
   return isNaN(d) ? null : d.toISOString();
 }
 
+/* Compteur et chronomètre auxiliaires : une donnée à part de la cotation
+   elle-même, dans la même forme sur une entrée de séance et sur une fiche
+   crise/ABC. `valideA` distingue « pas encore mesuré » (null) de « mesuré à
+   zéro ». */
+function mesuresVides() {
+  return {
+    compteur: { total: 0, valideA: null },
+    chrono: { elapsedMs: 0, running: false, startedAt: null, valideA: null },
+  };
+}
+
+/* Cellules d'export d'une mesure auxiliaire : vides tant que rien n'a été
+   validé, jamais un zéro par défaut — la distinction compte pour Manager. */
+function mesuresExport(mesures) {
+  const compteur = mesures && mesures.compteur;
+  const chrono = mesures && mesures.chrono;
+  const dates = [compteur && compteur.valideA, chrono && chrono.valideA].filter(Boolean).sort();
+  return {
+    compteurTotal: compteur && compteur.valideA ? compteur.total : '',
+    chronoSecondes: chrono && chrono.valideA ? Math.round((chrono.elapsedMs || 0) / 1000) : '',
+    valideA: dates.length ? timeShort(dates[dates.length - 1]) : '',
+  };
+}
+
 function emptyEntry(obj) {
-  if (obj.type === 'trials') return { trials: obj.config.trialCount ? Array(obj.config.trialCount).fill(null) : [], running: false, startedAt: null, pendingMs: 0 };
-  if (obj.type === 'probe') return { value: null, guidance: null };
-  if (obj.type === 'occurrence') return { count: 0 };
-  if (obj.type === 'timer') return { elapsedMs: 0, running: false, startedAt: null };
-  if (obj.type === 'interval') return { marks: {}, segments: [] };
-  if (obj.type === 'chaining') return { steps: {} };
-  if (obj.type === 'latency') return { latencies: [], running: false, startedAt: null };
-  if (obj.type === 'balance') return { trials: [{ steps: {} }] };
-  return {};
+  const base = (() => {
+    if (obj.type === 'trials') return { trials: obj.config.trialCount ? Array(obj.config.trialCount).fill(null) : [], running: false, startedAt: null, pendingMs: 0 };
+    if (obj.type === 'interval') return { marks: {}, segments: [] };
+    if (obj.type === 'chaining') return { steps: {} };
+    if (obj.type === 'balance') return { trials: [{ steps: {} }] };
+    return null;
+  })();
+  if (!base) return {};
+  return { ...base, mesures: mesuresVides() };
 }
 
 /* Un essai est enregistré soit comme un simple code (format d'origine), soit
@@ -860,14 +893,78 @@ function trialMs(t) {
 function entryMatches(obj, entry) {
   if (!entry) return false;
   if (obj.type === 'trials') return Array.isArray(entry.trials);
-  if (obj.type === 'probe') return entry.value === 0 || entry.value === 1 || entry.value === null || 'guidance' in entry;
-  if (obj.type === 'occurrence') return typeof entry.count === 'number';
-  if (obj.type === 'timer') return typeof entry.elapsedMs === 'number';
   if (obj.type === 'interval') return !!entry.marks;
   if (obj.type === 'chaining') return !!entry.steps;
-  if (obj.type === 'latency') return Array.isArray(entry.latencies);
   if (obj.type === 'balance') return Array.isArray(entry.trials) || !!entry.steps;
   return false;
+}
+
+/* Fige les chronomètres encore en cours d'une cotation : celui des essais, à
+   plat sur l'entrée, et celui de la mesure auxiliaire, imbriqué dans
+   `mesures.chrono`. `cumulePending` n'est vrai que pour le renforcement, qui
+   décompte à part le temps figé pendant que les cotations sont suspendues. */
+function figerChronos(entry, stamp, cumulePending) {
+  if (!entry) return entry;
+  let next = entry;
+  if (entry.running && entry.startedAt) {
+    next = { ...next, running: false, elapsedMs: (entry.elapsedMs || 0) + (stamp - entry.startedAt), startedAt: null };
+    if (cumulePending) next.pendingMs = (entry.pendingMs || 0) + (stamp - entry.startedAt);
+  }
+  const chrono = entry.mesures && entry.mesures.chrono;
+  if (chrono && chrono.running && chrono.startedAt) {
+    next = {
+      ...next,
+      mesures: {
+        ...next.mesures,
+        chrono: { ...chrono, running: false, elapsedMs: (chrono.elapsedMs || 0) + (stamp - chrono.startedAt), startedAt: null },
+      },
+    };
+  }
+  return next;
+}
+
+/* Relance à chaque essai : sur les modes à essais discrets (trials, chaînage,
+   balance program), le compteur et/ou le chrono auxiliaires peuvent se figer
+   sous l'essai qu'on vient de coter puis repartir de zéro pour le suivant.
+   `cle` est l'index de l'essai (trials, balance) ou l'id de l'étape
+   (chaînage). Retourne le seul patch à fusionner sur l'entrée — un objet vide
+   si aucune des deux relances n'est active. */
+function relancerMesures(entry, cle, compteurParEssai, chronoParEssai, stamp) {
+  if (!compteurParEssai && !chronoParEssai) return {};
+  const m = (entry && entry.mesures) || mesuresVides();
+  const essais = { ...((entry && entry.mesuresEssais) || {}) };
+  const capture = { ...(essais[cle] || {}) };
+  let mesures = m;
+  const iso = new Date(stamp).toISOString();
+  if (compteurParEssai) {
+    capture.compteur = { ...m.compteur, valideA: m.compteur.valideA || iso };
+    mesures = { ...mesures, compteur: { total: 0, valideA: null } };
+  }
+  if (chronoParEssai) {
+    const c = m.chrono;
+    const fige = c.running
+      ? { ...c, running: false, elapsedMs: (c.elapsedMs || 0) + (stamp - c.startedAt), startedAt: null }
+      : c;
+    capture.chrono = { ...fige, valideA: fige.valideA || iso };
+    mesures = { ...mesures, chrono: { elapsedMs: 0, running: false, startedAt: null, valideA: null } };
+  }
+  essais[cle] = capture;
+  return { mesures, mesuresEssais: essais };
+}
+
+/* Après la suppression d'un essai indexé (annuler un essai en trials, retirer
+   un essai en balance), les mesures capturées aux index suivants doivent
+   glisser d'un cran pour rester alignées sur l'essai qu'elles décrivent. Sans
+   cela, une mesure resterait accrochée au mauvais essai après l'annulation. */
+function reindexMesuresEssais(mesuresEssais, indexSupprime) {
+  if (!mesuresEssais) return mesuresEssais;
+  const next = {};
+  Object.entries(mesuresEssais).forEach(([k, v]) => {
+    const i = Number(k);
+    if (i === indexSupprime) return;
+    next[i > indexSupprime ? i - 1 : i] = v;
+  });
+  return next;
 }
 
 /* Arrête les chronomètres encore en cours au moment de l'enregistrement */
@@ -877,10 +974,7 @@ function finalizeSession(session) {
   Object.entries(session.data || {}).forEach(([sid, objs]) => {
     data[sid] = {};
     Object.entries(objs).forEach(([oid, entry]) => {
-      data[sid][oid] =
-        entry && entry.running && entry.startedAt
-          ? { ...entry, running: false, elapsedMs: (entry.elapsedMs || 0) + (stamp - entry.startedAt), startedAt: null }
-          : entry;
+      data[sid][oid] = figerChronos(entry, stamp, false);
     });
   });
   const reinforcement = {};
@@ -890,6 +984,224 @@ function finalizeSession(session) {
       : r;
   });
   return { ...session, data, reinforcement, endedAt: session.isEdit ? session.endedAt || stamp : stamp };
+}
+
+/* ==================== Séance mouvante ====================
+   Sur le terrain une séance ne se déroule pas comme elle a été configurée :
+   un jeune part, un autre arrive, un atelier en enchaîne un autre. Ces
+   fonctions décrivent ces mouvements sur l'objet séance, hors de tout
+   affichage — elles sont couvertes par tests/test_seance_souple.mjs. */
+
+/* Fenêtre de présence d'une personne. Une séance enregistrée avant l'arrivée
+   des entrées et sorties en cours de route n'a pas de champ `presence` : tout
+   le monde y est réputé présent d'un bout à l'autre. */
+function fenetrePresence(session, sid) {
+  const debut = session ? session.startedAt : 0;
+  const fin = session && session.endedAt ? session.endedAt : null;
+  const p = session && session.presence && session.presence[sid];
+  if (!p) return { from: debut, to: fin };
+  return { from: p.from == null ? debut : p.from, to: p.to == null ? fin : p.to };
+}
+
+function estPresent(session, sid) {
+  const p = session && session.presence && session.presence[sid];
+  return !p || p.to == null;
+}
+
+/* Fenêtres de pause closes. La pause encore ouverte est bornée à `fin`, sans
+   quoi une séance enregistrée alors qu'elle est en pause ne verrait jamais sa
+   dernière pause décomptée. */
+function fenetresPause(session, fin) {
+  const bornes = [];
+  ((session && session.pauses) || []).forEach((p) => {
+    if (!p || p.from == null) return;
+    const to = p.to == null ? fin : p.to;
+    if (to != null && to > p.from) bornes.push({ from: p.from, to });
+  });
+  return bornes;
+}
+
+function chevauchementMs(a, b) {
+  return Math.max(0, Math.min(a.to, b.to) - Math.max(a.from, b.from));
+}
+
+/* Durée de présence effective, pauses déduites. C'est elle qui fonde le temps
+   d'activité à l'export : sans elle, une personne arrivée en cours de séance
+   se verrait créditer la séance entière.
+
+   Repli pour les séances antérieures à l'historique des pauses : elles n'ont
+   qu'un `pausedMs` global, retiré tel quel dès lors que la personne a été
+   présente d'un bout à l'autre. C'est le calcul qui avait cours jusqu'ici, et
+   il reste exact dans ce cas précis. */
+function dureePresence(session, sid) {
+  if (!session || !session.startedAt) return 0;
+  const finSeance = session.endedAt || session.startedAt;
+  const f = fenetrePresence(session, sid);
+  const debut = Math.max(f.from == null ? session.startedAt : f.from, session.startedAt);
+  const fin = Math.min(f.to == null ? finSeance : f.to, finSeance);
+  const brut = Math.max(0, fin - debut);
+  if (!brut) return 0;
+  const pauses = fenetresPause(session, finSeance);
+  if (!pauses.length) {
+    const couvreTout = debut <= session.startedAt && fin >= finSeance;
+    return Math.max(0, brut - (couvreTout ? session.pausedMs || 0 : 0));
+  }
+  const enPause = pauses.reduce((n, p) => n + chevauchementMs({ from: debut, to: fin }, p), 0);
+  return Math.max(0, brut - enPause);
+}
+
+/* Objectifs cochés d'office pour une personne dans un atelier : ce qui a été
+   mémorisé pour elle dans cet atelier, à défaut ses objectifs prioritaires, à
+   défaut tous. Ajouter quelqu'un en pleine séance ne doit pas renvoyer à
+   l'écran de configuration. */
+function objectifsParDefaut(student, atelier, mode) {
+  if (!student) return [];
+  const visibles = (student.objectives || []).filter((o) => (mode === 'balance' ? o.type === 'balance' : true));
+  const ids = visibles.map((o) => o.id);
+  const memorise = atelier && atelier.usualObjectives && atelier.usualObjectives[student.id];
+  const retenus = memorise ? memorise.filter((oid) => ids.includes(oid)) : [];
+  if (retenus.length) return retenus;
+  const prioritaires = visibles.filter((o) => o.favorite).map((o) => o.id);
+  return prioritaires.length ? prioritaires : ids;
+}
+
+/* Monte l'instantané des objectifs et les cotations vides. Un seul endroit
+   sait le faire : le lancement, l'arrivée d'une personne en cours de route et
+   le passage à l'atelier suivant s'appuient tous dessus. */
+function construireDonneesSeance(students, studentIds, selected, favorisAtelier, mode) {
+  const snapshot = {};
+  const data = {};
+  (studentIds || []).forEach((sid) => {
+    const st = (students || []).find((s) => s.id === sid);
+    if (!st) return;
+    data[sid] = {};
+    ((selected && selected[sid]) || []).forEach((oid) => {
+      const obj = (st.objectives || []).find((o) => o.id === oid);
+      if (!obj) return;
+      const cible = currentTarget(obj);
+      // Prioritaire si l'objectif l'est en soi, ou s'il l'est pour cet atelier
+      const favorite = !!obj.favorite || (mode !== 'balance' && (favorisAtelier || []).includes(oid));
+      snapshot[oid] = { ...obj, favorite, activeTargetName: cible ? cible.name : null, activePhaseName: currentPhase(obj).name };
+      data[sid][oid] = { ...emptyEntry(obj), targetId: cible ? cible.id : null };
+    });
+  });
+  return { snapshot, data };
+}
+
+/* Arrivée en cours de séance. Une personne déjà passée par là et repartie
+   retrouve sa place : ses cotations sont conservées, rien n'est recréé. */
+function ajouterPersonne(session, student, oids, stamp, favorisAtelier) {
+  if (!session || !student) return session;
+  const sid = student.id;
+  const presence = { ...(session.presence || {}) };
+  if ((session.studentIds || []).includes(sid)) {
+    presence[sid] = { from: presence[sid] && presence[sid].from != null ? presence[sid].from : stamp, to: null };
+    return { ...session, presence };
+  }
+  const { snapshot, data } = construireDonneesSeance([student], [sid], { [sid]: oids }, favorisAtelier, session.mode);
+  presence[sid] = { from: stamp, to: null };
+  return {
+    ...session,
+    studentIds: [...(session.studentIds || []), sid],
+    selectedObjectives: { ...(session.selectedObjectives || {}), [sid]: Object.keys(data[sid] || {}) },
+    objectiveSnapshot: { ...(session.objectiveSnapshot || {}), ...snapshot },
+    data: { ...(session.data || {}), [sid]: data[sid] || {} },
+    presence,
+  };
+}
+
+/* Départ en cours de séance : les cotations restent acquises, les
+   chronomètres et le renforcement s'arrêtent là. À distinguer de la
+   suppression, qui efface — d'où deux fonctions et deux commandes. */
+function retirerPersonne(session, sid, stamp) {
+  if (!session) return session;
+  const presence = { ...(session.presence || {}) };
+  const actuelle = presence[sid];
+  presence[sid] = { from: actuelle && actuelle.from != null ? actuelle.from : session.startedAt, to: stamp };
+
+  const maj = {};
+  Object.entries((session.data || {})[sid] || {}).forEach(([oid, e]) => {
+    maj[oid] = figerChronos(e, stamp, false);
+  });
+
+  const reinforcement = { ...(session.reinforcement || {}) };
+  const r = reinforcement[sid];
+  if (r && r.running && r.startedAt) {
+    reinforcement[sid] = { running: false, startedAt: null, totalMs: (r.totalMs || 0) + (stamp - r.startedAt) };
+  }
+  return { ...session, presence, data: { ...(session.data || {}), [sid]: maj }, reinforcement };
+}
+
+/* Suppression : la personne n'aurait pas dû figurer dans cette séance. Tout ce
+   qui la concerne s'en va, y compris les objectifs devenus orphelins de
+   l'instantané. Destructif — l'appelant demande confirmation. */
+function supprimerPersonne(session, sid) {
+  if (!session) return session;
+  const sansElle = (obj) => {
+    const n = { ...(obj || {}) };
+    delete n[sid];
+    return n;
+  };
+  const studentIds = (session.studentIds || []).filter((x) => x !== sid);
+  const selectedObjectives = sansElle(session.selectedObjectives);
+  const encoreUtilises = new Set();
+  studentIds.forEach((x) => (selectedObjectives[x] || []).forEach((oid) => encoreUtilises.add(oid)));
+  const objectiveSnapshot = {};
+  Object.entries(session.objectiveSnapshot || {}).forEach(([oid, o]) => {
+    if (encoreUtilises.has(oid)) objectiveSnapshot[oid] = o;
+  });
+  return {
+    ...session,
+    studentIds,
+    selectedObjectives,
+    objectiveSnapshot,
+    data: sansElle(session.data),
+    notes: sansElle(session.notes),
+    reinforcement: sansElle(session.reinforcement),
+    hidden: sansElle(session.hidden),
+    presence: sansElle(session.presence),
+    priorityOrder: (session.priorityOrder || []).filter((k) => k.split('|')[0] !== sid),
+  };
+}
+
+/* Passage à l'atelier suivant. La séance en cours est close et enregistrée
+   telle quelle, une nouvelle s'ouvre sur le nouvel atelier : l'atelier reste
+   une propriété de la séance, ce qu'attendent l'export et DatABA Manager, et
+   une fiche de crise ouverte reste rattachée à l'atelier où elle a commencé.
+   `chainId` relie les deux séances, sur le principe des crises enchaînées.
+
+   Contrepartie assumée : nouveau chronomètre, temps de renforcement repartis
+   de zéro. Un atelier a sa durée propre. */
+function chainerAtelier(session, atelierId, plan, stamp) {
+  const chainId = session.chainId || session.id;
+  const close = finalizeSession({ ...session, chainId, chainIndex: session.chainIndex || 1 });
+  const studentIds = (plan && plan.studentIds) || [];
+  const { snapshot, data } = construireDonneesSeance(plan.students, studentIds, plan.selected, plan.favorites, session.mode);
+  const presence = {};
+  const selectedObjectives = {};
+  studentIds.forEach((sid) => {
+    presence[sid] = { from: stamp, to: null };
+    selectedObjectives[sid] = Object.keys(data[sid] || {});
+  });
+  const next = {
+    id: uid(),
+    date: new Date(stamp).toISOString(),
+    startedAt: stamp,
+    mode: session.mode,
+    atelierId: session.mode === 'balance' ? null : atelierId,
+    intervenantId: session.intervenantId || null,
+    doubleCotation: !!session.doubleCotation,
+    chainId,
+    chainIndex: (session.chainIndex || 1) + 1,
+    studentIds,
+    selectedObjectives,
+    objectiveSnapshot: snapshot,
+    notes: {},
+    data,
+    presence,
+    pauses: [],
+  };
+  return { close, next };
 }
 
 /* Pas d'un relevé par intervalle, en secondes. Les objectifs enregistrés avant
@@ -1047,24 +1359,6 @@ function summarize(obj, entry, guidances) {
         .join(' '),
     };
   }
-  if (obj.type === 'probe') {
-    if (obj.config && obj.config.useGuidance) {
-      if (!entry.guidance) return { result: 'Non coté', detail: '' };
-      const g = guidanceByCode(gList, entry.guidance);
-      return { result: g ? `${g.label} (${g.code})` : entry.guidance, detail: entry.guidance };
-    }
-    return { result: entry.value === 1 ? 'Réussi (1)' : entry.value === 0 ? 'Échoué (0)' : 'Non coté', detail: '' };
-  }
-  if (obj.type === 'occurrence') {
-    return { result: `${entry.count} occurrence${entry.count !== 1 ? 's' : ''}`, detail: '' };
-  }
-  if (obj.type === 'timer') {
-    const base = entry.elapsedMs ? fmtDuration(entry.elapsedMs) : 'Non démarré';
-    const cible = obj.config && obj.config.timerMode === 'countdown' && obj.config.timerSeconds
-      ? ` / ${fmtDuration(obj.config.timerSeconds * 1000)}`
-      : '';
-    return { result: `${base}${cible}`, detail: `${Math.round((entry.elapsedMs || 0) / 1000)} s` };
-  }
   if (obj.type === 'interval') {
     const levels = obj.config.levels || [];
     const { totals, total } = intervalTotals(obj, entry);
@@ -1114,15 +1408,6 @@ function summarize(obj, entry, guidances) {
       detail: `${detail}${st.renforts.length ? ` — renforcé : ${st.renforts.join(', ')}` : ''}`,
     };
   }
-  if (obj.type === 'latency') {
-    const n = entry.latencies.length;
-    if (!n) return { result: 'Non coté', detail: '' };
-    const avg = entry.latencies.reduce((a, b) => a + b, 0) / n / 1000;
-    return {
-      result: `${n} mesure${n !== 1 ? 's' : ''} · moyenne ${avg.toFixed(1)} s`,
-      detail: entry.latencies.map((ms) => `${(ms / 1000).toFixed(1)} s`).join(' | '),
-    };
-  }
   return { result: '—', detail: '' };
 }
 
@@ -1134,14 +1419,6 @@ function objectiveScore(obj, entry, guidances) {
     const done = entry.trials.filter((t) => trialCode(t));
     if (!done.length) return null;
     return { value: Math.round((done.filter((t) => isIndependentCode(gList, trialCode(t))).length / done.length) * 100), percent: true, unit: '%' };
-  }
-  if (obj.type === 'probe') {
-    if (obj.config && obj.config.useGuidance) {
-      if (!entry.guidance) return null;
-      return { value: isIndependentCode(gList, entry.guidance) ? 100 : 0, percent: true, unit: '%' };
-    }
-    if (entry.value !== 0 && entry.value !== 1) return null;
-    return { value: entry.value * 100, percent: true, unit: '%' };
   }
   if (obj.type === 'interval') {
     const { totals, total } = intervalTotals(obj, entry);
@@ -1161,16 +1438,6 @@ function objectiveScore(obj, entry, guidances) {
     const st = balanceStats(obj, entry);
     if (!st.notes) return null;
     return { value: st.pct, percent: true, unit: '%' };
-  }
-  if (obj.type === 'latency') {
-    if (!entry.latencies.length) return null;
-    const avg = entry.latencies.reduce((a, b) => a + b, 0) / entry.latencies.length / 1000;
-    return { value: Math.round(avg * 10) / 10, percent: false, unit: 's' };
-  }
-  if (obj.type === 'occurrence') return { value: entry.count, percent: false, unit: 'occ.' };
-  if (obj.type === 'timer') {
-    if (!entry.elapsedMs) return null;
-    return { value: Math.round(entry.elapsedMs / 1000), percent: false, unit: 's' };
   }
   return null;
 }
@@ -1329,7 +1596,16 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)', 'Compteur', 'Chrono (s)']];
+
+  /* Mesure auxiliaire capturée pour cet essai (relance à chaque essai) — vide
+     tant que rien n'a été relancé sous cette clé, jamais un zéro par défaut. */
+  function mesureEssaiCells(entry, cle) {
+    const e = entry.mesuresEssais && entry.mesuresEssais[cle];
+    const compteur = e && e.compteur && e.compteur.valideA ? e.compteur.total : '';
+    const chrono = e && e.chrono && e.chrono.valideA ? Math.round((e.chrono.elapsedMs || 0) / 1000) : '';
+    return [compteur, chrono];
+  }
 
   function base(sess, sid, obj) {
     return [
@@ -1345,20 +1621,39 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   }
 
   sessions.forEach((sess) => {
-    // Temps de renforcement et temps d'activité, par personne
     const dureeSeance = sess.endedAt && sess.startedAt
       ? Math.max(0, sess.endedAt - sess.startedAt - (sess.pausedMs || 0))
       : 0;
+
+    /* Présence : une seule ligne, et seulement quand la personne n'a pas
+       couvert toute la séance. Sans elle, un faible nombre d'essais se lit
+       comme un mauvais résultat alors que la personne n'était pas là. */
+    (sess.studentIds || []).forEach((sid) => {
+      if (studentFilter && !studentFilter.includes(sid)) return;
+      const presence = dureePresence(sess, sid);
+      if (!dureeSeance || presence >= dureeSeance) return;
+      const f = fenetrePresence(sess, sid);
+      rows.push([
+        ...base(sess, sid, { name: 'Présence', activeTargetName: null, activePhaseName: '—', config: {} }),
+        'Présence', 1, '',
+        `Présent ${Math.round(presence / 60000)} min sur ${Math.round(dureeSeance / 60000)} — de ${timeShort(f.from)} à ${timeShort(f.to || sess.endedAt)}`,
+        '', '', '', Math.round(presence / 1000), '', '',
+      ]);
+    });
+
+    /* Temps de renforcement et temps d'activité, par personne. L'activité se
+       compte sur la présence réelle : une personne arrivée en cours de séance
+       ne doit pas se voir créditer la séance entière. */
     Object.entries(sess.reinforcement || {}).forEach(([sid, r]) => {
       if (studentFilter && !studentFilter.includes(sid)) return;
       const renfo = Math.round((r.totalMs || 0) / 1000);
       if (!renfo) return;
-      const activite = Math.max(0, Math.round(dureeSeance / 1000) - renfo);
+      const activite = Math.max(0, Math.round(dureePresence(sess, sid) / 1000) - renfo);
       rows.push([
         ...base(sess, sid, { name: 'Temps de renforcement', activeTargetName: null, activePhaseName: '—', config: {} }),
         'Renforcement', 1, '',
         `${Math.round(renfo / 60)} min de renforcement · ${Math.round(activite / 60)} min d'activité`,
-        '', '', '', renfo,
+        '', '', '', renfo, '', '',
       ]);
     });
 
@@ -1383,6 +1678,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
               ...b, 'Essai par essai', i + 1, '', g ? g.label : code,
               isIndependentCode(gl, code) ? 1 : 0, '', '',
               ms == null ? '' : Math.round(ms / 100) / 10,
+              ...mesureEssaiCells(entry, i),
             ]);
           });
         }
@@ -1392,7 +1688,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
             const code = entry.steps && entry.steps[st.id];
             if (!code) return;
             const g = guidanceByCode(gl, code);
-            rows.push([...b, 'Chaînage', i + 1, st.name, g ? g.label : code, isIndependentCode(gl, code) ? 1 : 0, '', '', '']);
+            rows.push([...b, 'Chaînage', i + 1, st.name, g ? g.label : code, isIndependentCode(gl, code) ? 1 : 0, '', '', '', ...mesureEssaiCells(entry, st.id)]);
           });
         }
 
@@ -1406,19 +1702,9 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
                 ...b, 'Balance Program', ti + 1, st.name, o ? o.label : e.outcome,
                 o && o.exclu ? '' : o && o.reussite ? 1 : 0,
                 e.demande ? 'Oui' : 'Non', e.renforce ? 'Oui' : 'Non', '',
+                ...mesureEssaiCells(entry, ti),
               ]);
             });
-          });
-        }
-
-        if (obj.type === 'timer' && (entry.elapsedMs || 0) > 0) {
-          const secondes = Math.round((entry.elapsedMs || 0) / 1000);
-          rows.push([...b, 'Timer', 1, '', `${secondes} s`, '', '', '', secondes]);
-        }
-
-        if (obj.type === 'latency') {
-          (entry.latencies || []).forEach((ms, i) => {
-            rows.push([...b, 'Latence', i + 1, '', `${(ms / 1000).toFixed(1)} s`, '', '', '', Math.round(ms / 1000)]);
           });
         }
 
@@ -1426,11 +1712,11 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
           const levels = obj.config.levels || [];
           Object.entries(entry.marks || {}).forEach(([n, lid]) => {
             const lv = levels.find((l) => l.id === lid);
-            if (lv) rows.push([...b, 'Intervalle', Number(n), '', lv.name, '', '', '', '']);
+            if (lv) rows.push([...b, 'Intervalle', Number(n), '', lv.name, '', '', '', '', '', '']);
           });
           (entry.segments || []).forEach((seg) => {
             const lv = levels.find((l) => l.id === seg.levelId);
-            if (lv) rows.push([...b, 'Intervalle (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '', segmentSeconds(seg)]);
+            if (lv) rows.push([...b, 'Intervalle (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '', segmentSeconds(seg), '', '']);
           });
         }
       });
@@ -1446,7 +1732,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Type de cotation', 'Résultat', 'Score', 'Détail']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Type de cotation', 'Résultat', 'Score', 'Détail', 'Comptage', 'Chrono (s)', 'Mesures validées à']];
   sessions.forEach((s) => {
     const d = new Date(s.date);
     (s.studentIds || []).forEach((sid) => {
@@ -1466,6 +1752,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
             fullDetail = `${detail}${detail ? ' — ' : ''}CRISE sur ${set.size > 1 ? 'les intervalles' : "l'intervalle"} ${list}`;
           }
         }
+        const mesures = mesuresExport(entry && entry.mesures);
         rows.push([
           d.toLocaleDateString('fr-FR'),
           timeShort(s.date),
@@ -1474,10 +1761,13 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
           studentName(sid),
           obj.name,
           obj.activeTargetName || '—',
-          TYPES[obj.type].label,
+          typeMeta(obj.type).label,
           result,
           score ? score.value : '',
           fullDetail,
+          mesures.compteurTotal,
+          mesures.chronoSecondes,
+          mesures.valideA,
         ]);
       });
     });
@@ -1485,20 +1775,21 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }];
+  ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }, { wch: 9 }, { wch: 10 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Cotations');
 
   const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter);
   const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
-  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }];
+  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 11 }];
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
-  const crisisRows = [['Type', 'Chaîne', 'Rang', 'Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Intensité', 'Antécédents', 'Enchaînement des comportements', 'Premier comportement', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire']];
+  const crisisRows = [['Type', 'Chaîne', 'Rang', 'Date', 'Heure', 'Jour', 'Personne accompagnée', 'Atelier', 'Intervenants présents', 'Durée', 'Durée (s)', 'Intensité', 'Antécédents', 'Enchaînement des comportements', 'Premier comportement', 'Fonction supposée', 'Conséquences', 'Antécédent (libre)', 'Comportement (libre)', 'Conséquence (libre)', 'Commentaire', 'Comptage annexe', 'Chrono annexe (s)', 'Mesures validées à']];
   crises.forEach((c) => {
     if (studentFilter && c.studentId && !studentFilter.includes(c.studentId)) return;
     const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
     const f = c.fonction ? CRISIS_FUNCTIONS.find((x) => x.k === c.fonction) : null;
+    const mesures = mesuresExport(c.mesures);
     crisisRows.push([
       c.kind === 'abc' ? 'Observation' : 'Crise',
       c.chainId ? c.chainId.slice(0, 6) : '',
@@ -1521,10 +1812,13 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
       c.comportement || '',
       c.consequence || '',
       c.commentaire || '',
+      mesures.compteurTotal,
+      mesures.chronoSecondes,
+      mesures.valideA,
     ]);
   });
   const ws2 = XLSX.utils.aoa_to_sheet(crisisRows);
-  ws2['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 6 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 34 }, { wch: 44 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }];
+  ws2['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 6 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 24 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 34 }, { wch: 44 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 34 }, { wch: 9 }, { wch: 10 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws2, 'Crises et observations');
 
   const noteRows = [['Date', 'Heure', 'Atelier', 'Personne accompagnée', 'Note']];
@@ -2767,14 +3061,19 @@ function AbaApp() {
   const addAtelier = (name) => setAteliers((a) => [...a, { id: uid(), name }]);
   const removeAtelier = (id) => setAteliers((a) => a.filter((x) => x.id !== id));
   const renameAtelier = (id, name) => setAteliers((a) => a.map((x) => (x.id === id ? { ...x, name } : x)));
+  /* Mémorisation cumulative : la liste des personnes habituelles et celle des
+     prioritaires sont remplacées, mais les objectifs mémorisés des personnes
+     absentes ce jour-là sont conservés. Sans ça, une personne qui manque le
+     jour de la mémorisation perd sa liste — et l'ajouter en pleine séance
+     obligerait à repasser par l'écran de configuration. */
   const setAtelierGroup = (id, config) =>
     setAteliers((a) => a.map((x) => (x.id === id
       ? {
           ...x,
           usualStudentIds: config.studentIds,
-          usualObjectives: config.objectives,
+          usualObjectives: { ...(x.usualObjectives || {}), ...config.objectives },
           favoriteObjectiveIds: config.favorites,
-          knownObjectiveIds: config.known,
+          knownObjectiveIds: Array.from(new Set([...(x.knownObjectiveIds || []), ...(config.known || [])])),
         }
       : x)));
   const addIntervenant = (name) => setIntervenants((l) => [...l, { id: uid(), name }]);
@@ -3022,6 +3321,7 @@ function AbaApp() {
     antecedentTags: [],
     comportementTags: [],
     consequenceTags: [],
+    mesures: mesuresVides(),
   });
 
   /* Une nouvelle fiche s'ajoute aux autres : celles déjà ouvertes continuent
@@ -3056,7 +3356,7 @@ function AbaApp() {
     const { isNew, ...rest } = c;
     const chainId = c.chainId || uid();
     const rang = c.chainIndex || 1;
-    const maillon = { ...rest, chainId, chainIndex: rang };
+    const maillon = figerChronos({ ...rest, chainId, chainIndex: rang }, Date.now());
 
     if (isNew) {
       const duree = rest.kind === 'abc' ? 0 : Date.now() - c.startedAt;
@@ -3087,7 +3387,8 @@ function AbaApp() {
   };
 
   const saveCrisis = (c) => {
-    const { isNew, ...rest } = c;
+    const { isNew, ...restBrut } = c;
+    const rest = figerChronos(restBrut, Date.now());
     if (isNew) {
       const duree = rest.kind === 'abc' ? 0 : Date.now() - c.startedAt;
       setCrises((list) => [{ ...rest, durationMs: duree }, ...list]);
@@ -3108,6 +3409,13 @@ function AbaApp() {
   /* --- suivi de stabilité --- */
   const toggleSuiviStabilite = (id) =>
     setStudents((l) => l.map((x) => (x.id === id ? { ...x, suiviStabilite: !x.suiviStabilite } : x)));
+
+  /* --- suivi de renforcement ---
+     Hors activation, aucun bouton de renforcement n'apparaît en séance : tout
+     le monde n'en a pas besoin, et l'ajouter par défaut aurait encombré la
+     fiche de chaque personne pour rien. */
+  const toggleSuiviRenforcement = (id) =>
+    setStudents((l) => l.map((x) => (x.id === id ? { ...x, suiviRenforcement: !x.suiviRenforcement } : x)));
 
   /* Un relevé s'ajoute simplement à la suite : il vaut jusqu'au suivant.
      L'état « crise » crée en plus une fiche crise minimale dans le tableau
@@ -3213,7 +3521,7 @@ function AbaApp() {
             students={students} guidances={guidances} templates={objectiveTemplates}
             premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
-            onToggleStabilite={toggleSuiviStabilite}
+            onToggleStabilite={toggleSuiviStabilite} onToggleRenforcement={toggleSuiviRenforcement}
             addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective}
             duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase}
             onSaveTemplate={saveTemplate}
@@ -3257,9 +3565,11 @@ function AbaApp() {
             onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => setEcran('personnes')}
             onOuvrirMenu={ouvrirMenu}
             activeSession={activeSession} setActiveSession={setActiveSession}
-            onFinish={(session) => {
+            onFinish={(session, suivante) => {
               const { isEdit, ...rest } = session;
-              setActiveSession(null);
+              // Passage à l'atelier suivant : la nouvelle séance remplace l'active,
+              // au lieu de repasser par l'écran de configuration.
+              setActiveSession(suivante || null);
               const nextSessions = isEdit
                 ? sessions.map((s) => (s.id === rest.id ? rest : s))
                 : [rest, ...sessions];
@@ -3275,7 +3585,7 @@ function AbaApp() {
                     ? `${a.initials} — « ${a.target} » acquise${a.next ? `, passage à « ${a.next} »` : ', dernière cible'}`
                     : `${achieved.length} cibles acquises`
                 );
-              } else {
+              } else if (!suivante) {
                 notify(isEdit ? 'Séance corrigée' : 'Séance enregistrée');
               }
             }}
@@ -3839,7 +4149,7 @@ function PanneauModeles({ templates, onRemove }) {
         ) : (
           <div className="space-y-1.5">
             {templates.map((t) => {
-              const meta = TYPES[t.type];
+              const meta = typeMeta(t.type);
               const Icon = meta.icon;
               return (
                 <div key={t.id} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
@@ -4159,7 +4469,7 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
    distance, une carte dans Gestion et une carte dans Personnes. */
 function PanneauPersonnes({
   students, guidances, templates, premiereConfiguration,
-  addStudent, removeStudent, renameStudent, onToggleStabilite,
+  addStudent, removeStudent, renameStudent, onToggleStabilite, onToggleRenforcement,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
 }) {
   const [openId, setOpenId] = useState(null);
@@ -4224,6 +4534,7 @@ function PanneauPersonnes({
                   <span className="block text-xs" style={{ color: INK_SOFT }}>
                     {s.objectives.length} objectif{s.objectives.length !== 1 ? 's' : ''}
                     {s.suiviStabilite && ' · stabilité suivie'}
+                    {s.suiviRenforcement && ' · renforcement suivi'}
                   </span>
                 </span>
               </span>
@@ -4252,10 +4563,23 @@ function PanneauPersonnes({
                       </span>
                     </span>
                   </button>
+                  <button onClick={() => onToggleRenforcement(s.id)} className="flex items-start gap-2.5 text-left w-full mt-2.5">
+                    <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: s.suiviRenforcement ? INK : BORDER }}>
+                      <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: s.suiviRenforcement ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Suivi de renforcement</span>
+                      <span className="block text-xs" style={{ color: INK_SOFT }}>
+                        Ajoute en séance un bouton pour mettre la personne en renforcement — les
+                        cotations sont alors suspendues et le temps décompté. Sans activation, le
+                        bouton n'apparaît pas.
+                      </span>
+                    </span>
+                  </button>
                 </div>
                 <div className="space-y-1.5 mb-3">
                   {s.objectives.map((o) => {
-                    const meta = TYPES[o.type];
+                    const meta = typeMeta(o.type);
                     const Icon = meta.icon;
                     if (editingObj === o.id) {
                       return (
@@ -4299,15 +4623,13 @@ function PanneauPersonnes({
                               <div className="text-xs" style={{ color: INK_SOFT }}>
                                 {meta.short}
                                 {o.type === 'trials' && (o.config.trialCount ? ` · ${o.config.trialCount} essais prévus` : ' · essais sans limite')}
-                                {o.type === 'trials' && o.config.withTimer && (o.config.timerMode === 'countdown' && o.config.timerSeconds
-                                  ? ` · limite ${fmtDuration(o.config.timerSeconds * 1000)}`
-                                  : ' · chronométré')}
                                 {o.type === 'interval' && ` · toutes les ${fmtDuration(intervalStepSec(o) * 1000)} · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
                                 {(o.type === 'chaining' || o.type === 'balance') && ` · ${(o.config.steps || []).length} étapes`}
-                                {o.type === 'timer' && (o.config.timerMode === 'countdown' && o.config.timerSeconds
-                                  ? ` · ${fmtDuration(o.config.timerSeconds * 1000)}`
-                                  : ' · chronomètre')}
                                 {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions} ${o.config.mastery.unit === 'days' ? 'jours' : 'séances'}`}
+                                {o.config.avecCompteur && ' · compteur'}
+                                {o.config.avecChrono && (o.config.chronoMode === 'countdown' && o.config.chronoSeconds
+                                  ? ` · chrono limite ${fmtDuration(o.config.chronoSeconds * 1000)}`
+                                  : ' · chrono')}
                                 {objectiveTargets(o).length > 0 && ` · ${(o.masteredTargetIds || []).length}/${objectiveTargets(o).length} cibles acquises`}
                               </div>
                             </div>
@@ -4398,7 +4720,7 @@ function ObjectiveEditor({ guidances, templates, onAdd }) {
               </div>
               <div className="space-y-1.5">
                 {templates.map((t) => {
-                  const meta = TYPES[t.type];
+                  const meta = typeMeta(t.type);
                   const Icon = meta.icon;
                   return (
                     <button key={t.id}
@@ -4433,6 +4755,10 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const initConfig = init.config || {};
   const [name, setName] = useState(init.name || '');
   const [type, setType] = useState(init.type || 'trials');
+  /* Seuls les modes à essais discrets se prêtent à une relance du compteur ou
+     du chrono auxiliaires à chaque essai — l'intervalle mesure des tops de
+     temps, pas des essais. */
+  const parEssaiPossible = ['trials', 'chaining', 'balance'].includes(type);
   const [trialCount, setTrialCount] = useState(initConfig.trialCount === undefined ? 0 : initConfig.trialCount);
   const [intervalMin, setIntervalMin] = useState(() => {
     const sec = initConfig.intervalSeconds || (initConfig.intervalMinutes || 5) * 60;
@@ -4475,14 +4801,18 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const [rLabel, setRLabel] = useState('');
   const [rColor, setRColor] = useState(GUIDANCE_PALETTE[0]);
   const [rIndep, setRIndep] = useState(false);
-  const [useGuidance, setUseGuidance] = useState(!!initConfig.useGuidance);
   const [phaseName, setPhaseName] = useState(
     init.phaseHistory && init.phaseHistory.length ? init.phaseHistory[init.phaseHistory.length - 1].name : DEFAULT_PHASES[0]
   );
-  const [withTimer, setWithTimer] = useState(!!initConfig.withTimer);
-  const [timerMode, setTimerMode] = useState(initConfig.timerMode || 'chrono');
-  const [timerMin, setTimerMin] = useState(initConfig.timerSeconds ? Math.floor(initConfig.timerSeconds / 60) : 5);
-  const [timerSec, setTimerSec] = useState(initConfig.timerSeconds ? initConfig.timerSeconds % 60 : 0);
+  const [avecCompteur, setAvecCompteur] = useState(!!initConfig.avecCompteur);
+  const [avecChrono, setAvecChrono] = useState(!!initConfig.avecChrono);
+  const [chronoMode, setChronoMode] = useState(initConfig.chronoMode || 'chrono');
+  const [chronoMin, setChronoMin] = useState(initConfig.chronoSeconds ? Math.floor(initConfig.chronoSeconds / 60) : 0);
+  const [chronoSec, setChronoSec] = useState(initConfig.chronoSeconds ? initConfig.chronoSeconds % 60 : 30);
+  /* « Relancer à chaque essai » : seuls les modes à essais discrets s'y prêtent
+     — l'intervalle mesure des tops de temps, pas des essais. */
+  const [compteurParEssai, setCompteurParEssai] = useState(!!initConfig.compteurParEssai);
+  const [chronoParEssai, setChronoParEssai] = useState(!!initConfig.chronoParEssai);
   const [levels, setLevels] = useState(initConfig.levels || DEFAULT_INTERVAL_LEVELS);
   const [newLevel, setNewLevel] = useState('');
   const [targetLevelId, setTargetLevelId] = useState(
@@ -4497,13 +4827,6 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
     const config = {};
     if (type === 'trials') {
       config.trialCount = trialCount;
-      config.withTimer = withTimer;
-      if (withTimer) {
-        config.timerMode = timerMode;
-        if (timerMode === 'countdown') {
-          config.timerSeconds = Math.min(3600, Math.max(5, (Number(timerMin) || 0) * 60 + (Number(timerSec) || 0)));
-        }
-      }
     }
     if (type === 'interval') {
       const pas = Math.min(3600, Math.max(10, (Number(intervalMin) || 0) * 60 + (Number(intervalSec) || 0)));
@@ -4515,14 +4838,17 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
     }
     if (type === 'chaining' || type === 'balance') config.steps = steps;
     if (type === 'balance' && balanceSet.length) config.balanceOutcomes = balanceSet;
-    if (type === 'probe') config.useGuidance = useGuidance;
-    if (type === 'timer') {
-      config.timerMode = timerMode;
-      if (timerMode === 'countdown') {
-        const m = Number(timerMin) || 0;
-        const sec = Number(timerSec) || 0;
-        config.timerSeconds = Math.min(3600, Math.max(5, m * 60 + sec));
+    if (avecCompteur) {
+      config.avecCompteur = true;
+      if (parEssaiPossible && compteurParEssai) config.compteurParEssai = true;
+    }
+    if (avecChrono) {
+      config.avecChrono = true;
+      config.chronoMode = chronoMode;
+      if (chronoMode === 'countdown') {
+        config.chronoSeconds = Math.min(3600, Math.max(5, (Number(chronoMin) || 0) * 60 + (Number(chronoSec) || 0)));
       }
+      if (parEssaiPossible && chronoParEssai) config.chronoParEssai = true;
     }
     if (USES_GUIDANCE.includes(type) && guidanceSet.length) config.guidanceSet = guidanceSet;
     if (PERCENT_TYPES.includes(type)) {
@@ -4614,53 +4940,9 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
               style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
             />
           </div>
-          <p className="text-xs mt-1.5 mb-3" style={{ color: INK_SOFT }}>
+          <p className="text-xs mt-1.5" style={{ color: INK_SOFT }}>
             Un nombre prévu sert de repère pendant la cotation, mais n'empêche jamais d'ajouter des essais supplémentaires.
           </p>
-
-          <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
-            <button onClick={() => setWithTimer((v) => !v)} className="flex items-center gap-1.5 text-sm">
-              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: withTimer ? INK : BORDER }}>
-                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: withTimer ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-              </span>
-              Chronométrer chaque essai
-            </button>
-            {withTimer && (
-              <div className="mt-3 space-y-3">
-                <p className="text-xs" style={{ color: INK_SOFT }}>
-                  Le temps court à partir de la consigne et se fige dès que l'essai est coté. Chaque essai
-                  conserve sa durée, reprise dans les rapports.
-                </p>
-                <div className="flex gap-1.5">
-                  {[{ k: 'chrono', l: 'Chronomètre' }, { k: 'countdown', l: 'Temps limite' }].map((m) => (
-                    <button key={m.k} onClick={() => setTimerMode(m.k)} className="flex-1 rounded-lg py-2.5 text-sm border"
-                      style={{ borderColor: timerMode === m.k ? INK : BORDER, backgroundColor: timerMode === m.k ? INK : 'transparent', color: timerMode === m.k ? '#fff' : INK_SOFT }}>
-                      {m.l}
-                    </button>
-                  ))}
-                </div>
-                {timerMode === 'countdown' && (
-                  <div className="flex gap-2 items-center">
-                    <input type="number" inputMode="numeric" min="0" max="60" value={timerMin}
-                      onChange={(e) => setTimerMin(e.target.value === '' ? '' : Number(e.target.value))}
-                      onBlur={() => setTimerMin((v) => (v === '' || v === null ? 0 : Math.min(60, Math.max(0, Number(v)))))}
-                      className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
-                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
-                    <span className="text-xs" style={{ color: INK_SOFT }}>min</span>
-                    <input type="number" inputMode="numeric" min="0" max="59" value={timerSec}
-                      onChange={(e) => setTimerSec(e.target.value === '' ? '' : Number(e.target.value))}
-                      onBlur={() => setTimerSec((v) => (v === '' || v === null ? 0 : Math.min(59, Math.max(0, Number(v)))))}
-                      className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
-                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
-                    <span className="text-xs" style={{ color: INK_SOFT }}>s</span>
-                    <span className="text-xs ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
-                      = {fmtDuration(Math.min(3600, Math.max(5, (Number(timerMin) || 0) * 60 + (Number(timerSec) || 0))) * 1000)}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
         </div>
       )}
 
@@ -4751,64 +5033,6 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
         </div>
       )}
 
-      {type === 'timer' && (
-        <div className="space-y-3">
-          <div>
-            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Fonctionnement</div>
-            <div className="flex gap-1.5">
-              {[{ k: 'chrono', l: 'Chronomètre' }, { k: 'countdown', l: 'Temps fixé' }].map((m) => (
-                <button key={m.k} onClick={() => setTimerMode(m.k)} className="flex-1 rounded-lg py-2.5 text-sm border"
-                  style={{ borderColor: timerMode === m.k ? INK : BORDER, backgroundColor: timerMode === m.k ? INK : 'transparent', color: timerMode === m.k ? '#fff' : INK_SOFT }}>
-                  {m.l}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {timerMode === 'countdown' && (
-            <div>
-              <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Durée, 60 minutes au maximum</div>
-              <div className="flex gap-1.5 flex-wrap mb-2">
-                {[30, 60, 90, 120, 300, 600].map((total) => {
-                  const m = Math.floor(total / 60);
-                  const sec = total % 60;
-                  const on = Number(timerMin) * 60 + Number(timerSec) === total;
-                  return (
-                    <button key={total} onClick={() => { setTimerMin(m); setTimerSec(sec); }}
-                      className="rounded-lg px-3 py-2 text-sm border"
-                      style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT, fontFamily: F_MONO }}>
-                      {m ? `${m} min` : ''}{sec ? `${m ? ' ' : ''}${sec} s` : ''}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="flex gap-2 items-center">
-                <input
-                  type="number" inputMode="numeric" min="0" max="60" value={timerMin}
-                  onChange={(e) => setTimerMin(e.target.value === '' ? '' : Number(e.target.value))}
-                  onBlur={() => setTimerMin((v) => (v === '' || v === null ? 0 : Math.min(60, Math.max(0, Number(v)))))}
-                  className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
-                  style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
-                />
-                <span className="text-xs" style={{ color: INK_SOFT }}>min</span>
-                <input
-                  type="number" inputMode="numeric" min="0" max="59" value={timerSec}
-                  onChange={(e) => setTimerSec(e.target.value === '' ? '' : Number(e.target.value))}
-                  onBlur={() => setTimerSec((v) => (v === '' || v === null ? 0 : Math.min(59, Math.max(0, Number(v)))))}
-                  className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
-                  style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
-                />
-                <span className="text-xs" style={{ color: INK_SOFT }}>s</span>
-                <span className="text-xs ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
-                  = {fmtDuration(Math.min(3600, Math.max(5, (Number(timerMin) || 0) * 60 + (Number(timerSec) || 0))) * 1000)}
-                </span>
-              </div>
-            </div>
-          )}
-
-        </div>
-      )}
-
       {(type === 'chaining' || type === 'balance') && (
         <div>
           <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Étapes de la séquence, dans l'ordre</div>
@@ -4841,17 +5065,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
             <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Réponses possibles</span>
           </div>
 
-          {type === 'probe' && (
-            <button onClick={() => setUseGuidance((v) => !v)} className="flex items-center gap-1.5 text-sm my-2">
-              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: useGuidance ? INK : BORDER }}>
-                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: useGuidance ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-              </span>
-              Coter par guidance plutôt qu'en 1 / 0
-            </button>
-          )}
-
-          {(type !== 'probe' || useGuidance) && (
-            <>
+          <>
               <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
                 Appui long sur une réponse pour la déplacer. L'étoile désigne ce qui compte
                 comme réussite autonome, pour cette personne et cet objectif précis.
@@ -4952,7 +5166,6 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
                 </Btn>
               )}
             </>
-          )}
         </div>
       )}
 
@@ -5117,6 +5330,77 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
         </div>
       )}
 
+      <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
+        <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
+          Mesures annexes — à part de la cotation, indépendantes l'une de l'autre
+        </div>
+        <div className="space-y-3">
+          <div>
+            <button onClick={() => setAvecCompteur((v) => !v)} className="flex items-center gap-1.5 text-sm">
+              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecCompteur ? INK : BORDER }}>
+                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecCompteur ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+              </span>
+              Compteur
+            </button>
+            {avecCompteur && parEssaiPossible && (
+              <button onClick={() => setCompteurParEssai((v) => !v)} className="flex items-center gap-1.5 text-xs mt-2 ml-1" style={{ color: INK_SOFT }}>
+                <span className="w-7 h-4 rounded-full relative shrink-0" style={{ backgroundColor: compteurParEssai ? INK : BORDER }}>
+                  <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white" style={{ left: compteurParEssai ? '0.875rem' : '0.125rem', transition: 'left .15s' }} />
+                </span>
+                Relancer à chaque essai
+              </button>
+            )}
+          </div>
+          <div>
+            <button onClick={() => setAvecChrono((v) => !v)} className="flex items-center gap-1.5 text-sm">
+              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecChrono ? INK : BORDER }}>
+                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecChrono ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+              </span>
+              Chronomètre
+            </button>
+            {avecChrono && (
+              <div className="mt-2 ml-1 space-y-2">
+                <div className="flex gap-1.5">
+                  {[{ k: 'chrono', l: 'Chronomètre' }, { k: 'countdown', l: 'Temps limite' }].map((m) => (
+                    <button key={m.k} onClick={() => setChronoMode(m.k)} className="flex-1 rounded-lg py-2 text-xs border"
+                      style={{ borderColor: chronoMode === m.k ? INK : BORDER, backgroundColor: chronoMode === m.k ? INK : 'transparent', color: chronoMode === m.k ? '#fff' : INK_SOFT }}>
+                      {m.l}
+                    </button>
+                  ))}
+                </div>
+                {chronoMode === 'countdown' && (
+                  <div className="flex gap-2 items-center">
+                    <input type="number" inputMode="numeric" min="0" max="60" value={chronoMin}
+                      onChange={(e) => setChronoMin(e.target.value === '' ? '' : Number(e.target.value))}
+                      onBlur={() => setChronoMin((v) => (v === '' || v === null ? 0 : Math.min(60, Math.max(0, Number(v)))))}
+                      className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
+                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
+                    <span className="text-xs" style={{ color: INK_SOFT }}>min</span>
+                    <input type="number" inputMode="numeric" min="0" max="59" value={chronoSec}
+                      onChange={(e) => setChronoSec(e.target.value === '' ? '' : Number(e.target.value))}
+                      onBlur={() => setChronoSec((v) => (v === '' || v === null ? 0 : Math.min(59, Math.max(0, Number(v)))))}
+                      className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
+                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
+                    <span className="text-xs" style={{ color: INK_SOFT }}>s</span>
+                    <span className="text-xs ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
+                      = {fmtDuration(Math.min(3600, Math.max(5, (Number(chronoMin) || 0) * 60 + (Number(chronoSec) || 0))) * 1000)}
+                    </span>
+                  </div>
+                )}
+                {parEssaiPossible && (
+                  <button onClick={() => setChronoParEssai((v) => !v)} className="flex items-center gap-1.5 text-xs" style={{ color: INK_SOFT }}>
+                    <span className="w-7 h-4 rounded-full relative shrink-0" style={{ backgroundColor: chronoParEssai ? INK : BORDER }}>
+                      <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white" style={{ left: chronoParEssai ? '0.875rem' : '0.125rem', transition: 'left .15s' }} />
+                    </span>
+                    Relancer à chaque essai
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="flex gap-2">
         <Btn onClick={submit} disabled={!name.trim() || (type === 'interval' && levels.length === 0) || ((type === 'chaining' || type === 'balance') && steps.length === 0)} className="flex-1 text-sm">
           {initial ? 'Enregistrer les modifications' : "Ajouter l'objectif"}
@@ -5130,7 +5414,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 /* ==================== Écran 3 : session ==================== */
 function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
-    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} onFinish={onFinish} />;
+    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} notify={notify} onFinish={onFinish} />;
   }
   return (
     <SessionSetup
@@ -5261,32 +5545,25 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
 
   function start() {
     primeAudio();
-    const snapshot = {};
-    const data = {};
-    studentIds.forEach((sid) => {
-      const st = students.find((s) => s.id === sid);
-      data[sid] = {};
-      (selected[sid] || []).forEach((oid) => {
-        const obj = st.objectives.find((o) => o.id === oid);
-        const cible = currentTarget(obj);
-        // Prioritaire si l'objectif l'est en soi, ou s'il l'est pour cet atelier
-        const favorite = !!obj.favorite || (mode === 'atelier' && atelierFavorites.includes(oid));
-        snapshot[oid] = { ...obj, favorite, activeTargetName: cible ? cible.name : null, activePhaseName: currentPhase(obj).name };
-        data[sid][oid] = { ...emptyEntry(obj), targetId: cible ? cible.id : null };
-      });
-    });
+    const stamp = Date.now();
+    const { snapshot, data } = construireDonneesSeance(students, studentIds, selected, atelierFavorites, mode);
+    const presence = {};
+    studentIds.forEach((sid) => { presence[sid] = { from: stamp, to: null }; });
     onStart({
       id: uid(),
-      date: new Date().toISOString(),
-      startedAt: Date.now(),
+      date: new Date(stamp).toISOString(),
+      startedAt: stamp,
       mode,
       atelierId: mode === 'balance' ? null : atelierId,
       intervenantId,
+      doubleCotation,
       studentIds,
       selectedObjectives: selected,
       objectiveSnapshot: snapshot,
       notes: {},
       data,
+      presence,
+      pauses: [],
     });
   }
 
@@ -5462,7 +5739,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                 </div>
                 <div className="space-y-1.5">
                   {lignesNeuves.map((l) => {
-                    const meta = TYPES[l.type];
+                    const meta = typeMeta(l.type);
                     const Icon = meta.icon;
                     return (
                       <div key={l.cle} className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm" style={{ backgroundColor: PAPER }}>
@@ -5497,7 +5774,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
               <div className="space-y-1.5">
                 {visibleObjectives(st).map((o) => {
                   const on = (selected[sid] || []).includes(o.id);
-                  const meta = TYPES[o.type];
+                  const meta = typeMeta(o.type);
                   const Icon = meta.icon;
                   const favAtelier = atelierFavorites.includes(o.id);
                   return (
@@ -5586,7 +5863,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   );
 }
 
-function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, onFinish }) {
+function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, notify, onFinish }) {
   const isEdit = !!session.isEdit;
   const [currentId, setCurrentId] = useState(session.studentIds[0]);
   const [viewMode, setViewMode] = useState('priority');
@@ -5596,6 +5873,11 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const [wakeOk, setWakeOk] = useState(false);
   const stepsRef = useRef({});
   const [expanded, setExpanded] = useState(null); // { sid, oid } de l'objectif agrandi
+
+  /* Feuilles de commande, une seule ouverte à la fois : 'reglages' (ce qui a
+     quitté la barre du haut), 'atelier' (passage à l'atelier suivant),
+     'ajout' (arrivée d'une personne), ou { personne: sid }. */
+  const [feuille, setFeuille] = useState(null);
 
   /* Densité d'affichage. Réduire la taille agrandit d'autant la largeur
      disponible en pixels de mise en page : la grille place alors davantage de
@@ -5634,6 +5916,18 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   };
   const cotationRef = useRef(null);
 
+  /* Personnes dont les cotations sont à l'écran. Une personne repartie sort de
+     la zone de cotation mais reste dans la séance — en correction, tout le
+     monde est coté, sinon on ne pourrait plus reprendre les relevés de
+     quelqu'un qui a quitté l'atelier. */
+  const aCoter = session.studentIds.filter((sid) => isEdit || estPresent(session, sid));
+
+  /* La personne affichée a pu quitter l'atelier ou être retirée : on se rabat
+     sur la première encore à l'écran plutôt que de rendre une vue vide. */
+  useEffect(() => {
+    if (aCoter.length && !aCoter.includes(currentId)) setCurrentId(aCoter[0]);
+  }, [aCoter.join('|'), currentId]);
+
   /* Réordonne les objectifs d'une personne. En vue Prioritaires on ne déplace
      qu'un sous-ensemble : les positions occupées par ce sous-ensemble dans la
      liste complète sont réutilisées, l'ordre des autres reste intact. */
@@ -5642,7 +5936,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      qui n'y figurent pas encore sont ajoutés à la suite. */
   const priorityItems = (() => {
     const naturel = [];
-    session.studentIds.forEach((sid) => {
+    aCoter.forEach((sid) => {
       (session.selectedObjectives[sid] || []).forEach((oid) => {
         const o = session.objectiveSnapshot[oid];
         if (!o) return;
@@ -5745,24 +6039,28 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const objIds = session.selectedObjectives[currentId] || [];
   const hasInterval = Object.values(session.objectiveSnapshot || {}).some((o) => o && o.type === 'interval');
 
+  /* Les pauses sont historisées en plus du cumul `pausedMs` : une personne
+     arrivée ou repartie en cours de séance ne doit se voir décompter que les
+     pauses qui recoupent réellement sa présence. */
   function togglePause() {
     setSession((s0) => {
+      const stamp = Date.now();
       if (s0.pausedAt) {
-        return { ...s0, pausedMs: (s0.pausedMs || 0) + (Date.now() - s0.pausedAt), pausedAt: null };
+        const pauses = (s0.pauses || []).slice();
+        const i = pauses.findIndex((p) => p.from === s0.pausedAt && p.to == null);
+        if (i >= 0) pauses[i] = { ...pauses[i], to: stamp };
+        else pauses.push({ from: s0.pausedAt, to: stamp });
+        return { ...s0, pauses, pausedMs: (s0.pausedMs || 0) + (stamp - s0.pausedAt), pausedAt: null };
       }
       // On arrête les chronomètres en cours pour ne pas compter le temps de pause
-      const stamp = Date.now();
       const data = {};
       Object.entries(s0.data || {}).forEach(([sid, objs]) => {
         data[sid] = {};
         Object.entries(objs).forEach(([oid, e]) => {
-          data[sid][oid] =
-            e && e.running && e.startedAt
-              ? { ...e, running: false, elapsedMs: (e.elapsedMs || 0) + (stamp - e.startedAt), startedAt: null }
-              : e;
+          data[sid][oid] = figerChronos(e, stamp, false);
         });
       });
-      return { ...s0, data, pausedAt: stamp };
+      return { ...s0, data, pausedAt: stamp, pauses: [...(s0.pauses || []), { from: stamp, to: null }] };
     });
   }
 
@@ -5789,9 +6087,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
         const objs = s0.data[sid] || {};
         const maj = {};
         Object.entries(objs).forEach(([oid, e]) => {
-          maj[oid] = e && e.running && e.startedAt
-            ? { ...e, running: false, elapsedMs: (e.elapsedMs || 0) + (stamp - e.startedAt), pendingMs: (e.pendingMs || 0) + (stamp - e.startedAt), startedAt: null }
-            : e;
+          maj[oid] = figerChronos(e, stamp, true);
         });
         data = { ...s0.data, [sid]: maj };
       }
@@ -5817,17 +6113,71 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     }));
   }
 
+  /* Arrivée, départ, suppression : la logique vit dans les fonctions de
+     premier niveau (App.jsx), ici seulement le geste et le retour visuel. */
+  function ajouter(sid, oids) {
+    const st = students.find((s) => s.id === sid);
+    if (!st) return;
+    const atelier = ateliers.find((a) => a.id === session.atelierId);
+    setSession((s0) => ajouterPersonne(s0, st, oids, Date.now(), (atelier && atelier.favoriteObjectiveIds) || []));
+    setFeuille(null);
+    if (notify) notify(`${st.initials} — ajout à la séance`);
+  }
+  function partir(sid) {
+    setSession((s0) => retirerPersonne(s0, sid, Date.now()));
+    setFeuille(null);
+  }
+  function fairRevenir(sid) {
+    const st = students.find((s) => s.id === sid);
+    if (!st) return;
+    setSession((s0) => ajouterPersonne(s0, st, s0.selectedObjectives[sid] || [], Date.now(), []));
+  }
+  function supprimer(sid) {
+    setSession((s0) => supprimerPersonne(s0, sid));
+    setFeuille(null);
+  }
+
   const pausedTotal = session.pausedMs || 0;
   const isPaused = !!session.pausedAt;
   const elapsed = isEdit
     ? Math.max(0, (session.endedAt || session.startedAt) - session.startedAt - pausedTotal)
     : Math.max(0, (isPaused ? session.pausedAt : now) - session.startedAt - pausedTotal);
 
+  const nbMasques = Object.values(session.hidden || {}).reduce((a, l) => a + l.length, 0);
+
+  function abandonner() {
+    if (window.confirm('Abandonner cette séance ? Toutes les cotations en cours seront perdues.')) setSession(null);
+  }
+
+  function changerAtelier(atelierId, keepIds) {
+    const cible = ateliers.find((a) => a.id === atelierId);
+    const selected = {};
+    keepIds.forEach((sid) => {
+      selected[sid] = objectifsParDefaut(students.find((s) => s.id === sid), cible, session.mode);
+    });
+    const { close, next } = chainerAtelier(session, atelierId, {
+      students, studentIds: keepIds, selected, favorites: (cible && cible.favoriteObjectiveIds) || [],
+    }, Date.now());
+    setFeuille(null);
+    onFinish(close, next);
+  }
+
   return (
     <div>
       <div className="flex flex-col gap-2 mb-4 landscape:flex-row landscape:items-start landscape:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>{atelier ? atelier.name : session.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</h1>
+          {isEdit ? (
+            <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>
+              {atelier ? atelier.name : session.mode === 'balance' ? 'Balance Program' : 'Séance libre'}
+            </h1>
+          ) : (
+            <button onClick={() => setFeuille('atelier')} className="flex items-center gap-1 max-w-full text-left" title="Changer d'atelier">
+              <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>
+                {atelier ? atelier.name : session.mode === 'balance' ? 'Balance Program' : 'Séance libre'}
+              </h1>
+              <ChevronDown size={16} style={{ color: INK_SOFT }} className="shrink-0" />
+            </button>
+          )}
           <p className="text-sm" style={{ color: INK_SOFT }}>
             {isEdit ? <>Correction · {new Date(session.date).toLocaleDateString('fr-FR')} {timeShort(session.date)}</> : <span style={{ fontFamily: F_MONO }}>{fmtClock(elapsed)}</span>}
             {intervenant && <> · {intervenant.name}</>}
@@ -5835,41 +6185,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           </p>
         </div>
         <div className="flex flex-wrap gap-2 shrink-0">
-          {hasInterval && !isEdit && (
-            <button
-              onClick={() => { const next = !soundOn; setSoundOn(next); if (next) { primeAudio(); beep(); } }}
-              className="rounded-xl px-3 py-2.5 border"
-              style={{ borderColor: BORDER, color: soundOn ? INK : INK_SOFT, backgroundColor: CARD }}
-              title={soundOn ? 'Alerte sonore activée' : 'Alerte sonore coupée'}
-            >
-              {soundOn ? <Volume2 size={17} /> : <VolumeX size={17} />}
-            </button>
-          )}
-          {hasInterval && !isEdit && vibrateSupported() && (
-            <button
-              onClick={() => {
-                const next = !vibrateOn;
-                setVibrateOn(next);
-                if (next) { try { navigator.vibrate([200, 100, 200]); } catch (e) {} }
-              }}
-              className="rounded-xl px-3 py-2.5 border"
-              style={{ borderColor: BORDER, color: vibrateOn ? INK : INK_SOFT, backgroundColor: CARD }}
-              title={vibrateOn ? 'Vibration activée' : 'Vibration coupée'}
-            >
-              <Vibrate size={17} />
-            </button>
-          )}
           {isEdit && (
             <Btn variant="ghost" onClick={() => setSession(null)} className="text-sm py-2.5">Annuler</Btn>
           )}
-          <button
-            onClick={cycleZoom}
-            className="rounded-xl px-3 py-2.5 border text-xs font-medium"
-            style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD, fontFamily: F_MONO }}
-            title="Densité d'affichage : plus d'objectifs à l'écran"
-          >
-            {(ZOOM_LEVELS.find((z) => z.v === zoom) || ZOOM_LEVELS[0]).l}
-          </button>
           {!isEdit && (
             <button
               onClick={togglePause}
@@ -5882,14 +6200,17 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           )}
           {!isEdit && (
             <button
-              onClick={() => {
-                if (window.confirm('Abandonner cette séance ? Toutes les cotations en cours seront perdues.')) setSession(null);
-              }}
-              className="rounded-xl px-3 py-2.5 border"
+              onClick={() => setFeuille('reglages')}
+              className="rounded-xl px-3 py-2.5 border relative"
               style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-              title="Abandonner la séance"
+              title="Réglages de la séance"
             >
-              <X size={17} />
+              <SlidersHorizontal size={17} />
+              {nbMasques > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center" style={{ backgroundColor: INK, color: '#fff', fontFamily: F_MONO }}>
+                  {nbMasques}
+                </span>
+              )}
             </button>
           )}
           <Btn variant="outline" onClick={() => onFinish(finalizeSession(session))} className="text-sm py-2.5">
@@ -5897,19 +6218,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           </Btn>
         </div>
       </div>
-
-      {(() => {
-        const nb = Object.values(session.hidden || {}).reduce((a, l) => a + l.length, 0);
-        return nb > 0 ? (
-          <button
-            onClick={() => setSession((s0) => ({ ...s0, hidden: {} }))}
-            className="w-full rounded-xl border px-3 py-2 mb-4 text-xs flex items-center justify-center gap-1.5"
-            style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-          >
-            <Eye size={13} /> {nb} objectif{nb > 1 ? 's' : ''} masqué{nb > 1 ? 's' : ''} — tout réafficher
-          </button>
-        ) : null;
-      })()}
 
       {isPaused && (
         <div className="rounded-xl px-3 py-2.5 mb-4 flex items-center gap-2 text-sm" style={{ backgroundColor: INK, color: '#fff' }}>
@@ -5947,35 +6255,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           })}
         </div>
       </div>
-
-      {!isEdit && (
-        <div className="flex flex-wrap gap-1.5 mb-3">
-          {session.studentIds.map((sid) => {
-            const st = students.find((x) => x.id === sid);
-            if (!st) return null;
-            const actif = enRenfo(sid);
-            const total = renfoTotal(sid);
-            return (
-              <button
-                key={sid}
-                onClick={() => toggleRenfo(sid)}
-                className="rounded-xl px-3 py-2 text-sm flex items-center gap-1.5 border"
-                style={{
-                  fontFamily: F_DISPLAY,
-                  borderColor: actif ? '#D69A2D' : BORDER,
-                  backgroundColor: actif ? '#D69A2D' : CARD,
-                  color: actif ? '#fff' : INK_SOFT,
-                }}
-                title={actif ? 'Reprendre les cotations' : 'Mettre en renforcement'}
-              >
-                <span className="font-semibold">{st.initials}</span>
-                <Gift size={14} />
-                {total > 0 && <span style={{ fontFamily: F_MONO }}>{fmtClock(total)}</span>}
-              </button>
-            );
-          })}
-        </div>
-      )}
 
       <div
         className="flex gap-3"
@@ -6153,28 +6432,351 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           </div>
         )}
 
-        {/* Rail de navigation entre personnes */}
-        <div className="shrink-0 flex flex-col gap-2 sticky top-20 self-start">
+        {/* Rail de personnes : navigation, renforcement, arrivée et départ —
+            les trois se jouaient auparavant à trois endroits de l'écran. */}
+        <div className="shrink-0 flex flex-col gap-1.5 sticky top-20 self-start">
           {session.studentIds.map((sid) => {
             const st = students.find((s) => s.id === sid);
             if (!st) return null;
+            const present = isEdit || estPresent(session, sid);
             const on = viewMode === 'student' && sid === currentId;
+            const actif = enRenfo(sid);
+            const total = renfoTotal(sid);
             return (
-              <button
-                key={sid}
-                onClick={() => { setCurrentId(sid); setViewMode('student'); }}
-                className="w-14 h-14 rounded-full flex items-center justify-center text-sm font-semibold border-2 transition-transform active:scale-95"
-                style={{
-                  fontFamily: F_DISPLAY,
-                  backgroundColor: on ? INK : CARD,
-                  color: on ? '#fff' : INK_SOFT,
-                  borderColor: on ? INK : BORDER,
-                }}
-              >
-                {st.initials.replace(/\./g, '').slice(0, 3)}
-              </button>
+              <div key={sid} className="flex flex-col items-center gap-0.5">
+                <button
+                  onClick={() => {
+                    if (!present) { fairRevenir(sid); return; }
+                    setCurrentId(sid); setViewMode('student');
+                  }}
+                  className="relative w-14 h-14 rounded-full flex items-center justify-center text-sm font-semibold border-2 transition-transform active:scale-95"
+                  style={{
+                    fontFamily: F_DISPLAY,
+                    opacity: present ? 1 : 0.45,
+                    backgroundColor: actif ? '#D69A2D' : on ? INK : CARD,
+                    color: actif || on ? '#fff' : INK_SOFT,
+                    borderColor: actif ? '#D69A2D' : on ? INK : BORDER,
+                  }}
+                  title={!present ? 'Reparti de l’atelier — appuyer pour faire revenir' : undefined}
+                >
+                  {st.initials.replace(/\./g, '').slice(0, 3)}
+                  {actif && (
+                    <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: '#D69A2D', color: '#fff', border: `2px solid ${CARD}` }}>
+                      <Gift size={10} />
+                    </span>
+                  )}
+                </button>
+                {actif && total > 0 && (
+                  <span className="text-[10px]" style={{ fontFamily: F_MONO, color: '#D69A2D' }}>{fmtClock(total)}</span>
+                )}
+                {!isEdit && (
+                  <button onClick={() => setFeuille({ personne: sid })} style={{ color: INK_SOFT }} title="Options">
+                    <ChevronDown size={14} />
+                  </button>
+                )}
+              </div>
             );
           })}
+          {!isEdit && students.some((s) => !session.studentIds.includes(s.id)) && (
+            <button
+              onClick={() => setFeuille('ajout')}
+              className="w-14 h-14 rounded-full flex items-center justify-center border-2 border-dashed mt-1"
+              style={{ borderColor: BORDER, color: INK_SOFT }}
+              title="Ajouter une personne"
+            >
+              <Plus size={20} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {feuille === 'reglages' && (
+        <FeuilleReglages
+          hasInterval={hasInterval}
+          soundOn={soundOn} setSoundOn={setSoundOn}
+          vibrateOn={vibrateOn} setVibrateOn={setVibrateOn}
+          zoom={zoom} cycleZoom={cycleZoom}
+          hiddenCount={nbMasques}
+          onReafficher={() => { setSession((s0) => ({ ...s0, hidden: {} })); setFeuille(null); }}
+          onAbandon={() => { setFeuille(null); abandonner(); }}
+          onClose={() => setFeuille(null)}
+        />
+      )}
+
+      {feuille === 'atelier' && (
+        <FeuilleAtelier
+          session={session} ateliers={ateliers} students={students} aCoter={aCoter}
+          onClose={() => setFeuille(null)}
+          onConfirm={changerAtelier}
+        />
+      )}
+
+      {feuille === 'ajout' && (
+        <FeuilleAjout
+          session={session} students={students}
+          atelier={ateliers.find((a) => a.id === session.atelierId)}
+          onClose={() => setFeuille(null)}
+          onConfirm={ajouter}
+        />
+      )}
+
+      {feuille && feuille.personne && (
+        <FeuillePersonne
+          sid={feuille.personne}
+          students={students}
+          present={isEdit || estPresent(session, feuille.personne)}
+          renfoSuivi={!!(students.find((s) => s.id === feuille.personne) || {}).suiviRenforcement}
+          renfoActif={enRenfo(feuille.personne)}
+          renfoTotalMs={renfoTotal(feuille.personne)}
+          onToggleRenfo={() => { toggleRenfo(feuille.personne); setFeuille(null); }}
+          onPartir={() => partir(feuille.personne)}
+          onFaireRevenir={() => { fairRevenir(feuille.personne); setFeuille(null); }}
+          onSupprimer={() => supprimer(feuille.personne)}
+          onClose={() => setFeuille(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* --- Feuilles de commande de la séance en cours ---
+   Composants à part entière (et non des fonctions imbriquées) pour que leurs
+   propres useState ne soient montés que le temps où la feuille est ouverte. */
+
+function FeuilleReglages({ hasInterval, soundOn, setSoundOn, vibrateOn, setVibrateOn, zoom, cycleZoom, hiddenCount, onReafficher, onAbandon, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Réglages de la séance</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        <div className="space-y-1.5">
+          <button onClick={cycleZoom} className="w-full rounded-xl px-3 py-2.5 flex items-center justify-between border text-sm" style={{ borderColor: BORDER }}>
+            <span className="flex items-center gap-2"><SlidersHorizontal size={16} /> Densité d'affichage</span>
+            <span style={{ fontFamily: F_MONO, color: INK_SOFT }}>{(ZOOM_LEVELS.find((z) => z.v === zoom) || ZOOM_LEVELS[0]).l}</span>
+          </button>
+          {hasInterval && (
+            <button
+              onClick={() => { const next = !soundOn; setSoundOn(next); if (next) { primeAudio(); beep(); } }}
+              className="w-full rounded-xl px-3 py-2.5 flex items-center justify-between border text-sm" style={{ borderColor: BORDER }}
+            >
+              <span className="flex items-center gap-2">{soundOn ? <Volume2 size={16} /> : <VolumeX size={16} />} Alerte sonore</span>
+              <span style={{ color: INK_SOFT }}>{soundOn ? 'Activée' : 'Coupée'}</span>
+            </button>
+          )}
+          {hasInterval && vibrateSupported() && (
+            <button
+              onClick={() => { const next = !vibrateOn; setVibrateOn(next); if (next) { try { navigator.vibrate([200, 100, 200]); } catch (e) {} } }}
+              className="w-full rounded-xl px-3 py-2.5 flex items-center justify-between border text-sm" style={{ borderColor: BORDER }}
+            >
+              <span className="flex items-center gap-2"><Vibrate size={16} /> Vibration</span>
+              <span style={{ color: INK_SOFT }}>{vibrateOn ? 'Activée' : 'Coupée'}</span>
+            </button>
+          )}
+          {hiddenCount > 0 && (
+            <button onClick={onReafficher} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm" style={{ borderColor: BORDER }}>
+              <Eye size={16} /> {hiddenCount} objectif{hiddenCount > 1 ? 's' : ''} masqué{hiddenCount > 1 ? 's' : ''} — tout réafficher
+            </button>
+          )}
+          <button onClick={onAbandon} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 text-sm" style={{ color: CRISIS }}>
+            <X size={16} /> Abandonner la séance
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Passage à l'atelier suivant : la séance en cours est enregistrée telle
+   quelle, une nouvelle démarre sur l'atelier choisi. Précoché par défaut :
+   les personnes présentes qui sont aussi habituées du nouvel atelier ; les
+   habituées absentes de la séance en cours restent proposées, décochées. */
+function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfirm }) {
+  const [atelierId, setAtelierId] = useState(null);
+  const [checked, setChecked] = useState(() => new Set(aCoter));
+  const atelier = ateliers.find((a) => a.id === atelierId);
+
+  function choisir(id) {
+    setAtelierId(id);
+    const cible = ateliers.find((a) => a.id === id);
+    const usual = (cible && cible.usualStudentIds) || [];
+    setChecked(new Set(usual.length ? aCoter.filter((sid) => usual.includes(sid)) : aCoter));
+  }
+
+  const candidats = atelier
+    ? students.filter((s) => aCoter.includes(s.id) || (atelier.usualStudentIds || []).includes(s.id))
+    : [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="rounded-2xl p-5 max-w-sm w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Passer à l'atelier suivant</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          La séance en cours est enregistrée telle quelle. La nouvelle démarre avec un
+          chronomètre et un temps de renforcement remis à zéro.
+        </p>
+        {ateliers.filter((a) => a.id !== session.atelierId).length === 0 ? (
+          <Empty>Aucun autre atelier n'est configuré.</Empty>
+        ) : (
+          <div className="space-y-1.5 mb-3">
+            {ateliers.filter((a) => a.id !== session.atelierId).map((a) => (
+              <button
+                key={a.id} onClick={() => choisir(a.id)}
+                className="w-full rounded-xl px-3 py-2.5 text-left border"
+                style={{ borderColor: atelierId === a.id ? INK : BORDER, backgroundColor: atelierId === a.id ? INK : 'transparent', color: atelierId === a.id ? '#fff' : INK }}
+              >
+                {a.name}
+              </button>
+            ))}
+          </div>
+        )}
+        {atelier && (
+          <>
+            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Personnes à reporter</div>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {candidats.map((s) => {
+                const on = checked.has(s.id);
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => setChecked((c) => { const n = new Set(c); if (n.has(s.id)) n.delete(s.id); else n.add(s.id); return n; })}
+                    className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
+                    style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}
+                  >
+                    {s.initials}
+                  </button>
+                );
+              })}
+            </div>
+            <Btn onClick={() => onConfirm(atelierId, Array.from(checked))} disabled={checked.size === 0} className="w-full">
+              <Play size={16} /> Enregistrer et lancer « {atelier.name} »
+            </Btn>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* Arrivée en cours de séance : objectifs précochés d'après ce qui est
+   mémorisé pour cet atelier, à défaut les objectifs prioritaires. */
+function FeuilleAjout({ session, students, atelier, onClose, onConfirm }) {
+  const absents = students.filter((s) => !session.studentIds.includes(s.id));
+  const [sid, setSid] = useState(absents[0] ? absents[0].id : null);
+  const st = students.find((s) => s.id === sid);
+  const [oids, setOids] = useState(() => objectifsParDefaut(st, atelier, session.mode));
+
+  function choisir(id) {
+    setSid(id);
+    setOids(objectifsParDefaut(students.find((s) => s.id === id), atelier, session.mode));
+  }
+
+  if (!absents.length) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+        <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
+          <div className="flex items-center justify-between mb-3">
+            <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Ajouter une personne</span>
+            <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+          </div>
+          <Empty>Toutes les personnes enregistrées sont déjà dans cette séance.</Empty>
+        </div>
+      </div>
+    );
+  }
+
+  const visibles = st ? (session.mode === 'balance' ? st.objectives.filter((o) => o.type === 'balance') : st.objectives) : [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="rounded-2xl p-5 max-w-sm w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Ajouter une personne</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {absents.map((s) => (
+            <button
+              key={s.id} onClick={() => choisir(s.id)}
+              className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
+              style={{ fontFamily: F_DISPLAY, borderColor: sid === s.id ? INK : BORDER, backgroundColor: sid === s.id ? INK : 'transparent', color: sid === s.id ? '#fff' : INK_SOFT }}
+            >
+              {s.initials}
+            </button>
+          ))}
+        </div>
+        {st && (
+          visibles.length === 0 ? (
+            <Empty>Aucun objectif défini pour cette personne.</Empty>
+          ) : (
+            <div className="space-y-1.5 mb-4">
+              {visibles.map((o) => {
+                const on = oids.includes(o.id);
+                const meta = typeMeta(o.type);
+                const Icon = meta.icon;
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => setOids((l) => (l.includes(o.id) ? l.filter((x) => x !== o.id) : [...l, o.id]))}
+                    className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left"
+                    style={{ borderColor: on ? meta.color : BORDER, backgroundColor: on ? meta.color + '14' : 'transparent' }}
+                  >
+                    <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
+                    <span className="flex-1 min-w-0">{o.name}</span>
+                    {on && <Check size={15} style={{ color: meta.color }} className="shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          )
+        )}
+        <Btn onClick={() => onConfirm(sid, oids)} disabled={!st || oids.length === 0} className="w-full">
+          <Plus size={16} /> Ajouter à la séance
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+/* Actions propres à une personne de la séance. Départ (cotations conservées)
+   et suppression (destructif) sont volontairement deux commandes distinctes :
+   un bouton unique aurait effacé des données sans le dire clairement. */
+function FeuillePersonne({ sid, students, present, renfoSuivi, renfoActif, renfoTotalMs, onToggleRenfo, onPartir, onFaireRevenir, onSupprimer, onClose }) {
+  const st = students.find((s) => s.id === sid);
+  if (!st) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{st.initials}</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        <div className="space-y-1.5">
+          {present && (renfoSuivi || renfoActif) && (
+            <button onClick={onToggleRenfo} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left" style={{ borderColor: BORDER }}>
+              <Gift size={16} /> {renfoActif ? `Reprendre les cotations (${fmtClock(renfoTotalMs)} de renforcement)` : 'Mettre en renforcement'}
+            </button>
+          )}
+          {present ? (
+            <button onClick={onPartir} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left" style={{ borderColor: BORDER }}>
+              <Users size={16} /> A quitté l'atelier — garder ses cotations
+            </button>
+          ) : (
+            <button onClick={onFaireRevenir} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left" style={{ borderColor: BORDER }}>
+              <Users size={16} /> Faire revenir dans l'atelier
+            </button>
+          )}
+          <button
+            onClick={() => { if (window.confirm(`Retirer ${st.initials} de cette séance ? Ses cotations seront perdues.`)) onSupprimer(); }}
+            className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 text-sm text-left"
+            style={{ color: CRISIS }}
+          >
+            <Trash2 size={16} /> Retirer de la séance — supprime ses cotations
+          </button>
         </div>
       </div>
     </div>
@@ -6205,7 +6807,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
   if (!obj) return null;
   const crisisSet =
     obj.type === 'interval' ? crisisIntervals(session, crises, intervalStepSec(obj) / 60, studentId) : null;
-  const meta = TYPES[obj.type];
+  const meta = typeMeta(obj.type);
   const Icon = meta.icon;
 
   if (hidden) {
@@ -6272,21 +6874,34 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
         </div>
       )}
       <div className="mt-3" style={paused && !forcer ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
-        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} now={now} onChange={onChange} />}
-        {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
-        {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
-        {obj.type === 'timer' && <TimerWidget obj={obj} entry={entry} now={now} onChange={onChange} />}
+        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
         {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
-        {obj.type === 'latency' && <LatencyWidget entry={entry} now={now} onChange={onChange} />}
         {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} />}
+        {!TYPES[obj.type] && (
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            Ce mode de cotation a été retiré. L'objectif est à recréer dans un mode disponible.
+          </div>
+        )}
+        {(obj.config.avecCompteur || obj.config.avecChrono) && (
+          <MesuresAuxiliaires
+            mesures={entry && entry.mesures}
+            avecCompteur={!!obj.config.avecCompteur}
+            avecChrono={!!obj.config.avecChrono}
+            chronoMode={obj.config.chronoMode}
+            chronoSeconds={obj.config.chronoSeconds}
+            now={now}
+            couleur={meta.color}
+            onChange={(mesures) => onChange({ mesures })}
+          />
+        )}
       </div>
     </Card>
   );
 }
 
 function ObjectiveHeader({ obj, entry, guidances }) {
-  const meta = TYPES[obj.type];
+  const meta = typeMeta(obj.type);
   const Icon = meta.icon;
   const { result } = summarize(obj, entry, guidances);
   const cible = obj.activeTargetName;
@@ -6308,110 +6923,215 @@ function ObjectiveHeader({ obj, entry, guidances }) {
   );
 }
 
+/* --- Compteur et chronomètre auxiliaires ---
+   Une donnée à part de la cotation : disponible sur les quatre modes de
+   cotation (si l'option est paramétrée sur l'objectif) et, sans réglage,
+   sur les fiches crise et ABC. Composant unique pour les deux emplacements
+   — CLAUDE.md interdit les implémentations parallèles. */
+function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chronoSeconds, now, couleur, onChange }) {
+  /* Deux booléens indépendants plutôt qu'un seul « panneau ouvert » : le
+     compteur et le chrono se pilotent en même temps, sans que l'ouverture de
+     l'un ne referme l'autre. */
+  const [ouvertCompteur, setOuvertCompteur] = useState(false);
+  const [ouvertChrono, setOuvertChrono] = useState(false);
+  const m = mesures || mesuresVides();
+  const compteur = m.compteur || mesuresVides().compteur;
+  const chrono = m.chrono || mesuresVides().chrono;
+  const chronoAffiche = chrono.running ? (chrono.elapsedMs || 0) + (now - chrono.startedAt) : (chrono.elapsedMs || 0);
+
+  /* Temps limite : sur le même principe que l'ancien chrono par essai — une
+     alerte sonore et vibrée une seule fois, puis le chrono se fige à la
+     limite sans se valider tout seul. */
+  const countdown = chronoMode === 'countdown' && chronoSeconds > 0;
+  const targetMs = (chronoSeconds || 0) * 1000;
+  const ecoule = countdown && chronoAffiche >= targetMs;
+  const sonne = useRef(false);
+
+  useEffect(() => {
+    if (!countdown || !chrono.running || sonne.current) return;
+    if (chronoAffiche >= targetMs) {
+      sonne.current = true;
+      alertInterval({ soundOn: true, vibrateOn: true });
+      onChange({ ...m, chrono: { ...chrono, running: false, elapsedMs: targetMs, startedAt: null } });
+    }
+  });
+  useEffect(() => {
+    if (!chrono.running) sonne.current = false;
+  }, [chrono.running]);
+
+  function ecrire(patch) {
+    onChange({ ...m, ...patch });
+  }
+
+  function ajusterCompteur(delta) {
+    ecrire({ compteur: { total: Math.max(0, compteur.total + delta), valideA: null } });
+  }
+  function validerCompteur() {
+    ecrire({ compteur: { ...compteur, valideA: new Date().toISOString() } });
+    setOuvertCompteur(false);
+  }
+
+  function basculerChrono() {
+    if (chrono.running) {
+      ecrire({ chrono: { ...chrono, running: false, elapsedMs: (chrono.elapsedMs || 0) + (Date.now() - chrono.startedAt), startedAt: null, valideA: null } });
+      return;
+    }
+    if (countdown && (chrono.elapsedMs || 0) >= targetMs) {
+      sonne.current = false;
+      ecrire({ chrono: { elapsedMs: 0, running: true, startedAt: Date.now(), valideA: null } });
+      return;
+    }
+    ecrire({ chrono: { ...chrono, running: true, startedAt: Date.now(), valideA: null } });
+  }
+  function validerChrono() {
+    const fige = chrono.running
+      ? { ...chrono, running: false, elapsedMs: (chrono.elapsedMs || 0) + (Date.now() - chrono.startedAt), startedAt: null }
+      : chrono;
+    ecrire({ chrono: { ...fige, valideA: new Date().toISOString() } });
+    setOuvertChrono(false);
+  }
+
+  if (!avecCompteur && !avecChrono) return null;
+
+  return (
+    <div className="mt-2.5">
+      <div className="flex items-center gap-3">
+        {avecCompteur && (
+          <button
+            onClick={() => setOuvertCompteur((v) => !v)}
+            className="flex items-center gap-1.5 text-xs py-1 px-0.5"
+            style={{ color: INK_SOFT }}
+            title="Compteur auxiliaire"
+          >
+            <Hash size={18} />
+            {compteur.total > 0 && <span style={{ fontFamily: F_MONO }}>{compteur.total}</span>}
+            {compteur.valideA && <Check size={12} style={{ color: COLOR_COMPTEUR }} />}
+          </button>
+        )}
+        {avecChrono && (
+          <button
+            onClick={() => setOuvertChrono((v) => !v)}
+            className="flex items-center gap-1.5 text-xs py-1 px-0.5"
+            style={{ color: INK_SOFT }}
+            title="Chronomètre auxiliaire"
+          >
+            <TimerIcon size={18} />
+            {chronoAffiche > 0 && <span style={{ fontFamily: F_MONO }}>{fmtClock(chronoAffiche)}</span>}
+            {chrono.valideA && <Check size={12} style={{ color: COLOR_CHRONO }} />}
+          </button>
+        )}
+      </div>
+
+      {ouvertCompteur && (
+        <div className="mt-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+          <div className="flex items-center gap-3">
+            <button onClick={() => ajusterCompteur(-1)} disabled={compteur.total === 0}
+              className="w-10 h-10 rounded-lg border flex items-center justify-center text-lg disabled:opacity-30"
+              style={{ borderColor: BORDER, color: INK_SOFT }}>−</button>
+            <button onClick={() => ajusterCompteur(1)}
+              className="flex-1 rounded-lg py-3 text-white active:scale-95 transition-transform"
+              style={{ backgroundColor: COLOR_COMPTEUR }}>
+              <span className="text-xl font-semibold" style={{ fontFamily: F_MONO }}>{compteur.total}</span>
+              <span className="text-xs ml-2 opacity-90">+1</span>
+            </button>
+          </div>
+          <button onClick={validerCompteur} className="mt-2 w-full text-xs flex items-center justify-center gap-1.5 py-1.5" style={{ color: INK_SOFT }}>
+            <Check size={12} /> Enregistrer ce comptage
+          </button>
+        </div>
+      )}
+
+      {ouvertChrono && (
+        <div className="mt-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+          <div className="flex items-center gap-3">
+            <span className="text-xl font-semibold tabular-nums" style={{ fontFamily: F_MONO, color: ecoule ? COLOR_CHRONO : INK }}>
+              {fmtClock(countdown ? Math.max(0, targetMs - chronoAffiche) : chronoAffiche)}
+            </span>
+            {countdown && (
+              <span className="text-xs" style={{ color: INK_SOFT }}>{ecoule ? 'temps écoulé' : `sur ${fmtDuration(targetMs)}`}</span>
+            )}
+            <button onClick={basculerChrono}
+              className="ml-auto rounded-lg px-4 py-2.5 text-white flex items-center gap-1.5 active:scale-95 transition-transform"
+              style={{ backgroundColor: chrono.running ? '#A8402F' : COLOR_CHRONO, fontFamily: F_DISPLAY }}>
+              {chrono.running ? <><Pause size={15} /> Arrêter</> : <><Play size={15} /> Démarrer</>}
+            </button>
+            {(chronoAffiche > 0 || chrono.running) && (
+              <button onClick={() => ecrire({ chrono: { elapsedMs: 0, running: false, startedAt: null, valideA: null } })} style={{ color: INK_SOFT }}>
+                <RotateCcw size={15} />
+              </button>
+            )}
+          </div>
+          <button onClick={validerChrono} className="mt-2 w-full text-xs flex items-center justify-center gap-1.5 py-1.5" style={{ color: INK_SOFT }}>
+            <Check size={12} /> Enregistrer cette durée
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* --- Widgets de cotation --- */
-function TrialsWidget({ obj, entry, guidances, now, onChange }) {
+function TrialsWidget({ obj, entry, guidances, onChange }) {
   const list = objectiveGuidances(obj, guidances);
   const trials = entry.trials || [];
   const planned = obj.config.trialCount || 0; // 0 = pas de limite
   const done = trials.filter((t) => trialCode(t)).length;
   const unlimited = !planned;
 
-  /* Chronométrage : le temps court à partir de la consigne et se fige dès que
-     l'essai est coté. Chaque essai garde ainsi sa propre durée. */
-  const withTimer = !!obj.config.withTimer;
-  const countdown = withTimer && obj.config.timerMode === 'countdown' && obj.config.timerSeconds > 0;
-  const targetMs = (obj.config.timerSeconds || 0) * 1000;
-  const enCours = !!entry.running;
-  const chrono = enCours ? (entry.pendingMs || 0) + (now - entry.startedAt) : (entry.pendingMs || 0);
-  const ecoule = countdown && chrono >= targetMs;
-  const sonne = useRef(false);
-
-  useEffect(() => {
-    if (!countdown || !enCours || sonne.current) return;
-    if (chrono >= targetMs) {
-      sonne.current = true;
-      alertInterval({ soundOn: true, vibrateOn: true });
-      onChange({ running: false, pendingMs: targetMs, startedAt: null });
-    }
-  });
-  useEffect(() => {
-    if (!enCours) sonne.current = false;
-  }, [enCours]);
+  /* Relance à chaque essai : le compteur et/ou le chrono auxiliaires, s'ils
+     sont paramétrés ainsi, se figent sous l'essai qu'on vient de coter puis
+     repartent de zéro pour le suivant. */
+  const compteurParEssai = !!(obj.config.avecCompteur && obj.config.compteurParEssai);
+  const chronoParEssai = !!(obj.config.avecChrono && obj.config.chronoParEssai);
 
   const cells = unlimited ? [...trials.filter((t) => trialCode(t)), null] : trials;
 
   function record(code) {
-    const ms = withTimer ? chrono : null;
-    const valeur = withTimer ? { code, ms } : code;
-    const reset = withTimer ? { running: false, startedAt: null, pendingMs: 0 } : {};
-
+    let next;
+    let idx;
     if (unlimited) {
-      onChange({ trials: [...trials.filter((t) => trialCode(t)), valeur], ...reset });
-      return;
+      next = [...trials.filter((t) => trialCode(t)), code];
+      idx = next.length - 1;
+    } else {
+      const empty = trials.findIndex((t) => !trialCode(t));
+      if (empty === -1) {
+        next = [...trials, code];
+        idx = next.length - 1;
+      } else {
+        next = trials.slice();
+        next[empty] = code;
+        idx = empty;
+      }
     }
-    const idx = trials.findIndex((t) => !trialCode(t));
-    if (idx === -1) {
-      onChange({ trials: [...trials, valeur], ...reset });
-      return;
+    const patch = { trials: next };
+    if (compteurParEssai || chronoParEssai) {
+      Object.assign(patch, relancerMesures(entry, idx, compteurParEssai, chronoParEssai, Date.now()));
     }
-    const next = trials.slice();
-    next[idx] = valeur;
-    onChange({ trials: next, ...reset });
+    onChange(patch);
   }
 
   function undo() {
     if (!done) return;
     if (unlimited || done > planned) {
       const kept = trials.filter((t) => trialCode(t));
+      const removedIdx = kept.length - 1;
       kept.pop();
-      onChange({ trials: unlimited ? kept : [...kept, ...Array(Math.max(0, planned - kept.length)).fill(null)] });
+      const patch = { trials: unlimited ? kept : [...kept, ...Array(Math.max(0, planned - kept.length)).fill(null)] };
+      if (entry.mesuresEssais) patch.mesuresEssais = reindexMesuresEssais(entry.mesuresEssais, removedIdx);
+      onChange(patch);
       return;
     }
     const next = trials.slice();
     next[done - 1] = null;
-    onChange({ trials: next });
-  }
-
-  function toggleChrono() {
-    if (enCours) {
-      onChange({ running: false, pendingMs: (entry.pendingMs || 0) + (Date.now() - entry.startedAt), startedAt: null });
-      return;
-    }
-    if (countdown && (entry.pendingMs || 0) >= targetMs) {
-      sonne.current = false;
-      onChange({ running: true, startedAt: Date.now(), pendingMs: 0 });
-      return;
-    }
-    onChange({ running: true, startedAt: Date.now() });
+    const patch = { trials: next };
+    if (entry.mesuresEssais) patch.mesuresEssais = reindexMesuresEssais(entry.mesuresEssais, done - 1);
+    onChange(patch);
   }
 
   const cursor = unlimited ? done : trials.findIndex((t) => !trialCode(t));
 
   return (
     <div>
-      {withTimer && (
-        <div className="flex items-center gap-2 mb-2.5 rounded-xl px-3 py-2" style={{ backgroundColor: PAPER }}>
-          <span className="text-xl font-semibold tabular-nums" style={{ fontFamily: F_MONO, color: ecoule ? TYPES.timer.color : INK }}>
-            {fmtClock(countdown ? Math.max(0, targetMs - chrono) : chrono)}
-          </span>
-          <span className="text-xs" style={{ color: INK_SOFT }}>
-            {countdown ? (ecoule ? 'temps écoulé' : `sur ${fmtDuration(targetMs)}`) : 'cet essai'}
-          </span>
-          <button
-            onClick={toggleChrono}
-            className="ml-auto rounded-lg px-3 py-2 text-white text-sm flex items-center gap-1.5 active:scale-95 transition-transform"
-            style={{ backgroundColor: enCours ? '#A8402F' : TYPES.timer.color, fontFamily: F_DISPLAY }}
-          >
-            {enCours ? <><Pause size={15} /> Arrêter</> : <><Play size={15} /> {chrono > 0 ? 'Reprendre' : 'Consigne'}</>}
-          </button>
-          {chrono > 0 && (
-            <button onClick={() => { sonne.current = false; onChange({ running: false, startedAt: null, pendingMs: 0 }); }} style={{ color: INK_SOFT }}>
-              <RotateCcw size={15} />
-            </button>
-          )}
-        </div>
-      )}
-
       <div className="flex gap-1.5 mb-2.5 overflow-x-auto pb-1">
         {cells.map((t, i) => {
           const code = trialCode(t);
@@ -6467,138 +7187,6 @@ function TrialsWidget({ obj, entry, guidances, now, onChange }) {
           </button>
         )}
       </div>
-    </div>
-  );
-}
-
-function ProbeWidget({ obj, entry, guidances, onChange }) {
-  if (obj && obj.config && obj.config.useGuidance) {
-    const list = objectiveGuidances(obj, guidances);
-    return (
-      <div className="flex flex-wrap gap-1.5">
-        {list.map((g) => {
-          const on = entry.guidance === g.code;
-          return (
-            <button
-              key={g.code}
-              onClick={() => onChange({ guidance: on ? null : g.code, value: on ? null : (isIndependentCode(list, g.code) ? 1 : 0) })}
-              className="flex-1 min-w-[72px] rounded-xl py-3 border-2 active:scale-95 transition-transform"
-              style={{ borderColor: g.color, backgroundColor: on ? g.color : 'transparent', color: on ? '#fff' : g.color }}
-            >
-              <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
-              <div className="text-[10px] opacity-90 leading-tight break-words" style={{ overflowWrap: 'anywhere' }}>{g.label}</div>
-            </button>
-          );
-        })}
-      </div>
-    );
-  }
-  return (
-    <div className="flex gap-2">
-      <button onClick={() => onChange({ value: entry.value === 1 ? null : 1 })}
-        className="flex-1 rounded-xl py-4 font-semibold border-2 active:scale-95 transition-transform"
-        style={{ fontFamily: F_DISPLAY, borderColor: '#0F8B6C', backgroundColor: entry.value === 1 ? '#0F8B6C' : 'transparent', color: entry.value === 1 ? '#fff' : '#0F8B6C' }}>
-        1 · Réussi
-      </button>
-      <button onClick={() => onChange({ value: entry.value === 0 ? null : 0 })}
-        className="flex-1 rounded-xl py-4 font-semibold border-2 active:scale-95 transition-transform"
-        style={{ fontFamily: F_DISPLAY, borderColor: '#A8402F', backgroundColor: entry.value === 0 ? '#A8402F' : 'transparent', color: entry.value === 0 ? '#fff' : '#A8402F' }}>
-        0 · Échoué
-      </button>
-    </div>
-  );
-}
-
-function OccurrenceWidget({ entry, onChange }) {
-  return (
-    <div className="flex items-center gap-3">
-      <button onClick={() => onChange({ count: Math.max(0, entry.count - 1) })} disabled={entry.count === 0}
-        className="w-12 h-12 rounded-xl border flex items-center justify-center text-xl disabled:opacity-30"
-        style={{ borderColor: BORDER, color: INK_SOFT }}>−</button>
-      <button onClick={() => onChange({ count: entry.count + 1 })}
-        className="flex-1 rounded-xl py-4 text-white active:scale-95 transition-transform"
-        style={{ backgroundColor: TYPES.occurrence.color }}>
-        <span className="text-2xl font-semibold" style={{ fontFamily: F_MONO }}>{entry.count}</span>
-        <span className="text-sm ml-2 opacity-90">+1</span>
-      </button>
-    </div>
-  );
-}
-
-function TimerWidget({ obj, entry, now, onChange }) {
-  const cfg = (obj && obj.config) || {};
-  const countdown = cfg.timerMode === 'countdown' && cfg.timerSeconds > 0;
-  const targetMs = (cfg.timerSeconds || 0) * 1000;
-  const raw = entry.running ? (entry.elapsedMs || 0) + (now - entry.startedAt) : (entry.elapsedMs || 0);
-  const fired = useRef(false);
-
-  /* Fin du compte à rebours : on arrête le chronomètre et on signale,
-     comme pour un changement d'intervalle. */
-  useEffect(() => {
-    if (!countdown || !entry.running || fired.current) return;
-    if (raw >= targetMs) {
-      fired.current = true;
-      alertInterval({ soundOn: true, vibrateOn: true });
-      onChange({ running: false, elapsedMs: targetMs, startedAt: null });
-    }
-  });
-  useEffect(() => {
-    if (!entry.running) fired.current = false;
-  }, [entry.running]);
-
-  const finished = countdown && raw >= targetMs;
-  const display = countdown ? Math.max(0, targetMs - raw) : raw;
-
-  function toggle() {
-    if (entry.running) {
-      onChange({ running: false, elapsedMs: (entry.elapsedMs || 0) + (Date.now() - entry.startedAt), startedAt: null });
-      return;
-    }
-    // Relancer après la fin d'un compte à rebours repart de zéro
-    if (countdown && (entry.elapsedMs || 0) >= targetMs) {
-      fired.current = false;
-      onChange({ running: true, startedAt: Date.now(), elapsedMs: 0 });
-      return;
-    }
-    onChange({ running: true, startedAt: Date.now() });
-  }
-
-  return (
-    <div>
-      <div className="flex items-center gap-3">
-        <div>
-          <div className="text-3xl font-semibold tabular-nums leading-none" style={{ fontFamily: F_MONO, color: finished ? TYPES.timer.color : INK }}>
-            {fmtClock(display)}
-          </div>
-          {countdown && (
-            <div className="text-xs mt-1" style={{ color: INK_SOFT }}>
-              {finished ? 'Temps écoulé' : `sur ${fmtDuration(targetMs)}`}
-            </div>
-          )}
-        </div>
-        <button onClick={toggle}
-          className="ml-auto rounded-xl px-5 py-3 text-white flex items-center gap-2 active:scale-95 transition-transform"
-          style={{ backgroundColor: entry.running ? '#A8402F' : TYPES.timer.color, fontFamily: F_DISPLAY }}>
-          {entry.running ? <><Pause size={17} /> Arrêter</> : <><Play size={17} /> {finished ? 'Relancer' : 'Démarrer'}</>}
-        </button>
-        {((entry.elapsedMs || 0) > 0 || entry.running) && (
-          <button onClick={() => { fired.current = false; onChange({ running: false, elapsedMs: 0, startedAt: null }); }} className="p-2" style={{ color: INK_SOFT }}>
-            <RotateCcw size={16} />
-          </button>
-        )}
-      </div>
-
-      {countdown && (
-        <div className="h-1.5 rounded-full mt-2.5 overflow-hidden" style={{ backgroundColor: PAPER }}>
-          <div style={{
-            width: `${Math.min(100, (raw / targetMs) * 100)}%`,
-            height: '100%',
-            backgroundColor: TYPES.timer.color,
-            transition: 'width 1s linear',
-          }} />
-        </div>
-      )}
-
     </div>
   );
 }
@@ -6778,12 +7366,27 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
   const list = objectiveGuidances(obj, guidances);
   const steps = obj.config.steps || [];
   const coded = steps.filter((s) => entry.steps[s.id]).length;
+  const compteurParEssai = !!(obj.config.avecCompteur && obj.config.compteurParEssai);
+  const chronoParEssai = !!(obj.config.avecChrono && obj.config.chronoParEssai);
 
   function setStep(stepId, code) {
     const next = { ...entry.steps };
-    if (next[stepId] === code) delete next[stepId];
-    else next[stepId] = code;
-    onChange({ steps: next });
+    const patch = { steps: next };
+    if (next[stepId] === code) {
+      delete next[stepId];
+      // L'étape redevient à coter : sa mesure capturée n'a plus de sens.
+      if (entry.mesuresEssais && entry.mesuresEssais[stepId]) {
+        const essais = { ...entry.mesuresEssais };
+        delete essais[stepId];
+        patch.mesuresEssais = essais;
+      }
+    } else {
+      next[stepId] = code;
+      if (compteurParEssai || chronoParEssai) {
+        Object.assign(patch, relancerMesures(entry, stepId, compteurParEssai, chronoParEssai, Date.now()));
+      }
+    }
+    onChange(patch);
   }
 
   return (
@@ -6819,7 +7422,7 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
       <div className="flex items-center justify-between mt-2">
         <span className="text-xs" style={{ color: INK_SOFT }}>{coded}/{steps.length} étapes cotées</span>
         {coded > 0 && (
-          <button onClick={() => onChange({ steps: {} })} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
+          <button onClick={() => onChange({ steps: {}, mesuresEssais: {} })} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
             <RotateCcw size={12} /> tout effacer
           </button>
         )}
@@ -6835,9 +7438,11 @@ function BalanceWidget({ obj, entry, onChange }) {
   const [active, setActive] = useState(trials.length - 1);
   const idx = Math.min(active, trials.length - 1);
   const trial = trials[idx] || { steps: {} };
+  const compteurParEssai = !!(obj.config.avecCompteur && obj.config.compteurParEssai);
+  const chronoParEssai = !!(obj.config.avecChrono && obj.config.chronoParEssai);
 
-  function writeTrials(next) {
-    onChange({ trials: next, steps: undefined });
+  function writeTrials(next, extra) {
+    onChange({ trials: next, steps: undefined, ...extra });
   }
 
   function setStep(stepId, patch) {
@@ -6851,14 +7456,20 @@ function BalanceWidget({ obj, entry, onChange }) {
 
   function validateTrial() {
     const next = [...trials, { steps: {} }];
-    writeTrials(next);
+    const extra = (compteurParEssai || chronoParEssai) ? relancerMesures(entry, idx, compteurParEssai, chronoParEssai, Date.now()) : undefined;
+    writeTrials(next, extra);
     setActive(next.length - 1);
   }
 
   function removeTrial() {
-    if (trials.length <= 1) { writeTrials([{ steps: {} }]); setActive(0); return; }
+    if (trials.length <= 1) {
+      writeTrials([{ steps: {} }], entry.mesuresEssais ? { mesuresEssais: {} } : undefined);
+      setActive(0);
+      return;
+    }
     const next = trials.filter((_, i) => i !== idx);
-    writeTrials(next);
+    const extra = entry.mesuresEssais ? { mesuresEssais: reindexMesuresEssais(entry.mesuresEssais, idx) } : undefined;
+    writeTrials(next, extra);
     setActive(Math.max(0, idx - 1));
   }
 
@@ -6959,51 +7570,6 @@ function BalanceWidget({ obj, entry, onChange }) {
         {renfortsEssai.length > 0 && <> · renforcé aux étapes <span style={{ fontFamily: F_MONO }}>{renfortsEssai.join(', ')}</span></>}
         {idx !== trials.length - 1 && ' · essai déjà validé, en cours de correction'}
       </div>
-    </div>
-  );
-}
-
-function LatencyWidget({ entry, now, onChange }) {
-  const running = entry.running;
-  const live = running ? now - entry.startedAt : 0;
-
-  function toggle() {
-    if (running) onChange({ running: false, startedAt: null, latencies: [...entry.latencies, Date.now() - entry.startedAt] });
-    else onChange({ running: true, startedAt: Date.now() });
-  }
-
-  return (
-    <div>
-      <button onClick={toggle}
-        className="w-full rounded-xl py-4 text-white flex items-center justify-center gap-2 active:scale-95 transition-transform"
-        style={{ backgroundColor: running ? '#A8402F' : TYPES.latency.color, fontFamily: F_DISPLAY }}>
-        {running ? (
-          <><Square size={17} /> Réponse — <span style={{ fontFamily: F_MONO }}>{(live / 1000).toFixed(1)} s</span></>
-        ) : (
-          <><Play size={17} /> Consigne donnée</>
-        )}
-      </button>
-
-      {entry.latencies.length > 0 && (
-        <div className="mt-2">
-          <div className="flex flex-wrap gap-1.5 mb-1">
-            {entry.latencies.map((ms, i) => (
-              <button key={i}
-                onClick={() => onChange({ latencies: entry.latencies.filter((_, j) => j !== i) })}
-                className="rounded-lg px-2.5 py-1.5 text-xs border"
-                style={{ fontFamily: F_MONO, borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-                title="Appuyer pour supprimer cette mesure">
-                {(ms / 1000).toFixed(1)} s
-              </button>
-            ))}
-          </div>
-          <div className="text-xs" style={{ color: INK_SOFT }}>
-            Moyenne <span style={{ fontFamily: F_MONO }}>
-              {(entry.latencies.reduce((a, b) => a + b, 0) / entry.latencies.length / 1000).toFixed(1)} s
-            </span> · appuyez sur une mesure pour la retirer
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -7178,7 +7744,7 @@ function ResumeObjectifs({ students, sessions, guidances }) {
 }
 
 function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
-  const meta = TYPES[obj.type];
+  const meta = typeMeta(obj.type);
   const Icon = meta.icon;
 
   /* Repères de phase : on place la ligne sur la première séance postérieure au
@@ -7596,11 +8162,15 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
   const estObservation = crisis.kind === 'abc';
   const [now, setNow] = useState(Date.now());
 
+  /* Le chrono de la fiche ne tourne que pour une crise en cours ; le chrono
+     auxiliaire, lui, peut tourner sur une observation ABC — il lui faut le
+     même tic. */
+  const chronoAuxTourne = !!(crisis.mesures && crisis.mesures.chrono && crisis.mesures.chrono.running);
   useEffect(() => {
-    if (!isNew || crisis.kind === 'abc') return undefined;
+    if (!chronoAuxTourne && (!isNew || crisis.kind === 'abc')) return undefined;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [isNew, crisis.kind]);
+  }, [isNew, crisis.kind, chronoAuxTourne]);
 
   const elapsed = isNew ? now - crisis.startedAt : crisis.durationMs || 0;
   const set = (patch) => setCrisis((c) => ({ ...c, ...patch }));
@@ -7707,6 +8277,20 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
             </div>
           </div>
         )}
+
+        <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
+          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
+            Mesures annexes — un comptage et une durée, indépendants de la grille ABC
+          </div>
+          <MesuresAuxiliaires
+            mesures={crisis.mesures}
+            avecCompteur
+            avecChrono
+            now={now}
+            couleur={estObservation ? '#B07A2E' : CRISIS}
+            onChange={(mesures) => set({ mesures })}
+          />
+        </div>
 
         <div>
           <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Personne concernée</div>
