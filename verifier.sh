@@ -7,7 +7,8 @@
 #      en TypeScript, tsc ne sert ici que de vérificateur)
 #   2. doublons de premier niveau (function, const) ET blocs de rendu dupliqués
 #   2 bis. ordre des hooks React
-#   2 ter. renommages laissés incomplets (vocabulaire résiduel)
+#   2 ter. séance écrite sans être passée par finalizeSession
+#   2 quater. renommages laissés incomplets (vocabulaire résiduel)
 #   3. suite de tests Node autonome
 
 set -u
@@ -136,7 +137,35 @@ else
   echo "  ✓ hooks appelés inconditionnellement"
 fi
 
-# ── 2 ter. Renommages laissés incomplets ───────────────────────────────
+# ── 2 ter. Séance finalisée avant d'être écrite ────────────────────────
+# Une séance écrite dans la liste persistée sans être passée par
+# finalizeSession garde ses chronomètres en cours au moment de
+# l'enregistrement — plus rien ne les arrête ensuite. Le chaînage d'atelier a
+# donné à onFinish() un deuxième site d'appel ; ce contrôle vaut pour
+# chacun, présent ou futur.
+echo
+echo "── 2 ter. Séance finalisée avant d'être écrite ──"
+FAUTIFS=""
+while IFS=: read -r num ligne; do
+  echo "$ligne" | grep -q "finalizeSession(" && continue
+  # Seule exception tolérée : l'argument « close » produit par chainerAtelier,
+  # qui finalise en interne — vérifié séparément ici plutôt que supposé.
+  if echo "$ligne" | grep -qE '\bonFinish\(close\b' \
+    && awk '/^function chainerAtelier\(/,/^}/' src/App.jsx | grep -q "finalizeSession("; then
+    continue
+  fi
+  FAUTIFS="${FAUTIFS}      ligne ${num} : ${ligne}
+"
+done < <(grep -n "onFinish(" src/App.jsx)
+if [ -n "$FAUTIFS" ]; then
+  echo "  ✗ séance écrite sans passer par finalizeSession :"
+  echo -n "$FAUTIFS"
+  ECHECS=$((ECHECS + 1))
+else
+  echo "  ✓ toute séance écrite est finalisée"
+fi
+
+# ── 2 quater. Renommages laissés incomplets ────────────────────────────
 # Un renommage à l'échelle du fichier (ex. « suivi de stabilité » → « suivi
 # continu ») laisse facilement une trace : un libellé, un commentaire, un nom
 # de fonction oublié pendant qu'un autre a bien été renommé. Le vocabulaire
@@ -147,7 +176,7 @@ fi
 # Cette liste est le registre des renommages complets déjà vérifiés : chaque
 # terme retiré du produit y gagne une ligne, avec ses exceptions légitimes.
 echo
-echo "── 2 ter. Renommages laissés incomplets ──"
+echo "── 2 quater. Renommages laissés incomplets ──"
 RENOMMAGES=0
 
 # « suivi de stabilité » → « suivi continu ». Exceptions : la clé de stockage
