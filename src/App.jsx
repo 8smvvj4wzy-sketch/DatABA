@@ -1709,6 +1709,20 @@ function SectionTitle({ children, sub }) {
   );
 }
 
+/* Ouverture du tiroir depuis un onglet — Suivi, Session hors cotation, Export.
+   Absent pendant une cotation en cours : SessionRunning ne le reçoit pas. */
+function BoutonMenu({ onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm shrink-0"
+      style={{ borderColor: BORDER, backgroundColor: CARD, color: INK_SOFT }}
+    >
+      <Menu size={16} /> Menu
+    </button>
+  );
+}
+
 function Chip({ label, on, onClick, color = INK }) {
   return (
     <button
@@ -2247,25 +2261,30 @@ function AbaApp() {
   const navFige = !ecran && tab === 'session' && !!activeSession;
   const swipeActif = tiroir ? TIROIR_FERME_AU_BALAYAGE : !navFige;
 
-  /* Partagé avec le bouton « ‹ Menu » des écrans ouverts depuis le tiroir. */
-  const retourAuTiroir = React.useCallback(() => { setEcran(null); setTiroir(true); }, []);
+  /* Bouton « Menu » de tous les onglets (Suivi, Session hors cotation, Export)
+     et bouton « ‹ Menu » des écrans ouverts depuis le tiroir : une seule
+     action, ouvrir le tiroir, quel que soit l'endroit d'où elle part. */
+  const ouvrirMenu = React.useCallback(() => { setEcran(null); setTiroir(true); }, []);
 
   const onLeft = React.useCallback(() => {
     if (tiroir) { if (TIROIR_FERME_AU_BALAYAGE) setTiroir(false); return; }
-    if (ecran) { retourAuTiroir(); return; }
+    // Depuis un écran ouvert par le tiroir : retour direct à l'onglet
+    // d'origine (celui d'où le bouton Menu ou le balayage a été déclenché),
+    // sans repasser par le tiroir — `tab` n'a jamais changé entre-temps.
+    if (ecran) { setEcran(null); return; }
     goTab(1);
-  }, [tiroir, ecran, retourAuTiroir, goTab]);
+  }, [tiroir, ecran, goTab]);
 
   /* Depuis Suivi — l'extrémité gauche — il n'y a pas d'onglet précédent : le
      balayage vers la droite y est libre, c'est lui qui ouvre le tiroir. Depuis
-     un écran ouvert par le tiroir, qui n'a pas de voisin latéral, les deux
-     sens ramènent au tiroir. */
+     un écran ouvert par le tiroir, ce même sens ouvre le tiroir à son tour —
+     symétrique avec le bouton Menu, pas avec le retour de gauche. */
   const onRight = React.useCallback(() => {
     if (tiroir) return;
-    if (ecran) { retourAuTiroir(); return; }
+    if (ecran) { ouvrirMenu(); return; }
     if (tab === TAB_ORDER[0]) { setTiroir(true); return; }
     goTab(-1);
-  }, [tiroir, ecran, tab, retourAuTiroir, goTab]);
+  }, [tiroir, ecran, tab, ouvrirMenu, goTab]);
 
   const { offset, dragging } = useHorizontalSwipe(null, { onLeft, onRight, onDocument: true, enabled: swipeActif });
 
@@ -3090,7 +3109,7 @@ function AbaApp() {
         >
         {ecran && (
           <button
-            onClick={retourAuTiroir}
+            onClick={ouvrirMenu}
             className="flex items-center gap-1 text-sm mb-3"
             style={{ color: INK_SOFT }}
           >
@@ -3142,7 +3161,7 @@ function AbaApp() {
         {tab === 'suivi' && (
           <SuiviScreen
             students={students} sessions={sessions} guidances={guidances}
-            onResetTracking={resetTracking} onOuvrirMenu={() => setTiroir(true)}
+            onResetTracking={resetTracking} onOuvrirMenu={ouvrirMenu}
           />
         )}
         {tab === 'session' && (
@@ -3150,6 +3169,7 @@ function AbaApp() {
             students={students} ateliers={ateliers} intervenants={intervenants}
             sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
             onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => setEcran('personnes')}
+            onOuvrirMenu={ouvrirMenu}
             activeSession={activeSession} setActiveSession={setActiveSession}
             onFinish={(session) => {
               const { isEdit, ...rest } = session;
@@ -3180,6 +3200,7 @@ function AbaApp() {
             sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants}
             guidances={guidances} appareil={appareil} notify={notify}
             onEditCrisis={editCrisis} onMarkSent={markSent} onExportManager={exportManager}
+            onOuvrirMenu={ouvrirMenu}
           />
         )}
           </>
@@ -4944,7 +4965,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, activeSession, setActiveSession, onFinish }) {
+function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
     return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} onFinish={onFinish} />;
   }
@@ -4953,12 +4974,13 @@ function SessionScreen({ students, ateliers, intervenants, sessions, crises, gui
       students={students} ateliers={ateliers} intervenants={intervenants} sessions={sessions}
       onEditSession={onEditSession} onDeleteSession={onDeleteSession} onDeleteAllSessions={onDeleteAllSessions}
       onSetAtelierGroup={onSetAtelierGroup} notify={notify} onOuvrirConfiguration={onOuvrirConfiguration}
+      onOuvrirMenu={onOuvrirMenu}
       onStart={setActiveSession}
     />
   );
 }
 
-function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onStart }) {
+function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, onStart }) {
   const [atelierId, setAtelierId] = useState(null);
   const [intervenantId, setIntervenantId] = useState(null);
   const [studentIds, setStudentIds] = useState([]);
@@ -5108,7 +5130,10 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   if (students.length === 0) {
     return (
       <div>
-        <SectionTitle>Session</SectionTitle>
+        <div className="flex items-start justify-between gap-3">
+          <SectionTitle>Session</SectionTitle>
+          <BoutonMenu onClick={onOuvrirMenu} />
+        </div>
         <Empty>Aucune personne accompagnée n'est enregistrée sur cette tablette.</Empty>
         <Btn onClick={onOuvrirConfiguration} className="w-full mt-3">
           <Users size={17} /> Créer une personne accompagnée
@@ -5119,7 +5144,10 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
 
   return (
     <div>
-      <SectionTitle sub="Choisissez l'atelier, les personnes présentes et les objectifs travaillés.">Nouvelle session</SectionTitle>
+      <div className="flex items-start justify-between gap-3">
+        <SectionTitle sub="Choisissez l'atelier, les personnes présentes et les objectifs travaillés.">Nouvelle session</SectionTitle>
+        <BoutonMenu onClick={onOuvrirMenu} />
+      </div>
 
       <div className="flex gap-1.5 mb-4">
         {[
@@ -6821,25 +6849,12 @@ function LatencyWidget({ entry, now, onChange }) {
 function SuiviScreen({ students, sessions, guidances, onResetTracking, onOuvrirMenu }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
 
-  /* Le menu s'ouvre par un balayage depuis le bord gauche, geste qui ne
-     s'apprend pas tout seul et n'existe pas au clavier. Ce bouton y donne
-     accès depuis le même écran, sans ouvrir une seconde porte ailleurs. */
-  const boutonMenu = (
-    <button
-      onClick={onOuvrirMenu}
-      className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm shrink-0"
-      style={{ borderColor: BORDER, backgroundColor: CARD, color: INK_SOFT }}
-    >
-      <Menu size={16} /> Menu
-    </button>
-  );
-
   if (students.length === 0) {
     return (
       <div>
         <div className="flex items-start justify-between gap-3">
           <SectionTitle>Suivi</SectionTitle>
-          {boutonMenu}
+          <BoutonMenu onClick={onOuvrirMenu} />
         </div>
         <Empty>Ajoutez des personnes accompagnées et enregistrez des séances pour voir les courbes.</Empty>
       </div>
@@ -6852,7 +6867,7 @@ function SuiviScreen({ students, sessions, guidances, onResetTracking, onOuvrirM
     <div>
       <div className="flex items-start justify-between gap-3">
         <SectionTitle sub="Où en est chaque objectif, et comment il évolue.">Suivi</SectionTitle>
-        {boutonMenu}
+        <BoutonMenu onClick={onOuvrirMenu} />
       </div>
 
       <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} />
@@ -7134,7 +7149,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
 }
 
 /* ==================== Écran 4 : export ==================== */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, appareil, notify, onEditCrisis, onMarkSent, onExportManager }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, appareil, notify, onEditCrisis, onMarkSent, onExportManager, onOuvrirMenu }) {
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   // Valeur d'état initiale seulement : React l'ignore aux rendus suivants,
   // donc une sélection ajustée à la main n'est jamais écrasée par un
@@ -7201,7 +7216,10 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
 
   return (
     <div>
-      <SectionTitle sub="Sélectionnez les rapports à transmettre aux cadres pédagogiques.">Export</SectionTitle>
+      <div className="flex items-start justify-between gap-3">
+        <SectionTitle sub="Sélectionnez les rapports à transmettre aux cadres pédagogiques.">Export</SectionTitle>
+        <BoutonMenu onClick={onOuvrirMenu} />
+      </div>
 
       {sessions.length === 0 ? (
         <Empty>Aucune séance enregistrée pour le moment.</Empty>
