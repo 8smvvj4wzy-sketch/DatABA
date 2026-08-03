@@ -6,7 +6,7 @@ import {
   Timer as TimerIcon, LayoutGrid, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
+  ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, CalendarDays, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
   Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle,
 } from 'lucide-react';
 
@@ -1462,6 +1462,57 @@ function migrerAxesSuivi(stocke) {
     .map((a) => ({ id: a.id, nom: a.nom || 'Suivi continu', criteres: (a.criteres || []).filter((c) => c && c.k) }));
 }
 
+/* Jours de la semaine dans l'ordre d'affichage d'un emploi du temps — lundi
+   en tête, dimanche en fin. `k` est l'index natif de Date.getDay() (0 =
+   dimanche), pour indexer emploiDuTemps sans conversion. */
+const JOURS = [
+  { k: 1, label: 'Lundi' },
+  { k: 2, label: 'Mardi' },
+  { k: 3, label: 'Mercredi' },
+  { k: 4, label: 'Jeudi' },
+  { k: 5, label: 'Vendredi' },
+  { k: 6, label: 'Samedi' },
+  { k: 0, label: 'Dimanche' },
+];
+
+/* Défense en lecture, sur le même principe que migrerAxesSuivi : une forme
+   inattendue ne fait jamais planter l'affichage, seulement retomber sur une
+   semaine vide. */
+function migrerEmploiDuTemps(stocke) {
+  if (!stocke || typeof stocke !== 'object' || Array.isArray(stocke)) return {};
+  const propre = {};
+  JOURS.forEach(({ k }) => {
+    const liste = stocke[String(k)];
+    if (Array.isArray(liste)) propre[String(k)] = liste.filter((id) => typeof id === 'string');
+  });
+  return propre;
+}
+
+/* Ateliers d'un jour, dans l'ordre de l'emploi du temps — un atelier
+   supprimé depuis disparaît silencieusement, comme usualObjectives le fait
+   déjà pour les objectifs disparus. */
+function ateliersDuJour(emploiDuTemps, ateliers, jour) {
+  const ids = (emploiDuTemps && emploiDuTemps[String(jour)]) || [];
+  return ids.map((id) => (ateliers || []).find((a) => a.id === id)).filter(Boolean);
+}
+
+/* Ce qui reste à jouer aujourd'hui : les ateliers du jour dont aucune séance
+   du jour même ne porte déjà l'atelierId. Fait avancer la proposition au fil
+   de la journée sans état persistant supplémentaire — le chaînage enregistre
+   une séance à chaque passage d'atelier. */
+function planifierJour(emploiDuTemps, ateliers, sessions, maintenant) {
+  const ref = new Date(maintenant);
+  const jour = ref.getDay();
+  const duJour = ateliersDuJour(emploiDuTemps, ateliers, jour);
+  const joues = new Set(
+    (sessions || [])
+      .filter((s) => s.atelierId && memeJour(new Date(s.date), ref))
+      .map((s) => s.atelierId)
+  );
+  const restants = duJour.filter((a) => !joues.has(a.id));
+  return { jour, total: duJour.length, restants };
+}
+
 /* ==================== Regroupement par jour ====================
    Les listes d'historique plafonnaient à quelques entrées, sans aucun moyen
    d'atteindre ce qui était plus ancien : la limite n'était pas seulement
@@ -2855,6 +2906,10 @@ function AbaApp() {
 
   const [students, setStudents] = useState([]);
   const [ateliers, setAteliers] = useState([]);
+  /* Semaine type : quel atelier, quel jour, dans quel ordre. Clés = index
+     Date.getDay() en chaînes (transit JSON), valeurs = ids d'ateliers
+     ordonnés. Un même atelier peut figurer sur plusieurs jours. */
+  const [emploiDuTemps, setEmploiDuTemps] = useState({});
   const [intervenants, setIntervenants] = useState([]);
   const [guidances, setGuidances] = useState(DEFAULT_GUIDANCE);
   const [objectiveTemplates, setObjectiveTemplates] = useState([]);
@@ -2892,6 +2947,14 @@ function AbaApp() {
   const rootRef = useRef(null);
   const contentRef = useRef(null);
   const [dir, setDir] = useState(0);
+
+  /* Ce qu'il reste à jouer aujourd'hui d'après la semaine type — recalculé
+     seulement quand l'emploi du temps, les ateliers ou les séances changent,
+     pas à chaque rendu. */
+  const planDuJour = React.useMemo(
+    () => planifierJour(emploiDuTemps, ateliers, sessions, Date.now()),
+    [emploiDuTemps, ateliers, sessions]
+  );
 
   const goTab = React.useCallback(
     (delta) => {
@@ -3028,6 +3091,7 @@ function AbaApp() {
         nbPersonnes = (d.students || []).length;
         setStudents(migrerStudentsSuivi(d.students || []));
         setAteliers(d.ateliers || []);
+        setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
         setIntervenants(d.intervenants || []);
         setAppareil(d.appareil || '');
         retention = d.retentionMonths || 0;
@@ -3205,7 +3269,7 @@ function AbaApp() {
   /* Réécrit toutes les données avec la clé courante — utilisé après un
      changement de code, puisque l'ancienne clé ne déchiffrerait plus rien. */
   async function persistAll() {
-    await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil }));
+    await store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil }));
     moisEcrits.current = {};
     await persistSessions(sessions);
     await store.set('aba:crises', JSON.stringify(crises));
@@ -3280,8 +3344,8 @@ function AbaApp() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil }));
-  }, [students, ateliers, intervenants, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, loaded]);
+    store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil }));
+  }, [students, ateliers, emploiDuTemps, intervenants, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, loaded]);
   /* Empreinte du dernier enregistrement de chaque mois, pour n'écrire que ce
      qui a réellement changé. */
   const moisEcrits = useRef({});
@@ -3383,6 +3447,7 @@ function AbaApp() {
       version: 1,
       exportedAt: new Date().toISOString(),
       ateliers: ateliers.map(({ usualStudentIds, usualObjectives, favoriteObjectiveIds, knownObjectiveIds, ...a }) => a),
+      emploiDuTemps,
       intervenants,
       guidances,
       objectiveTemplates,
@@ -3402,7 +3467,30 @@ function AbaApp() {
     if (!window.confirm(
       `Importer cette configuration ?\n\n${nbA} atelier(s), ${nbI} intervenant(s), ${nbT} modèle(s) d'objectif.\n\nLes éléments existants sont conservés, les nouveaux s'ajoutent.`
     )) return;
+    /* Un atelier importé dont le nom existe déjà localement est écarté au
+       profit de l'atelier existant : son id d'origine doit être remappé vers
+       l'id local avant de fusionner l'emploi du temps importé, sans quoi il
+       pointerait vers un atelier qui n'a jamais été créé ici. */
+    const correspondance = {};
+    (d.ateliers || []).forEach((a) => {
+      const existant = ateliers.find((x) => x.name === a.name);
+      correspondance[a.id] = existant ? existant.id : a.id;
+    });
     setAteliers((cur) => [...cur, ...(d.ateliers || []).filter((a) => !cur.some((x) => x.name === a.name))]);
+    if (d.emploiDuTemps) {
+      const importe = migrerEmploiDuTemps(d.emploiDuTemps);
+      setEmploiDuTemps((cur) => {
+        const next = { ...cur };
+        JOURS.forEach(({ k }) => {
+          const cle = String(k);
+          const ids = (importe[cle] || []).map((id) => correspondance[id] || id);
+          const deja = next[cle] || [];
+          const ajouts = ids.filter((id) => !deja.includes(id));
+          if (ajouts.length) next[cle] = [...deja, ...ajouts];
+        });
+        return next;
+      });
+    }
     setIntervenants((cur) => [...cur, ...(d.intervenants || []).filter((i) => !cur.some((x) => x.name === i.name))]);
     setGuidances((cur) => [...cur, ...(d.guidances || []).filter((g) => !cur.some((x) => x.code === g.code))]);
     setObjectiveTemplates((cur) => [...cur, ...(d.objectiveTemplates || []).filter((t) => !cur.some((x) => x.name === t.name))]);
@@ -3446,6 +3534,7 @@ function AbaApp() {
       appareil,
       students: students.filter((st) => idsConcernes.has(st.id)),
       ateliers,
+      emploiDuTemps,
       intervenants,
       guidances,
       axesSuivi,
@@ -3470,7 +3559,7 @@ function AbaApp() {
   /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
      transferts qui restent dans un espace déjà protégé. */
   function exportBackupClair() {
-    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
+    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, emploiDuTemps, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
     setBackupPrompt(null);
@@ -3486,7 +3575,7 @@ function AbaApp() {
       notify('Fichier Manager chiffré exporté');
       return;
     }
-    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
+    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, emploiDuTemps, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
     const envelope = await encryptJSON(payload, passphrase);
     const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json' });
     downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
@@ -3506,6 +3595,7 @@ function AbaApp() {
     if (!ok) return;
     setStudents(migrerStudentsSuivi(d.students || []));
     setAteliers(d.ateliers || []);
+    setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
     setIntervenants(d.intervenants || []);
     if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
     setSessions(d.sessions || []);
@@ -3789,7 +3879,12 @@ function AbaApp() {
   const contenuPourCle = (cle) => {
     switch (cle) {
       case 'ateliers':
-        return <PanneauAteliers ateliers={ateliers} onAdd={addAtelier} onRename={renameAtelier} onRemove={removeAtelier} />;
+        return (
+          <PanneauEmploiDuTemps
+            ateliers={ateliers} onAdd={addAtelier} onRename={renameAtelier} onRemove={removeAtelier}
+            emploiDuTemps={emploiDuTemps} onSetEmploiDuTemps={setEmploiDuTemps}
+          />
+        );
       case 'personnes':
         return (
           <PanneauPersonnes
@@ -3841,7 +3936,7 @@ function AbaApp() {
             students={students} ateliers={ateliers} intervenants={intervenants}
             sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
             onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => setEcran('personnes')}
-            onOuvrirMenu={ouvrirMenu}
+            onOuvrirMenu={ouvrirMenu} planDuJour={planDuJour}
             activeSession={activeSession} setActiveSession={setActiveSession}
             onFinish={(session, suivante) => {
               const { isEdit, ...rest } = session;
@@ -4127,7 +4222,7 @@ function AbaApp() {
 
             <div className="px-2 space-y-0.5">
               {[
-                { k: 'ateliers', label: 'Ateliers', icon: Layers },
+                { k: 'ateliers', label: 'Ateliers et emploi du temps', icon: CalendarDays },
                 { k: 'personnes', label: 'Personnes accompagnées', icon: Users },
                 { k: 'intervenants', label: 'Intervenants', icon: UserCog },
                 { k: 'modeles', label: "Modèles d'objectifs", icon: BookmarkPlus },
@@ -4391,13 +4486,34 @@ function ChangePinModal({ security, onSave, onClose }) {
    Il est découpé ici en panneaux indépendants, atteignables un par un depuis
    le tiroir latéral. Rien n'a été retiré au passage. */
 
-function PanneauAteliers({ ateliers, onAdd, onRename, onRemove }) {
+/* Ateliers et semaine type dans un seul écran : deux vues qui se
+   consultaient déjà côte à côte à la création d'une séance (l'atelier, puis
+   qui doit s'y trouver) n'avaient pas de raison d'être séparées ici. */
+function PanneauEmploiDuTemps({ ateliers, onAdd, onRename, onRemove, emploiDuTemps, onSetEmploiDuTemps }) {
   const [nom, setNom] = useState('');
+  const [jourActif, setJourActif] = useState(new Date().getDay());
+  const [duplicationOuverte, setDuplicationOuverte] = useState(false);
   const ajouter = () => { if (nom.trim()) { onAdd(nom.trim()); setNom(''); } };
+
+  const idsDuJour = emploiDuTemps[String(jourActif)] || [];
+  const ateliersDuJourActif = idsDuJour.map((id) => ateliers.find((a) => a.id === id)).filter(Boolean);
+  const absents = ateliers.filter((a) => !idsDuJour.includes(a.id));
+
+  const majJour = (ids) => onSetEmploiDuTemps({ ...emploiDuTemps, [String(jourActif)]: ids });
+  const reordonner = (liste) => majJour(liste.map((a) => a.id));
+  const ajouterAuJour = (id) => majJour([...idsDuJour, id]);
+  const retirerDuJour = (id) => majJour(idsDuJour.filter((x) => x !== id));
+  const dupliquerVers = (versJour) => {
+    onSetEmploiDuTemps({ ...emploiDuTemps, [String(versJour)]: idsDuJour });
+    setDuplicationOuverte(false);
+  };
+
   return (
     <div>
-      <SectionTitle sub="Les groupes dans lesquels se déroulent les séances.">Ateliers</SectionTitle>
-      <Card>
+      <SectionTitle sub="Les groupes dans lesquels se déroulent les séances, et la semaine type.">
+        Ateliers
+      </SectionTitle>
+      <Card className="mb-4">
         <div className="flex gap-2 mb-3">
           <Field value={nom} onChange={setNom} placeholder="Nom de l'atelier (ex. Groupe habiletés sociales)" onEnter={ajouter} />
           <Btn onClick={ajouter} className="px-4 shrink-0"><Plus size={18} /></Btn>
@@ -4412,6 +4528,82 @@ function PanneauAteliers({ ateliers, onAdd, onRename, onRemove }) {
           </div>
         )}
       </Card>
+
+      {ateliers.length > 0 && (
+        <>
+          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
+            Semaine type — appui long sur une ligne pour la déplacer.
+          </div>
+          <div className="flex gap-1.5 mb-3">
+            {JOURS.map((j) => (
+              <Chip key={j.k} label={j.label.slice(0, 2)} on={jourActif === j.k} onClick={() => setJourActif(j.k)} />
+            ))}
+          </div>
+
+          <Card className="mb-3">
+            {ateliersDuJourActif.length === 0 ? (
+              <Empty>Aucun atelier ce jour-là.</Empty>
+            ) : (
+              <ReorderList
+                items={ateliersDuJourActif}
+                keyOf={(a) => a.id}
+                onReorder={reordonner}
+                className="space-y-1.5"
+                renderItem={(a) => (
+                  <div className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+                    <GripVertical size={14} style={{ color: INK_SOFT }} className="shrink-0" />
+                    <span className="text-sm flex-1 min-w-0 truncate">{a.name}</span>
+                    <button onClick={() => retirerDuJour(a.id)} style={{ color: INK_SOFT }} title="Retirer de ce jour">
+                      <X size={15} />
+                    </button>
+                  </div>
+                )}
+              />
+            )}
+          </Card>
+
+          {absents.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {absents.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => ajouterAuJour(a.id)}
+                  className="rounded-xl px-3 py-2 border text-sm flex items-center gap-1.5"
+                  style={{ borderColor: BORDER, color: INK_SOFT }}
+                >
+                  <Plus size={13} /> {a.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {idsDuJour.length > 0 && (
+            <div>
+              <button
+                onClick={() => setDuplicationOuverte((v) => !v)}
+                className="text-xs flex items-center gap-1"
+                style={{ color: INK_SOFT }}
+              >
+                <Copy size={12} /> Dupliquer ce jour vers…
+              </button>
+              {duplicationOuverte && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {JOURS.filter((j) => j.k !== jourActif).map((j) => (
+                    <button
+                      key={j.k}
+                      onClick={() => dupliquerVers(j.k)}
+                      className="rounded-xl px-3 py-1.5 border text-xs"
+                      style={{ borderColor: BORDER, color: INK_SOFT }}
+                    >
+                      {j.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -5770,22 +5962,22 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, activeSession, setActiveSession, onFinish }) {
+function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
-    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} notify={notify} onFinish={onFinish} />;
+    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} notify={notify} onFinish={onFinish} suiteDuJour={planDuJour && planDuJour.restants} />;
   }
   return (
     <SessionSetup
       students={students} ateliers={ateliers} intervenants={intervenants} sessions={sessions}
       onEditSession={onEditSession} onDeleteSession={onDeleteSession} onDeleteAllSessions={onDeleteAllSessions}
       onSetAtelierGroup={onSetAtelierGroup} notify={notify} onOuvrirConfiguration={onOuvrirConfiguration}
-      onOuvrirMenu={onOuvrirMenu}
+      onOuvrirMenu={onOuvrirMenu} planDuJour={planDuJour}
       onStart={setActiveSession}
     />
   );
 }
 
-function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, onStart }) {
+function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, onStart }) {
   const [atelierId, setAtelierId] = useState(null);
   const [intervenantId, setIntervenantId] = useState(null);
   const [studentIds, setStudentIds] = useState([]);
@@ -5802,6 +5994,18 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
      à la création de l'objectif, qui vaut lui quel que soit l'atelier. */
   const [atelierFavorites, setAtelierFavorites] = useState([]);
   const [doubleCotation, setDoubleCotation] = useState(false);
+
+  /* Proposition automatique au montage : le prochain atelier de la semaine
+     type se précharge comme si on l'avait choisi à la main, mais seulement
+     si rien n'a encore été touché — jamais par-dessus une sélection en
+     cours. Se redéclenche à chaque retour sur cet écran (fin ou abandon
+     d'une séance), pas seulement à l'ouverture de l'application, puisque
+     SessionSetup démonte et remonte à chaque bascule avec SessionRunning. */
+  useEffect(() => {
+    if (atelierId || studentIds.length > 0) return;
+    const proposition = planDuJour && planDuJour.restants && planDuJour.restants[0];
+    if (proposition) pickAtelier(proposition.id);
+  }, []);
 
   /* Une configuration d'atelier mémorisée n'a pas à être revérifiée en entier
      à chaque lancement. Quand elle s'applique, seul ce qui diffère de
@@ -5859,8 +6063,12 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
     const a = ateliers.find((x) => x.id === next);
     const usual = a && a.usualStudentIds ? a.usualStudentIds.filter((sid) => students.some((s) => s.id === sid)) : [];
     setAtelierFavorites((a && a.favoriteObjectiveIds) || []);
-    if (usual.length && (studentIds.length === 0 || autoApplied)) applyGroup(usual, a && a.usualObjectives, a && a.knownObjectiveIds, true);
+    // Change d'atelier recharge toujours sa classe et ses objectifs habituels :
+    // aucune séance n'est encore lancée à ce stade, rien à perdre.
+    if (usual.length) applyGroup(usual, a && a.usualObjectives, a && a.knownObjectiveIds, true);
   };
+
+  const currentAtelier = ateliers.find((a) => a.id === atelierId);
 
   const toggleStudent = (id) => {
     setAutoApplied(false);
@@ -5868,8 +6076,11 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
     setSelected((sel) => {
       if (sel[id]) { const n = { ...sel }; delete n[id]; return n; }
       const st = students.find((s) => s.id === id);
-      return { ...sel, [id]: st ? visibleObjectives(st).map((o) => o.id) : [] };
+      // Même cascade qu'en cours de séance (FeuilleAjout, changerAtelier) :
+      // mémorisé pour cet atelier, à défaut prioritaires, à défaut tous.
+      return { ...sel, [id]: st ? objectifsParDefaut(st, currentAtelier, mode) : [] };
     });
+    setDepuisMemoire(false);
   };
   const toggleObjective = (sid, oid) => {
     setDetailObjectifs(true);
@@ -5880,8 +6091,6 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   };
   const toggleAtelierFavorite = (oid) =>
     setAtelierFavorites((cur) => (cur.includes(oid) ? cur.filter((x) => x !== oid) : [...cur, oid]));
-
-  const currentAtelier = ateliers.find((a) => a.id === atelierId);
 
   /* Le bouton de mémorisation n'apparaît que si la configuration en cours
      diffère de celle déjà enregistrée pour cet atelier. */
@@ -5946,6 +6155,25 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
         <SectionTitle sub="Choisissez l'atelier, les personnes présentes et les objectifs travaillés.">Nouvelle session</SectionTitle>
         <BoutonMenu onClick={onOuvrirMenu} />
       </div>
+
+      {planDuJour && planDuJour.restants && planDuJour.restants.length > 0 && atelierId === planDuJour.restants[0].id && (
+        <Card className="mb-4">
+          <div className="flex items-center gap-1.5 text-xs mb-1" style={{ color: INK_SOFT }}>
+            <CalendarDays size={13} />
+            {(JOURS.find((j) => j.k === planDuJour.jour) || {}).label} · {(() => {
+              const rang = planDuJour.total - planDuJour.restants.length + 1;
+              return rang === 1 ? '1er' : `${rang}e`;
+            })()} sur {planDuJour.total}
+          </div>
+          <div className="font-semibold mb-1" style={{ fontFamily: F_DISPLAY }}>{planDuJour.restants[0].name}</div>
+          <div className="text-sm mb-3" style={{ color: INK_SOFT }}>
+            {studentIds.length} personne{studentIds.length !== 1 ? 's' : ''}
+          </div>
+          <Btn onClick={start} disabled={!ready} className="w-full">
+            <Play size={16} /> Lancer
+          </Btn>
+        </Card>
+      )}
 
       <div className="flex gap-1.5 mb-4">
         {[
@@ -6221,7 +6449,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   );
 }
 
-function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, notify, onFinish }) {
+function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, notify, onFinish, suiteDuJour }) {
   const isEdit = !!session.isEdit;
   const [currentId, setCurrentId] = useState(session.studentIds[0]);
   const [viewMode, setViewMode] = useState('priority');
@@ -6864,6 +7092,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
       {feuille === 'atelier' && (
         <FeuilleAtelier
           session={session} ateliers={ateliers} students={students} aCoter={aCoter}
+          suiteDuJour={suiteDuJour}
           onClose={() => setFeuille(null)}
           onConfirm={changerAtelier}
         />
@@ -6950,7 +7179,7 @@ function FeuilleReglages({ hasInterval, soundOn, setSoundOn, vibrateOn, setVibra
    quelle, une nouvelle démarre sur l'atelier choisi. Précoché par défaut :
    les personnes présentes qui sont aussi habituées du nouvel atelier ; les
    habituées absentes de la séance en cours restent proposées, décochées. */
-function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfirm }) {
+function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfirm, suiteDuJour }) {
   const [atelierId, setAtelierId] = useState(null);
   const [checked, setChecked] = useState(() => new Set(aCoter));
   const atelier = ateliers.find((a) => a.id === atelierId);
@@ -6961,6 +7190,17 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
     const usual = (cible && cible.usualStudentIds) || [];
     setChecked(new Set(usual.length ? aCoter.filter((sid) => usual.includes(sid)) : aCoter));
   }
+
+  /* Les ateliers restants de la semaine type passent en tête, dans leur
+     ordre — c'est le prochain qu'on cherche le plus souvent en enchaînant —
+     avant les autres, inchangés. */
+  const autres = ateliers.filter((a) => a.id !== session.atelierId);
+  const idsSuite = new Set((suiteDuJour || []).map((a) => a.id));
+  const ordonnes = [...autres.filter((a) => idsSuite.has(a.id)), ...autres.filter((a) => !idsSuite.has(a.id))];
+
+  useEffect(() => {
+    if (ordonnes[0]) choisir(ordonnes[0].id);
+  }, []);
 
   const candidats = atelier
     ? students.filter((s) => aCoter.includes(s.id) || (atelier.usualStudentIds || []).includes(s.id))
@@ -6977,17 +7217,18 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
           La séance en cours est enregistrée telle quelle. La nouvelle démarre avec un
           chronomètre et un temps de renforcement remis à zéro.
         </p>
-        {ateliers.filter((a) => a.id !== session.atelierId).length === 0 ? (
+        {ordonnes.length === 0 ? (
           <Empty>Aucun autre atelier n'est configuré.</Empty>
         ) : (
           <div className="space-y-1.5 mb-3">
-            {ateliers.filter((a) => a.id !== session.atelierId).map((a) => (
+            {ordonnes.map((a) => (
               <button
                 key={a.id} onClick={() => choisir(a.id)}
-                className="w-full rounded-xl px-3 py-2.5 text-left border"
+                className="w-full rounded-xl px-3 py-2.5 text-left border flex items-center gap-2"
                 style={{ borderColor: atelierId === a.id ? INK : BORDER, backgroundColor: atelierId === a.id ? INK : 'transparent', color: atelierId === a.id ? '#fff' : INK }}
               >
-                {a.name}
+                {idsSuite.has(a.id) && <CalendarDays size={13} className="shrink-0" style={{ opacity: 0.7 }} />}
+                <span className="flex-1 min-w-0 truncate">{a.name}</span>
               </button>
             ))}
           </div>
