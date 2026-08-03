@@ -3844,41 +3844,6 @@ function AbaApp() {
       return { st, blocs };
     });
 
-  if (!securityLoaded) {
-    return (
-      <div ref={rootRef} className="min-h-screen flex items-center justify-center" style={{ background: PAPER, color: INK_SOFT, fontFamily: F_BODY }}>
-        Chargement…
-      </div>
-    );
-  }
-
-  if (!security.disabled && (locked || !security.pinHash)) {
-    return (
-      <LockScreen
-        security={security}
-        onUnlock={unlockWith}
-        onFailedAttempt={registerFailedAttempt}
-        onSetup={async (pinHash, pinSalt, pinDigits, pin, mode) => {
-          const dataSalt = newSalt();
-          const next = { pinHash, pinSalt, pinDigits, mode: mode || 'pin', dataSalt, failedAttempts: 0, lockUntil: 0 };
-          setSecurity(next);
-          await store.setRaw('aba:security', JSON.stringify(next));
-          dataKey = await deriveDataKey(pin, dataSalt);
-          setLocked(false);
-          await loadData();
-        }}
-      />
-    );
-  }
-
-  if (!loaded) {
-    return (
-      <div ref={rootRef} className="min-h-screen flex items-center justify-center" style={{ background: PAPER, color: INK_SOFT, fontFamily: F_BODY }}>
-        Chargement…
-      </div>
-    );
-  }
-
   /* Contenu d'un onglet ou d'un écran ouvert depuis le tiroir, désigné par sa
      clé (nom d'onglet, ou nom d'écran) — pour pouvoir en afficher deux à la
      fois, côte à côte, pendant un balayage. */
@@ -4011,6 +3976,49 @@ function AbaApp() {
         })();
   const offsetSansApercu = Math.sign(offset) * Math.min(Math.abs(offset) * 0.45, 80);
 
+  /* Les deux volets ne sont recalculés que si l'écran qu'ils affichent
+     change, pas à chaque frame du geste. Sans ça, Export et Session — les
+     plus chargés en calcul (tri des séances, regroupement des objectifs) —
+     retraversaient tout leur rendu à chaque déplacement du doigt, ce qui se
+     ressentait comme un décalage du geste plutôt qu'un mouvement fluide. */
+  const panneauCourant = React.useMemo(() => volet(cleCourante), [cleCourante]);
+  const panneauVoisin = React.useMemo(() => (cleVoisine ? volet(cleVoisine) : null), [cleVoisine]);
+
+  if (!securityLoaded) {
+    return (
+      <div ref={rootRef} className="min-h-screen flex items-center justify-center" style={{ background: PAPER, color: INK_SOFT, fontFamily: F_BODY }}>
+        Chargement…
+      </div>
+    );
+  }
+
+  if (!security.disabled && (locked || !security.pinHash)) {
+    return (
+      <LockScreen
+        security={security}
+        onUnlock={unlockWith}
+        onFailedAttempt={registerFailedAttempt}
+        onSetup={async (pinHash, pinSalt, pinDigits, pin, mode) => {
+          const dataSalt = newSalt();
+          const next = { pinHash, pinSalt, pinDigits, mode: mode || 'pin', dataSalt, failedAttempts: 0, lockUntil: 0 };
+          setSecurity(next);
+          await store.setRaw('aba:security', JSON.stringify(next));
+          dataKey = await deriveDataKey(pin, dataSalt);
+          setLocked(false);
+          await loadData();
+        }}
+      />
+    );
+  }
+
+  if (!loaded) {
+    return (
+      <div ref={rootRef} className="min-h-screen flex items-center justify-center" style={{ background: PAPER, color: INK_SOFT, fontFamily: F_BODY }}>
+        Chargement…
+      </div>
+    );
+  }
+
   return (
     <div ref={rootRef} className="min-h-screen" style={{ background: PAPER, color: INK, fontFamily: F_BODY }}>
       {/* Contenu : l'onglet courant, ou un écran ouvert depuis le tiroir.
@@ -4035,8 +4043,8 @@ function AbaApp() {
               transition: dragging ? 'none' : 'transform .2s ease-out',
             }}
           >
-            <div style={{ flex: '0 0 100%', minWidth: 0 }}>{volet(sensGeste < 0 ? cleCourante : cleVoisine)}</div>
-            <div style={{ flex: '0 0 100%', minWidth: 0 }}>{volet(sensGeste < 0 ? cleVoisine : cleCourante)}</div>
+            <div style={{ flex: '0 0 100%', minWidth: 0 }}>{sensGeste < 0 ? panneauCourant : panneauVoisin}</div>
+            <div style={{ flex: '0 0 100%', minWidth: 0 }}>{sensGeste < 0 ? panneauVoisin : panneauCourant}</div>
           </div>
         ) : (
           <div
@@ -4050,7 +4058,7 @@ function AbaApp() {
               animation: dir === 0 ? 'none' : `${dir > 0 ? 'abaInFromRight' : 'abaInFromLeft'} .18s ease-out`,
             }}
           >
-            {volet(cleCourante)}
+            {panneauCourant}
           </div>
         )}
       </div>
