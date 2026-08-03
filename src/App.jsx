@@ -26,15 +26,14 @@ const NAV_BG = '#DFE5DA';
    rassemblés ici plutôt qu'arbitrés dans le code : une seule ligne à changer
    le jour où la décision est prise, sans rouvrir les composants.
 
-   Point 1 — fermeture du tiroir latéral. Tant que les deux valent false, seul
-   le bouton de fermeture du tiroir le referme. Passer l'une ou l'autre (ou les
-   deux) à true ajoute le geste correspondant.
+   Point 1 — tranché : le tiroir latéral se ferme par tap sur la zone visible
+   à droite et par glissement, en plus du bouton de fermeture.
 
    Point 6 — dérive visuelle de la pastille de stabilité. null : la pastille ne
    change jamais d'aspect faute de relevé récent. Un nombre de millisecondes
    active l'affichage estompé au-delà de ce délai. */
-const TIROIR_FERME_AU_TAP_DEHORS = false;
-const TIROIR_FERME_AU_BALAYAGE = false;
+const TIROIR_FERME_AU_TAP_DEHORS = true;
+const TIROIR_FERME_AU_BALAYAGE = true;
 const STABILITE_DERIVE_MS = null;
 
 const F_DISPLAY = "'Space Grotesk', system-ui, sans-serif";
@@ -2242,25 +2241,31 @@ function AbaApp() {
     [tab, ecran]
   );
 
-  /* La barre est figée sur l'onglet Session, qui couvre les deux écrans
-     concernés : la configuration avant lancement et la cotation en cours. Un
-     balayage accidentel pendant une cotation ne doit jamais changer d'onglet,
-     et la barre ne doit pas se dérober sous le doigt. */
-  const navFige = !ecran && tab === 'session';
-  const swipeActif = !ecran && (tiroir ? TIROIR_FERME_AU_BALAYAGE : !navFige);
+  /* La barre est figée une fois les cotations lancées, pas avant : l'écran de
+     configuration n'a rien à protéger d'un balayage accidentel. Seule la
+     cotation en cours ne doit jamais changer d'onglet sous le doigt. */
+  const navFige = !ecran && tab === 'session' && !!activeSession;
+  const swipeActif = tiroir ? TIROIR_FERME_AU_BALAYAGE : !navFige;
+
+  /* Partagé avec le bouton « ‹ Menu » des écrans ouverts depuis le tiroir. */
+  const retourAuTiroir = React.useCallback(() => { setEcran(null); setTiroir(true); }, []);
 
   const onLeft = React.useCallback(() => {
     if (tiroir) { if (TIROIR_FERME_AU_BALAYAGE) setTiroir(false); return; }
+    if (ecran) { retourAuTiroir(); return; }
     goTab(1);
-  }, [tiroir, goTab]);
+  }, [tiroir, ecran, retourAuTiroir, goTab]);
 
   /* Depuis Suivi — l'extrémité gauche — il n'y a pas d'onglet précédent : le
-     balayage vers la droite y est libre, c'est lui qui ouvre le tiroir. */
+     balayage vers la droite y est libre, c'est lui qui ouvre le tiroir. Depuis
+     un écran ouvert par le tiroir, qui n'a pas de voisin latéral, les deux
+     sens ramènent au tiroir. */
   const onRight = React.useCallback(() => {
     if (tiroir) return;
+    if (ecran) { retourAuTiroir(); return; }
     if (tab === TAB_ORDER[0]) { setTiroir(true); return; }
     goTab(-1);
-  }, [tiroir, tab, goTab]);
+  }, [tiroir, ecran, tab, retourAuTiroir, goTab]);
 
   const { offset, dragging } = useHorizontalSwipe(null, { onLeft, onRight, onDocument: true, enabled: swipeActif });
 
@@ -2281,6 +2286,24 @@ function AbaApp() {
       clearTimeout(t);
     };
   }, [navFige]);
+
+  /* Sur tablette, le clavier virtuel réduit la fenêtre : la barre du bas, ancrée
+     au viewport de mise en page, remonte et vient se poser au-dessus du champ en
+     cours de saisie. On la retire tant qu'un champ a le focus. */
+  const [saisieEnCours, setSaisieEnCours] = useState(false);
+  useEffect(() => {
+    const estChamp = (el) => !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
+    const onIn = (e) => { if (estChamp(e.target)) setSaisieEnCours(true); };
+    // focusout précède le focusin du champ suivant : on attend un tour
+    // d'événements pour ne pas faire clignoter la barre en changeant de champ.
+    const onOut = () => { setTimeout(() => setSaisieEnCours(estChamp(document.activeElement)), 0); };
+    document.addEventListener('focusin', onIn);
+    document.addEventListener('focusout', onOut);
+    return () => {
+      document.removeEventListener('focusin', onIn);
+      document.removeEventListener('focusout', onOut);
+    };
+  }, []);
 
   /* --- chargement ---
      Les réglages de sécurité se lisent en clair, avant tout déverrouillage.
@@ -3053,7 +3076,9 @@ function AbaApp() {
         className="max-w-4xl mx-auto px-4 pb-44"
         style={{
           paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)',
-          transform: offset ? `translateX(${offset}px)` : 'none',
+          // Tiroir ouvert, le contenu ne doit pas suivre le doigt : il est
+          // rendu hors du panneau et glisserait dans la bande visible à droite.
+          transform: offset && !tiroir ? `translateX(${offset}px)` : 'none',
           transition: dragging ? 'none' : 'transform .2s ease-out',
         }}
       >
@@ -3065,7 +3090,7 @@ function AbaApp() {
         >
         {ecran && (
           <button
-            onClick={() => { setEcran(null); setTiroir(true); }}
+            onClick={retourAuTiroir}
             className="flex items-center gap-1 text-sm mb-3"
             style={{ color: INK_SOFT }}
           >
@@ -3172,6 +3197,7 @@ function AbaApp() {
         style={{
           background: `linear-gradient(to top, ${PAPER} 60%, transparent)`,
           paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.6rem)',
+          display: saisieEnCours ? 'none' : undefined,
         }}
       >
         <div
@@ -3322,34 +3348,10 @@ function AbaApp() {
                 { k: 'personnes', label: 'Personnes accompagnées', icon: Users },
                 { k: 'intervenants', label: 'Intervenants', icon: UserCog },
                 { k: 'modeles', label: "Modèles d'objectifs", icon: BookmarkPlus },
-                { k: 'motsdepasse', label: 'Mots de passe', icon: Lock },
-                { k: 'donnees', label: 'Données', icon: Database },
-              ].map((it) => {
-                const Icon = it.icon;
-                return (
-                  <button
-                    key={it.k}
-                    onClick={() => { setEcran(it.k); setTiroir(false); }}
-                    className="w-full flex items-center gap-3 rounded-xl px-3 py-3.5 text-left"
-                    style={{ backgroundColor: ecran === it.k ? PAPER : 'transparent' }}
-                  >
-                    <Icon size={17} style={{ color: INK_SOFT }} className="shrink-0" />
-                    <span className="text-sm flex-1 min-w-0" style={{ fontFamily: F_DISPLAY }}>{it.label}</span>
-                    <ChevronRight size={16} style={{ color: INK_SOFT }} className="shrink-0" />
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Ces deux écrans n'ont pas encore de place attribuée dans le menu.
-                Ils restent atteignables ici plutôt que de disparaître. */}
-            <div className="px-4 mt-6 mb-1">
-              <div className="text-xs uppercase tracking-wide" style={{ color: INK_SOFT }}>Emplacement provisoire</div>
-            </div>
-            <div className="px-2 space-y-0.5">
-              {[
                 { k: 'guidances', label: 'Guidances', icon: SlidersHorizontal },
                 { k: 'abc', label: 'Réponses ABC', icon: AlertTriangle },
+                { k: 'motsdepasse', label: 'Mots de passe', icon: Lock },
+                { k: 'donnees', label: 'Données', icon: Database },
               ].map((it) => {
                 const Icon = it.icon;
                 return (
@@ -5052,27 +5054,6 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   const toggleAtelierFavorite = (oid) =>
     setAtelierFavorites((cur) => (cur.includes(oid) ? cur.filter((x) => x !== oid) : [...cur, oid]));
 
-  /* Relance de la dernière séance : reprend la même configuration (mode,
-     atelier, personnes, objectifs, prioritaires d'atelier), en écartant les
-     objectifs supprimés depuis — même logique de repli que la mémorisation
-     d'atelier. */
-  const derniereSeance = sessions && sessions.length
-    ? sessions.reduce((a, s) => (new Date(s.date) > new Date(a.date) ? s : a))
-    : null;
-
-  function relancerDerniere() {
-    const sess = derniereSeance;
-    if (!sess) return;
-    const ids = (sess.studentIds || []).filter((sid) => students.some((s) => s.id === sid));
-    if (!ids.length) return;
-    setMode(sess.mode === 'balance' ? 'balance' : 'atelier');
-    setAtelierId(sess.atelierId || null);
-    setIntervenantId(sess.intervenantId || null);
-    setAtelierFavorites([]);
-    setDoubleCotation(!!sess.doubleCotation);
-    applyGroup(ids, sess.selectedObjectives);
-  }
-
   const currentAtelier = ateliers.find((a) => a.id === atelierId);
 
   /* Le bouton de mémorisation n'apparaît que si la configuration en cours
@@ -5139,30 +5120,6 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   return (
     <div>
       <SectionTitle sub="Choisissez l'atelier, les personnes présentes et les objectifs travaillés.">Nouvelle session</SectionTitle>
-
-      {derniereSeance && (
-        <button
-          onClick={relancerDerniere}
-          className="w-full rounded-2xl border p-3.5 mb-4 flex items-center gap-3 text-left"
-          style={{ borderColor: BORDER, backgroundColor: CARD }}
-        >
-          <span className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ backgroundColor: PAPER }}>
-            <RotateCcw size={16} style={{ color: INK }} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-medium">
-              Relancer la dernière séance
-            </span>
-            <span className="block text-xs truncate" style={{ color: INK_SOFT }}>
-              {(() => {
-                const a = ateliers.find((x) => x.id === derniereSeance.atelierId);
-                const nom = a ? a.name : derniereSeance.mode === 'balance' ? 'Balance Program' : 'Séance libre';
-                return `${nom} · ${new Date(derniereSeance.date).toLocaleDateString('fr-FR')} · ${derniereSeance.studentIds.length} personne${derniereSeance.studentIds.length !== 1 ? 's' : ''}`;
-              })()}
-            </span>
-          </span>
-        </button>
-      )}
 
       <div className="flex gap-1.5 mb-4">
         {[
