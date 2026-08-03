@@ -2342,6 +2342,7 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
   const [largeur, setLargeur] = useState(0);
   const [el, setEl] = useState(null);
   const state = useRef(null);
+  const coast = useRef(null); // id de la course animée en fin de geste, pour l'annuler si un nouveau geste démarre avant qu'elle finisse
 
   /* L'élément peut n'apparaître qu'à un rendu ultérieur (écran de chargement
      affiché en premier). On le suit à chaque rendu ; React ignore un état
@@ -2367,6 +2368,7 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
         state.current = null;
         return;
       }
+      if (coast.current) { cancelAnimationFrame(coast.current); coast.current = null; }
       const t = e.touches[0];
       state.current = { x: t.clientX, y: t.clientY, axis: null, dx: 0, time: Date.now(), largeur: largeurRef() };
     }
@@ -2401,23 +2403,44 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
     function end() {
       const g = state.current;
       state.current = null;
-      setDragging(false);
-      if (!g || g.axis !== 'x') { setOffset(0); return; }
+      if (!g || g.axis !== 'x') { setDragging(false); setOffset(0); return; }
       const speed = Math.abs(g.dx) / Math.max(1, Date.now() - g.time);
-      const seuil = peek ? Math.min(g.largeur * 0.28, 110) : 55;
-      if (Math.abs(g.dx) < seuil && speed < 0.4) { setOffset(0); return; }
+      // Seuil volontairement bas : un geste qui n'aboutit pas au premier essai
+      // se ressent comme deux actions au lieu d'une, ce qui est pire qu'un
+      // seuil trop permissif.
+      const seuil = peek ? Math.min(g.largeur * 0.2, 90) : 55;
+      if (Math.abs(g.dx) < seuil && speed < 0.35) { setDragging(false); setOffset(0); return; }
       const sens = g.dx < 0 ? -1 : 1;
       if (!peek) {
+        setDragging(false);
         setOffset(0);
         if (sens < 0) { if (onLeft) onLeft(); } else if (onRight) onRight();
         return;
       }
-      // Termine la course jusqu'au bord dans la continuité du doigt ; l'écran
-      // ne commute qu'à l'arrivée, pas avant que le geste ait fini son mouvement.
-      setOffset(sens * g.largeur);
-      setTimeout(() => {
-        setOffset(0);
-        if (sens < 0) { if (onLeft) onLeft(); } else if (onRight) onRight(); }, 200);
+      // Termine la course jusqu'au bord dans la continuité du doigt — animée
+      // image par image plutôt que par une transition CSS lancée en parallèle
+      // d'un minuteur : les deux dérivaient l'un de l'autre, ce qui donnait
+      // l'impression d'un geste en deux temps plutôt qu'un mouvement continu.
+      // `dragging` reste vrai tout du long pour que le rendu n'applique aucune
+      // transition CSS par-dessus cette animation pilotée en JS.
+      const depart = g.dx;
+      const cible = sens * g.largeur;
+      const t0 = performance.now();
+      const duree = 180;
+      const pas = (maintenant) => {
+        const p = Math.min(1, (maintenant - t0) / duree);
+        const e = 1 - (1 - p) * (1 - p); // accélération puis freinage en douceur
+        setOffset(depart + (cible - depart) * e);
+        if (p < 1) {
+          coast.current = requestAnimationFrame(pas);
+        } else {
+          coast.current = null;
+          setDragging(false);
+          setOffset(0);
+          if (sens < 0) { if (onLeft) onLeft(); } else if (onRight) onRight();
+        }
+      };
+      coast.current = requestAnimationFrame(pas);
     }
 
     target.addEventListener('touchstart', start, { passive: true });
@@ -2425,6 +2448,7 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
     target.addEventListener('touchend', end, { passive: true });
     target.addEventListener('touchcancel', end, { passive: true });
     return () => {
+      if (coast.current) { cancelAnimationFrame(coast.current); coast.current = null; }
       target.removeEventListener('touchstart', start);
       target.removeEventListener('touchmove', move);
       target.removeEventListener('touchend', end);
@@ -2446,6 +2470,7 @@ function useVerticalDismiss(ref, { onDismiss, enabled = true }) {
   const [dragging, setDragging] = useState(false);
   const [el, setEl] = useState(null);
   const state = useRef(null);
+  const coast = useRef(null);
 
   useEffect(() => {
     setEl(ref && ref.current ? ref.current : null);
@@ -2456,6 +2481,7 @@ function useVerticalDismiss(ref, { onDismiss, enabled = true }) {
 
     function start(e) {
       if (e.touches.length !== 1) { state.current = null; return; }
+      if (coast.current) { cancelAnimationFrame(coast.current); coast.current = null; }
       const t = e.touches[0];
       state.current = { x: t.clientX, y: t.clientY, axis: null, dy: 0, time: Date.now() };
     }
@@ -2484,16 +2510,31 @@ function useVerticalDismiss(ref, { onDismiss, enabled = true }) {
     function end() {
       const g = state.current;
       state.current = null;
-      setDragging(false);
-      if (!g || g.axis !== 'y' || g.dy <= 0) { setOffset(0); return; }
+      if (!g || g.axis !== 'y' || g.dy <= 0) { setDragging(false); setOffset(0); return; }
       const speed = g.dy / Math.max(1, Date.now() - g.time);
       const h = window.innerHeight;
-      const depasse = g.dy > h * 0.32 || speed > 0.55;
-      if (!depasse) { setOffset(0); return; }
-      // Termine la course jusqu'en bas dans la continuité du doigt ; la
-      // réduction en pastille n'a lieu qu'à l'arrivée.
-      setOffset(h);
-      setTimeout(() => { setOffset(0); if (onDismiss) onDismiss(); }, 200);
+      const depasse = g.dy > h * 0.24 || speed > 0.45;
+      if (!depasse) { setDragging(false); setOffset(0); return; }
+      // Termine la course jusqu'en bas dans la continuité du doigt — animée
+      // image par image, comme le balayage horizontal, pour que la réduction
+      // en pastille arrive exactement quand le mouvement visuel se termine.
+      const depart = g.dy;
+      const t0 = performance.now();
+      const duree = 180;
+      const pas = (maintenant) => {
+        const p = Math.min(1, (maintenant - t0) / duree);
+        const e = 1 - (1 - p) * (1 - p);
+        setOffset(depart + (h - depart) * e);
+        if (p < 1) {
+          coast.current = requestAnimationFrame(pas);
+        } else {
+          coast.current = null;
+          setDragging(false);
+          setOffset(0);
+          if (onDismiss) onDismiss();
+        }
+      };
+      coast.current = requestAnimationFrame(pas);
     }
 
     el.addEventListener('touchstart', start, { passive: true });
@@ -2501,6 +2542,7 @@ function useVerticalDismiss(ref, { onDismiss, enabled = true }) {
     el.addEventListener('touchend', end, { passive: true });
     el.addEventListener('touchcancel', end, { passive: true });
     return () => {
+      if (coast.current) { cancelAnimationFrame(coast.current); coast.current = null; }
       el.removeEventListener('touchstart', start);
       el.removeEventListener('touchmove', move);
       el.removeEventListener('touchend', end);
