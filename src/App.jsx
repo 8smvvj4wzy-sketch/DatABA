@@ -923,6 +923,50 @@ function figerChronos(entry, stamp, cumulePending) {
   return next;
 }
 
+/* Relance à chaque essai : sur les modes à essais discrets (trials, chaînage,
+   balance program), le compteur et/ou le chrono auxiliaires peuvent se figer
+   sous l'essai qu'on vient de coter puis repartir de zéro pour le suivant.
+   `cle` est l'index de l'essai (trials, balance) ou l'id de l'étape
+   (chaînage). Retourne le seul patch à fusionner sur l'entrée — un objet vide
+   si aucune des deux relances n'est active. */
+function relancerMesures(entry, cle, compteurParEssai, chronoParEssai, stamp) {
+  if (!compteurParEssai && !chronoParEssai) return {};
+  const m = (entry && entry.mesures) || mesuresVides();
+  const essais = { ...((entry && entry.mesuresEssais) || {}) };
+  const capture = { ...(essais[cle] || {}) };
+  let mesures = m;
+  const iso = new Date(stamp).toISOString();
+  if (compteurParEssai) {
+    capture.compteur = { ...m.compteur, valideA: m.compteur.valideA || iso };
+    mesures = { ...mesures, compteur: { total: 0, valideA: null } };
+  }
+  if (chronoParEssai) {
+    const c = m.chrono;
+    const fige = c.running
+      ? { ...c, running: false, elapsedMs: (c.elapsedMs || 0) + (stamp - c.startedAt), startedAt: null }
+      : c;
+    capture.chrono = { ...fige, valideA: fige.valideA || iso };
+    mesures = { ...mesures, chrono: { elapsedMs: 0, running: false, startedAt: null, valideA: null } };
+  }
+  essais[cle] = capture;
+  return { mesures, mesuresEssais: essais };
+}
+
+/* Après la suppression d'un essai indexé (annuler un essai en trials, retirer
+   un essai en balance), les mesures capturées aux index suivants doivent
+   glisser d'un cran pour rester alignées sur l'essai qu'elles décrivent. Sans
+   cela, une mesure resterait accrochée au mauvais essai après l'annulation. */
+function reindexMesuresEssais(mesuresEssais, indexSupprime) {
+  if (!mesuresEssais) return mesuresEssais;
+  const next = {};
+  Object.entries(mesuresEssais).forEach(([k, v]) => {
+    const i = Number(k);
+    if (i === indexSupprime) return;
+    next[i > indexSupprime ? i - 1 : i] = v;
+  });
+  return next;
+}
+
 /* Arrête les chronomètres encore en cours au moment de l'enregistrement */
 function finalizeSession(session) {
   const stamp = Date.now();
@@ -1334,7 +1378,16 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)', 'Compteur', 'Chrono (s)']];
+
+  /* Mesure auxiliaire capturée pour cet essai (relance à chaque essai) — vide
+     tant que rien n'a été relancé sous cette clé, jamais un zéro par défaut. */
+  function mesureEssaiCells(entry, cle) {
+    const e = entry.mesuresEssais && entry.mesuresEssais[cle];
+    const compteur = e && e.compteur && e.compteur.valideA ? e.compteur.total : '';
+    const chrono = e && e.chrono && e.chrono.valideA ? Math.round((e.chrono.elapsedMs || 0) / 1000) : '';
+    return [compteur, chrono];
+  }
 
   function base(sess, sid, obj) {
     return [
@@ -1363,7 +1416,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
         ...base(sess, sid, { name: 'Temps de renforcement', activeTargetName: null, activePhaseName: '—', config: {} }),
         'Renforcement', 1, '',
         `${Math.round(renfo / 60)} min de renforcement · ${Math.round(activite / 60)} min d'activité`,
-        '', '', '', renfo,
+        '', '', '', renfo, '', '',
       ]);
     });
 
@@ -1388,6 +1441,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
               ...b, 'Essai par essai', i + 1, '', g ? g.label : code,
               isIndependentCode(gl, code) ? 1 : 0, '', '',
               ms == null ? '' : Math.round(ms / 100) / 10,
+              ...mesureEssaiCells(entry, i),
             ]);
           });
         }
@@ -1397,7 +1451,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
             const code = entry.steps && entry.steps[st.id];
             if (!code) return;
             const g = guidanceByCode(gl, code);
-            rows.push([...b, 'Chaînage', i + 1, st.name, g ? g.label : code, isIndependentCode(gl, code) ? 1 : 0, '', '', '']);
+            rows.push([...b, 'Chaînage', i + 1, st.name, g ? g.label : code, isIndependentCode(gl, code) ? 1 : 0, '', '', '', ...mesureEssaiCells(entry, st.id)]);
           });
         }
 
@@ -1411,6 +1465,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
                 ...b, 'Balance Program', ti + 1, st.name, o ? o.label : e.outcome,
                 o && o.exclu ? '' : o && o.reussite ? 1 : 0,
                 e.demande ? 'Oui' : 'Non', e.renforce ? 'Oui' : 'Non', '',
+                ...mesureEssaiCells(entry, ti),
               ]);
             });
           });
@@ -1420,11 +1475,11 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
           const levels = obj.config.levels || [];
           Object.entries(entry.marks || {}).forEach(([n, lid]) => {
             const lv = levels.find((l) => l.id === lid);
-            if (lv) rows.push([...b, 'Intervalle', Number(n), '', lv.name, '', '', '', '']);
+            if (lv) rows.push([...b, 'Intervalle', Number(n), '', lv.name, '', '', '', '', '', '']);
           });
           (entry.segments || []).forEach((seg) => {
             const lv = levels.find((l) => l.id === seg.levelId);
-            if (lv) rows.push([...b, 'Intervalle (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '', segmentSeconds(seg)]);
+            if (lv) rows.push([...b, 'Intervalle (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '', segmentSeconds(seg), '', '']);
           });
         }
       });
@@ -1488,7 +1543,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
 
   const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter);
   const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
-  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }];
+  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 11 }];
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
@@ -4140,12 +4195,13 @@ function PanneauPersonnes({
                               <div className="text-xs" style={{ color: INK_SOFT }}>
                                 {meta.short}
                                 {o.type === 'trials' && (o.config.trialCount ? ` · ${o.config.trialCount} essais prévus` : ' · essais sans limite')}
-                                {o.type === 'trials' && o.config.withTimer && (o.config.timerMode === 'countdown' && o.config.timerSeconds
-                                  ? ` · limite ${fmtDuration(o.config.timerSeconds * 1000)}`
-                                  : ' · chronométré')}
                                 {o.type === 'interval' && ` · toutes les ${fmtDuration(intervalStepSec(o) * 1000)} · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
                                 {(o.type === 'chaining' || o.type === 'balance') && ` · ${(o.config.steps || []).length} étapes`}
                                 {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions} ${o.config.mastery.unit === 'days' ? 'jours' : 'séances'}`}
+                                {o.config.avecCompteur && ' · compteur'}
+                                {o.config.avecChrono && (o.config.chronoMode === 'countdown' && o.config.chronoSeconds
+                                  ? ` · chrono limite ${fmtDuration(o.config.chronoSeconds * 1000)}`
+                                  : ' · chrono')}
                                 {objectiveTargets(o).length > 0 && ` · ${(o.masteredTargetIds || []).length}/${objectiveTargets(o).length} cibles acquises`}
                               </div>
                             </div>
@@ -4271,6 +4327,10 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const initConfig = init.config || {};
   const [name, setName] = useState(init.name || '');
   const [type, setType] = useState(init.type || 'trials');
+  /* Seuls les modes à essais discrets se prêtent à une relance du compteur ou
+     du chrono auxiliaires à chaque essai — l'intervalle mesure des tops de
+     temps, pas des essais. */
+  const parEssaiPossible = ['trials', 'chaining', 'balance'].includes(type);
   const [trialCount, setTrialCount] = useState(initConfig.trialCount === undefined ? 0 : initConfig.trialCount);
   const [intervalMin, setIntervalMin] = useState(() => {
     const sec = initConfig.intervalSeconds || (initConfig.intervalMinutes || 5) * 60;
@@ -4316,12 +4376,15 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
   const [phaseName, setPhaseName] = useState(
     init.phaseHistory && init.phaseHistory.length ? init.phaseHistory[init.phaseHistory.length - 1].name : DEFAULT_PHASES[0]
   );
-  const [withTimer, setWithTimer] = useState(!!initConfig.withTimer);
-  const [timerMode, setTimerMode] = useState(initConfig.timerMode || 'chrono');
-  const [timerMin, setTimerMin] = useState(initConfig.timerSeconds ? Math.floor(initConfig.timerSeconds / 60) : 5);
-  const [timerSec, setTimerSec] = useState(initConfig.timerSeconds ? initConfig.timerSeconds % 60 : 0);
   const [avecCompteur, setAvecCompteur] = useState(!!initConfig.avecCompteur);
   const [avecChrono, setAvecChrono] = useState(!!initConfig.avecChrono);
+  const [chronoMode, setChronoMode] = useState(initConfig.chronoMode || 'chrono');
+  const [chronoMin, setChronoMin] = useState(initConfig.chronoSeconds ? Math.floor(initConfig.chronoSeconds / 60) : 0);
+  const [chronoSec, setChronoSec] = useState(initConfig.chronoSeconds ? initConfig.chronoSeconds % 60 : 30);
+  /* « Relancer à chaque essai » : seuls les modes à essais discrets s'y prêtent
+     — l'intervalle mesure des tops de temps, pas des essais. */
+  const [compteurParEssai, setCompteurParEssai] = useState(!!initConfig.compteurParEssai);
+  const [chronoParEssai, setChronoParEssai] = useState(!!initConfig.chronoParEssai);
   const [levels, setLevels] = useState(initConfig.levels || DEFAULT_INTERVAL_LEVELS);
   const [newLevel, setNewLevel] = useState('');
   const [targetLevelId, setTargetLevelId] = useState(
@@ -4336,13 +4399,6 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
     const config = {};
     if (type === 'trials') {
       config.trialCount = trialCount;
-      config.withTimer = withTimer;
-      if (withTimer) {
-        config.timerMode = timerMode;
-        if (timerMode === 'countdown') {
-          config.timerSeconds = Math.min(3600, Math.max(5, (Number(timerMin) || 0) * 60 + (Number(timerSec) || 0)));
-        }
-      }
     }
     if (type === 'interval') {
       const pas = Math.min(3600, Math.max(10, (Number(intervalMin) || 0) * 60 + (Number(intervalSec) || 0)));
@@ -4354,8 +4410,18 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
     }
     if (type === 'chaining' || type === 'balance') config.steps = steps;
     if (type === 'balance' && balanceSet.length) config.balanceOutcomes = balanceSet;
-    if (avecCompteur) config.avecCompteur = true;
-    if (avecChrono) config.avecChrono = true;
+    if (avecCompteur) {
+      config.avecCompteur = true;
+      if (parEssaiPossible && compteurParEssai) config.compteurParEssai = true;
+    }
+    if (avecChrono) {
+      config.avecChrono = true;
+      config.chronoMode = chronoMode;
+      if (chronoMode === 'countdown') {
+        config.chronoSeconds = Math.min(3600, Math.max(5, (Number(chronoMin) || 0) * 60 + (Number(chronoSec) || 0)));
+      }
+      if (parEssaiPossible && chronoParEssai) config.chronoParEssai = true;
+    }
     if (USES_GUIDANCE.includes(type) && guidanceSet.length) config.guidanceSet = guidanceSet;
     if (PERCENT_TYPES.includes(type)) {
       config.mastery = {
@@ -4446,53 +4512,9 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
               style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
             />
           </div>
-          <p className="text-xs mt-1.5 mb-3" style={{ color: INK_SOFT }}>
+          <p className="text-xs mt-1.5" style={{ color: INK_SOFT }}>
             Un nombre prévu sert de repère pendant la cotation, mais n'empêche jamais d'ajouter des essais supplémentaires.
           </p>
-
-          <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
-            <button onClick={() => setWithTimer((v) => !v)} className="flex items-center gap-1.5 text-sm">
-              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: withTimer ? INK : BORDER }}>
-                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: withTimer ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-              </span>
-              Chronométrer chaque essai
-            </button>
-            {withTimer && (
-              <div className="mt-3 space-y-3">
-                <p className="text-xs" style={{ color: INK_SOFT }}>
-                  Le temps court à partir de la consigne et se fige dès que l'essai est coté. Chaque essai
-                  conserve sa durée, reprise dans les rapports.
-                </p>
-                <div className="flex gap-1.5">
-                  {[{ k: 'chrono', l: 'Chronomètre' }, { k: 'countdown', l: 'Temps limite' }].map((m) => (
-                    <button key={m.k} onClick={() => setTimerMode(m.k)} className="flex-1 rounded-lg py-2.5 text-sm border"
-                      style={{ borderColor: timerMode === m.k ? INK : BORDER, backgroundColor: timerMode === m.k ? INK : 'transparent', color: timerMode === m.k ? '#fff' : INK_SOFT }}>
-                      {m.l}
-                    </button>
-                  ))}
-                </div>
-                {timerMode === 'countdown' && (
-                  <div className="flex gap-2 items-center">
-                    <input type="number" inputMode="numeric" min="0" max="60" value={timerMin}
-                      onChange={(e) => setTimerMin(e.target.value === '' ? '' : Number(e.target.value))}
-                      onBlur={() => setTimerMin((v) => (v === '' || v === null ? 0 : Math.min(60, Math.max(0, Number(v)))))}
-                      className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
-                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
-                    <span className="text-xs" style={{ color: INK_SOFT }}>min</span>
-                    <input type="number" inputMode="numeric" min="0" max="59" value={timerSec}
-                      onChange={(e) => setTimerSec(e.target.value === '' ? '' : Number(e.target.value))}
-                      onBlur={() => setTimerSec((v) => (v === '' || v === null ? 0 : Math.min(59, Math.max(0, Number(v)))))}
-                      className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
-                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
-                    <span className="text-xs" style={{ color: INK_SOFT }}>s</span>
-                    <span className="text-xs ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
-                      = {fmtDuration(Math.min(3600, Math.max(5, (Number(timerMin) || 0) * 60 + (Number(timerSec) || 0))) * 1000)}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
         </div>
       )}
 
@@ -4884,19 +4906,70 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
         <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
           Mesures annexes — à part de la cotation, indépendantes l'une de l'autre
         </div>
-        <div className="space-y-2">
-          <button onClick={() => setAvecCompteur((v) => !v)} className="flex items-center gap-1.5 text-sm">
-            <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecCompteur ? INK : BORDER }}>
-              <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecCompteur ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-            </span>
-            Compteur
-          </button>
-          <button onClick={() => setAvecChrono((v) => !v)} className="flex items-center gap-1.5 text-sm">
-            <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecChrono ? INK : BORDER }}>
-              <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecChrono ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-            </span>
-            Chronomètre
-          </button>
+        <div className="space-y-3">
+          <div>
+            <button onClick={() => setAvecCompteur((v) => !v)} className="flex items-center gap-1.5 text-sm">
+              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecCompteur ? INK : BORDER }}>
+                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecCompteur ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+              </span>
+              Compteur
+            </button>
+            {avecCompteur && parEssaiPossible && (
+              <button onClick={() => setCompteurParEssai((v) => !v)} className="flex items-center gap-1.5 text-xs mt-2 ml-1" style={{ color: INK_SOFT }}>
+                <span className="w-7 h-4 rounded-full relative shrink-0" style={{ backgroundColor: compteurParEssai ? INK : BORDER }}>
+                  <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white" style={{ left: compteurParEssai ? '0.875rem' : '0.125rem', transition: 'left .15s' }} />
+                </span>
+                Relancer à chaque essai
+              </button>
+            )}
+          </div>
+          <div>
+            <button onClick={() => setAvecChrono((v) => !v)} className="flex items-center gap-1.5 text-sm">
+              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecChrono ? INK : BORDER }}>
+                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecChrono ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+              </span>
+              Chronomètre
+            </button>
+            {avecChrono && (
+              <div className="mt-2 ml-1 space-y-2">
+                <div className="flex gap-1.5">
+                  {[{ k: 'chrono', l: 'Chronomètre' }, { k: 'countdown', l: 'Temps limite' }].map((m) => (
+                    <button key={m.k} onClick={() => setChronoMode(m.k)} className="flex-1 rounded-lg py-2 text-xs border"
+                      style={{ borderColor: chronoMode === m.k ? INK : BORDER, backgroundColor: chronoMode === m.k ? INK : 'transparent', color: chronoMode === m.k ? '#fff' : INK_SOFT }}>
+                      {m.l}
+                    </button>
+                  ))}
+                </div>
+                {chronoMode === 'countdown' && (
+                  <div className="flex gap-2 items-center">
+                    <input type="number" inputMode="numeric" min="0" max="60" value={chronoMin}
+                      onChange={(e) => setChronoMin(e.target.value === '' ? '' : Number(e.target.value))}
+                      onBlur={() => setChronoMin((v) => (v === '' || v === null ? 0 : Math.min(60, Math.max(0, Number(v)))))}
+                      className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
+                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
+                    <span className="text-xs" style={{ color: INK_SOFT }}>min</span>
+                    <input type="number" inputMode="numeric" min="0" max="59" value={chronoSec}
+                      onChange={(e) => setChronoSec(e.target.value === '' ? '' : Number(e.target.value))}
+                      onBlur={() => setChronoSec((v) => (v === '' || v === null ? 0 : Math.min(59, Math.max(0, Number(v)))))}
+                      className="w-20 rounded-lg border px-2 py-2.5 text-sm bg-transparent text-center"
+                      style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }} />
+                    <span className="text-xs" style={{ color: INK_SOFT }}>s</span>
+                    <span className="text-xs ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
+                      = {fmtDuration(Math.min(3600, Math.max(5, (Number(chronoMin) || 0) * 60 + (Number(chronoSec) || 0))) * 1000)}
+                    </span>
+                  </div>
+                )}
+                {parEssaiPossible && (
+                  <button onClick={() => setChronoParEssai((v) => !v)} className="flex items-center gap-1.5 text-xs" style={{ color: INK_SOFT }}>
+                    <span className="w-7 h-4 rounded-full relative shrink-0" style={{ backgroundColor: chronoParEssai ? INK : BORDER }}>
+                      <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white" style={{ left: chronoParEssai ? '0.875rem' : '0.125rem', transition: 'left .15s' }} />
+                    </span>
+                    Relancer à chaque essai
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -6050,7 +6123,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
         </div>
       )}
       <div className="mt-3" style={paused && !forcer ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
-        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} now={now} onChange={onChange} />}
+        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
         {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} />}
@@ -6064,6 +6137,8 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
             mesures={entry && entry.mesures}
             avecCompteur={!!obj.config.avecCompteur}
             avecChrono={!!obj.config.avecChrono}
+            chronoMode={obj.config.chronoMode}
+            chronoSeconds={obj.config.chronoSeconds}
             now={now}
             couleur={meta.color}
             onChange={(mesures) => onChange({ mesures })}
@@ -6102,11 +6177,32 @@ function ObjectiveHeader({ obj, entry, guidances }) {
    cotation (si l'option est paramétrée sur l'objectif) et, sans réglage,
    sur les fiches crise et ABC. Composant unique pour les deux emplacements
    — CLAUDE.md interdit les implémentations parallèles. */
-function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, now, couleur, onChange }) {
+function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chronoSeconds, now, couleur, onChange }) {
   const [ouvert, setOuvert] = useState(null); // null | 'compteur' | 'chrono'
   const m = mesures || mesuresVides();
   const compteur = m.compteur || mesuresVides().compteur;
   const chrono = m.chrono || mesuresVides().chrono;
+  const chronoAffiche = chrono.running ? (chrono.elapsedMs || 0) + (now - chrono.startedAt) : (chrono.elapsedMs || 0);
+
+  /* Temps limite : sur le même principe que l'ancien chrono par essai — une
+     alerte sonore et vibrée une seule fois, puis le chrono se fige à la
+     limite sans se valider tout seul. */
+  const countdown = chronoMode === 'countdown' && chronoSeconds > 0;
+  const targetMs = (chronoSeconds || 0) * 1000;
+  const ecoule = countdown && chronoAffiche >= targetMs;
+  const sonne = useRef(false);
+
+  useEffect(() => {
+    if (!countdown || !chrono.running || sonne.current) return;
+    if (chronoAffiche >= targetMs) {
+      sonne.current = true;
+      alertInterval({ soundOn: true, vibrateOn: true });
+      onChange({ ...m, chrono: { ...chrono, running: false, elapsedMs: targetMs, startedAt: null } });
+    }
+  });
+  useEffect(() => {
+    if (!chrono.running) sonne.current = false;
+  }, [chrono.running]);
 
   function ecrire(patch) {
     onChange({ ...m, ...patch });
@@ -6123,9 +6219,14 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, now, couleur, o
   function basculerChrono() {
     if (chrono.running) {
       ecrire({ chrono: { ...chrono, running: false, elapsedMs: (chrono.elapsedMs || 0) + (Date.now() - chrono.startedAt), startedAt: null, valideA: null } });
-    } else {
-      ecrire({ chrono: { ...chrono, running: true, startedAt: Date.now(), valideA: null } });
+      return;
     }
+    if (countdown && (chrono.elapsedMs || 0) >= targetMs) {
+      sonne.current = false;
+      ecrire({ chrono: { elapsedMs: 0, running: true, startedAt: Date.now(), valideA: null } });
+      return;
+    }
+    ecrire({ chrono: { ...chrono, running: true, startedAt: Date.now(), valideA: null } });
   }
   function validerChrono() {
     const fige = chrono.running
@@ -6134,7 +6235,6 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, now, couleur, o
     ecrire({ chrono: { ...fige, valideA: new Date().toISOString() } });
     setOuvert(null);
   }
-  const chronoAffiche = chrono.running ? (chrono.elapsedMs || 0) + (now - chrono.startedAt) : (chrono.elapsedMs || 0);
 
   if (!avecCompteur && !avecChrono) return null;
 
@@ -6144,25 +6244,25 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, now, couleur, o
         {avecCompteur && (
           <button
             onClick={() => setOuvert((v) => (v === 'compteur' ? null : 'compteur'))}
-            className="flex items-center gap-1 text-xs"
+            className="flex items-center gap-1.5 text-xs py-1 px-0.5"
             style={{ color: INK_SOFT }}
             title="Compteur auxiliaire"
           >
-            <Hash size={13} />
+            <Hash size={18} />
             {compteur.total > 0 && <span style={{ fontFamily: F_MONO }}>{compteur.total}</span>}
-            {compteur.valideA && <Check size={11} style={{ color: COLOR_COMPTEUR }} />}
+            {compteur.valideA && <Check size={12} style={{ color: COLOR_COMPTEUR }} />}
           </button>
         )}
         {avecChrono && (
           <button
             onClick={() => setOuvert((v) => (v === 'chrono' ? null : 'chrono'))}
-            className="flex items-center gap-1 text-xs"
+            className="flex items-center gap-1.5 text-xs py-1 px-0.5"
             style={{ color: INK_SOFT }}
             title="Chronomètre auxiliaire"
           >
-            <TimerIcon size={13} />
+            <TimerIcon size={18} />
             {chronoAffiche > 0 && <span style={{ fontFamily: F_MONO }}>{fmtClock(chronoAffiche)}</span>}
-            {chrono.valideA && <Check size={11} style={{ color: COLOR_CHRONO }} />}
+            {chrono.valideA && <Check size={12} style={{ color: COLOR_CHRONO }} />}
           </button>
         )}
       </div>
@@ -6189,7 +6289,12 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, now, couleur, o
       {ouvert === 'chrono' && (
         <div className="mt-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
           <div className="flex items-center gap-3">
-            <span className="text-xl font-semibold tabular-nums" style={{ fontFamily: F_MONO, color: INK }}>{fmtClock(chronoAffiche)}</span>
+            <span className="text-xl font-semibold tabular-nums" style={{ fontFamily: F_MONO, color: ecoule ? COLOR_CHRONO : INK }}>
+              {fmtClock(countdown ? Math.max(0, targetMs - chronoAffiche) : chronoAffiche)}
+            </span>
+            {countdown && (
+              <span className="text-xs" style={{ color: INK_SOFT }}>{ecoule ? 'temps écoulé' : `sur ${fmtDuration(targetMs)}`}</span>
+            )}
             <button onClick={basculerChrono}
               className="ml-auto rounded-lg px-4 py-2.5 text-white flex items-center gap-1.5 active:scale-95 transition-transform"
               style={{ backgroundColor: chrono.running ? '#A8402F' : COLOR_CHRONO, fontFamily: F_DISPLAY }}>
@@ -6211,109 +6316,67 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, now, couleur, o
 }
 
 /* --- Widgets de cotation --- */
-function TrialsWidget({ obj, entry, guidances, now, onChange }) {
+function TrialsWidget({ obj, entry, guidances, onChange }) {
   const list = objectiveGuidances(obj, guidances);
   const trials = entry.trials || [];
   const planned = obj.config.trialCount || 0; // 0 = pas de limite
   const done = trials.filter((t) => trialCode(t)).length;
   const unlimited = !planned;
 
-  /* Chronométrage : le temps court à partir de la consigne et se fige dès que
-     l'essai est coté. Chaque essai garde ainsi sa propre durée. */
-  const withTimer = !!obj.config.withTimer;
-  const countdown = withTimer && obj.config.timerMode === 'countdown' && obj.config.timerSeconds > 0;
-  const targetMs = (obj.config.timerSeconds || 0) * 1000;
-  const enCours = !!entry.running;
-  const chrono = enCours ? (entry.pendingMs || 0) + (now - entry.startedAt) : (entry.pendingMs || 0);
-  const ecoule = countdown && chrono >= targetMs;
-  const sonne = useRef(false);
-
-  useEffect(() => {
-    if (!countdown || !enCours || sonne.current) return;
-    if (chrono >= targetMs) {
-      sonne.current = true;
-      alertInterval({ soundOn: true, vibrateOn: true });
-      onChange({ running: false, pendingMs: targetMs, startedAt: null });
-    }
-  });
-  useEffect(() => {
-    if (!enCours) sonne.current = false;
-  }, [enCours]);
+  /* Relance à chaque essai : le compteur et/ou le chrono auxiliaires, s'ils
+     sont paramétrés ainsi, se figent sous l'essai qu'on vient de coter puis
+     repartent de zéro pour le suivant. */
+  const compteurParEssai = !!(obj.config.avecCompteur && obj.config.compteurParEssai);
+  const chronoParEssai = !!(obj.config.avecChrono && obj.config.chronoParEssai);
 
   const cells = unlimited ? [...trials.filter((t) => trialCode(t)), null] : trials;
 
   function record(code) {
-    const ms = withTimer ? chrono : null;
-    const valeur = withTimer ? { code, ms } : code;
-    const reset = withTimer ? { running: false, startedAt: null, pendingMs: 0 } : {};
-
+    let next;
+    let idx;
     if (unlimited) {
-      onChange({ trials: [...trials.filter((t) => trialCode(t)), valeur], ...reset });
-      return;
+      next = [...trials.filter((t) => trialCode(t)), code];
+      idx = next.length - 1;
+    } else {
+      const empty = trials.findIndex((t) => !trialCode(t));
+      if (empty === -1) {
+        next = [...trials, code];
+        idx = next.length - 1;
+      } else {
+        next = trials.slice();
+        next[empty] = code;
+        idx = empty;
+      }
     }
-    const idx = trials.findIndex((t) => !trialCode(t));
-    if (idx === -1) {
-      onChange({ trials: [...trials, valeur], ...reset });
-      return;
+    const patch = { trials: next };
+    if (compteurParEssai || chronoParEssai) {
+      Object.assign(patch, relancerMesures(entry, idx, compteurParEssai, chronoParEssai, Date.now()));
     }
-    const next = trials.slice();
-    next[idx] = valeur;
-    onChange({ trials: next, ...reset });
+    onChange(patch);
   }
 
   function undo() {
     if (!done) return;
     if (unlimited || done > planned) {
       const kept = trials.filter((t) => trialCode(t));
+      const removedIdx = kept.length - 1;
       kept.pop();
-      onChange({ trials: unlimited ? kept : [...kept, ...Array(Math.max(0, planned - kept.length)).fill(null)] });
+      const patch = { trials: unlimited ? kept : [...kept, ...Array(Math.max(0, planned - kept.length)).fill(null)] };
+      if (entry.mesuresEssais) patch.mesuresEssais = reindexMesuresEssais(entry.mesuresEssais, removedIdx);
+      onChange(patch);
       return;
     }
     const next = trials.slice();
     next[done - 1] = null;
-    onChange({ trials: next });
-  }
-
-  function toggleChrono() {
-    if (enCours) {
-      onChange({ running: false, pendingMs: (entry.pendingMs || 0) + (Date.now() - entry.startedAt), startedAt: null });
-      return;
-    }
-    if (countdown && (entry.pendingMs || 0) >= targetMs) {
-      sonne.current = false;
-      onChange({ running: true, startedAt: Date.now(), pendingMs: 0 });
-      return;
-    }
-    onChange({ running: true, startedAt: Date.now() });
+    const patch = { trials: next };
+    if (entry.mesuresEssais) patch.mesuresEssais = reindexMesuresEssais(entry.mesuresEssais, done - 1);
+    onChange(patch);
   }
 
   const cursor = unlimited ? done : trials.findIndex((t) => !trialCode(t));
 
   return (
     <div>
-      {withTimer && (
-        <div className="flex items-center gap-2 mb-2.5 rounded-xl px-3 py-2" style={{ backgroundColor: PAPER }}>
-          <span className="text-xl font-semibold tabular-nums" style={{ fontFamily: F_MONO, color: ecoule ? COLOR_CHRONO : INK }}>
-            {fmtClock(countdown ? Math.max(0, targetMs - chrono) : chrono)}
-          </span>
-          <span className="text-xs" style={{ color: INK_SOFT }}>
-            {countdown ? (ecoule ? 'temps écoulé' : `sur ${fmtDuration(targetMs)}`) : 'cet essai'}
-          </span>
-          <button
-            onClick={toggleChrono}
-            className="ml-auto rounded-lg px-3 py-2 text-white text-sm flex items-center gap-1.5 active:scale-95 transition-transform"
-            style={{ backgroundColor: enCours ? '#A8402F' : COLOR_CHRONO, fontFamily: F_DISPLAY }}
-          >
-            {enCours ? <><Pause size={15} /> Arrêter</> : <><Play size={15} /> {chrono > 0 ? 'Reprendre' : 'Consigne'}</>}
-          </button>
-          {chrono > 0 && (
-            <button onClick={() => { sonne.current = false; onChange({ running: false, startedAt: null, pendingMs: 0 }); }} style={{ color: INK_SOFT }}>
-              <RotateCcw size={15} />
-            </button>
-          )}
-        </div>
-      )}
-
       <div className="flex gap-1.5 mb-2.5 overflow-x-auto pb-1">
         {cells.map((t, i) => {
           const code = trialCode(t);
@@ -6548,12 +6611,27 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
   const list = objectiveGuidances(obj, guidances);
   const steps = obj.config.steps || [];
   const coded = steps.filter((s) => entry.steps[s.id]).length;
+  const compteurParEssai = !!(obj.config.avecCompteur && obj.config.compteurParEssai);
+  const chronoParEssai = !!(obj.config.avecChrono && obj.config.chronoParEssai);
 
   function setStep(stepId, code) {
     const next = { ...entry.steps };
-    if (next[stepId] === code) delete next[stepId];
-    else next[stepId] = code;
-    onChange({ steps: next });
+    const patch = { steps: next };
+    if (next[stepId] === code) {
+      delete next[stepId];
+      // L'étape redevient à coter : sa mesure capturée n'a plus de sens.
+      if (entry.mesuresEssais && entry.mesuresEssais[stepId]) {
+        const essais = { ...entry.mesuresEssais };
+        delete essais[stepId];
+        patch.mesuresEssais = essais;
+      }
+    } else {
+      next[stepId] = code;
+      if (compteurParEssai || chronoParEssai) {
+        Object.assign(patch, relancerMesures(entry, stepId, compteurParEssai, chronoParEssai, Date.now()));
+      }
+    }
+    onChange(patch);
   }
 
   return (
@@ -6589,7 +6667,7 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
       <div className="flex items-center justify-between mt-2">
         <span className="text-xs" style={{ color: INK_SOFT }}>{coded}/{steps.length} étapes cotées</span>
         {coded > 0 && (
-          <button onClick={() => onChange({ steps: {} })} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
+          <button onClick={() => onChange({ steps: {}, mesuresEssais: {} })} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
             <RotateCcw size={12} /> tout effacer
           </button>
         )}
@@ -6605,9 +6683,11 @@ function BalanceWidget({ obj, entry, onChange }) {
   const [active, setActive] = useState(trials.length - 1);
   const idx = Math.min(active, trials.length - 1);
   const trial = trials[idx] || { steps: {} };
+  const compteurParEssai = !!(obj.config.avecCompteur && obj.config.compteurParEssai);
+  const chronoParEssai = !!(obj.config.avecChrono && obj.config.chronoParEssai);
 
-  function writeTrials(next) {
-    onChange({ trials: next, steps: undefined });
+  function writeTrials(next, extra) {
+    onChange({ trials: next, steps: undefined, ...extra });
   }
 
   function setStep(stepId, patch) {
@@ -6621,14 +6701,20 @@ function BalanceWidget({ obj, entry, onChange }) {
 
   function validateTrial() {
     const next = [...trials, { steps: {} }];
-    writeTrials(next);
+    const extra = (compteurParEssai || chronoParEssai) ? relancerMesures(entry, idx, compteurParEssai, chronoParEssai, Date.now()) : undefined;
+    writeTrials(next, extra);
     setActive(next.length - 1);
   }
 
   function removeTrial() {
-    if (trials.length <= 1) { writeTrials([{ steps: {} }]); setActive(0); return; }
+    if (trials.length <= 1) {
+      writeTrials([{ steps: {} }], entry.mesuresEssais ? { mesuresEssais: {} } : undefined);
+      setActive(0);
+      return;
+    }
     const next = trials.filter((_, i) => i !== idx);
-    writeTrials(next);
+    const extra = entry.mesuresEssais ? { mesuresEssais: reindexMesuresEssais(entry.mesuresEssais, idx) } : undefined;
+    writeTrials(next, extra);
     setActive(Math.max(0, idx - 1));
   }
 

@@ -58,10 +58,12 @@ const code = `
   ${extraire('emptyEntry')}
   ${extraire('entryMatches')}
   ${extraire('figerChronos')}
-  return { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos };
+  ${extraire('relancerMesures')}
+  ${extraire('reindexMesuresEssais')}
+  return { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais };
 `;
 // eslint-disable-next-line no-new-func
-const { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos } = new Function(code)();
+const { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais } = new Function(code)();
 
 /* ==================== Lot A : quatre modes, et pas un de plus ==================== */
 t('exactement quatre modes de cotation', Object.keys(TYPES), ['trials', 'interval', 'chaining', 'balance']);
@@ -126,6 +128,42 @@ t('compteur à zéro jamais validé : cellule vide, pas un zéro', mesuresExport
 t('compteur validé : la valeur sort', mesuresExport({ compteur: { total: 4, valideA: '2026-08-03T10:00:00.000Z' }, chrono: mesuresVides().chrono }).compteurTotal, 4);
 t('chrono validé : durée arrondie à la seconde', mesuresExport({ compteur: mesuresVides().compteur, chrono: { elapsedMs: 12345, running: false, startedAt: null, valideA: '2026-08-03T10:00:00.000Z' } }).chronoSecondes, 12);
 t('chrono non validé : cellule vide malgré une durée non nulle', mesuresExport({ compteur: mesuresVides().compteur, chrono: { elapsedMs: 12345, running: false, startedAt: null, valideA: null } }).chronoSecondes, '');
+
+/* ==================== relancerMesures : compteur/chrono par essai ====================
+   Sur trials, chaînage et balance program, une relance capture la mesure en
+   cours sous la clé de l'essai puis remet à zéro les seules sous-parties
+   concernées — l'autre reste un relevé unique, inchangé. */
+t('aucune relance demandée : rien ne bouge', relancerMesures({ mesures: mesuresVides() }, 0, false, false, 1000), {});
+
+const entreeAvecCompteur = { mesures: { compteur: { total: 5, valideA: null }, chrono: mesuresVides().chrono } };
+const relance1 = relancerMesures(entreeAvecCompteur, 0, true, false, 5000);
+t('compteur relancé : la valeur en cours est capturée sous la clé', relance1.mesuresEssais[0].compteur.total, 5);
+t('compteur relancé : capturé avec un horodatage', relance1.mesuresEssais[0].compteur.valideA, new Date(5000).toISOString());
+t('compteur relancé : remis à zéro pour l’essai suivant', relance1.mesures.compteur, { total: 0, valideA: null });
+t('compteur relancé : le chrono, non concerné, ne migre pas', 'chrono' in relance1.mesuresEssais[0], false);
+
+const entreeAvecChronoEnCours = { mesures: { compteur: mesuresVides().compteur, chrono: { elapsedMs: 2000, running: true, startedAt: 3000, valideA: null } } };
+const relance2 = relancerMesures(entreeAvecChronoEnCours, 2, false, true, 6000);
+t('chrono relancé : capturé figé, même s’il tournait encore', relance2.mesuresEssais[2].chrono.elapsedMs, 5000);
+t('chrono relancé : capturé arrêté', relance2.mesuresEssais[2].chrono.running, false);
+t('chrono relancé : remis à zéro et arrêté pour l’essai suivant', relance2.mesures.chrono, { elapsedMs: 0, running: false, startedAt: null, valideA: null });
+
+const entreeDejaEssais = { mesures: mesuresVides(), mesuresEssais: { 0: { compteur: { total: 2, valideA: '2026-08-03T09:00:00.000Z' } } } };
+const relance3 = relancerMesures(entreeDejaEssais, 1, true, false, 7000);
+t('relance sur une nouvelle clé : les essais précédents restent intacts', relance3.mesuresEssais[0].compteur.total, 2);
+
+/* ==================== reindexMesuresEssais : annuler un essai indexé ==================== */
+t('pas de mesures par essai : rien à réindexer', reindexMesuresEssais(undefined, 1), undefined);
+
+const essaisAvantSuppression = {
+  0: { compteur: { total: 1, valideA: 'a' } },
+  1: { compteur: { total: 2, valideA: 'b' } },
+  2: { compteur: { total: 3, valideA: 'c' } },
+};
+const reindexes = reindexMesuresEssais(essaisAvantSuppression, 1);
+t("l'essai supprimé disparaît : plus que deux essais", Object.keys(reindexes).length, 2);
+t('les essais suivants glissent d’un cran', reindexes[1].compteur.total, 3);
+t('les essais précédents restent en place', reindexes[0].compteur.total, 1);
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko ? 1 : 0);
