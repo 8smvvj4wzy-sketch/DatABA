@@ -29,12 +29,11 @@ const NAV_BG = '#DFE5DA';
    Point 1 — tranché : le tiroir latéral se ferme par tap sur la zone visible
    à droite et par glissement, en plus du bouton de fermeture.
 
-   Point 6 — dérive visuelle de la pastille de stabilité. null : la pastille ne
-   change jamais d'aspect faute de relevé récent. Un nombre de millisecondes
-   active l'affichage estompé au-delà de ce délai. */
+   Point 6 — retiré : la dérive visuelle de la pastille de suivi continu est
+   remplacée par l'état dormant (aucun relevé aujourd'hui), qui dit la même
+   chose sans mécanisme séparé à activer. */
 const TIROIR_FERME_AU_TAP_DEHORS = true;
 const TIROIR_FERME_AU_BALAYAGE = true;
-const STABILITE_DERIVE_MS = null;
 
 const F_DISPLAY = "'Space Grotesk', system-ui, sans-serif";
 const F_BODY = "'IBM Plex Sans', system-ui, sans-serif";
@@ -1270,36 +1269,197 @@ function crisisIntervals(session, crises, stepMinutes, studentId) {
   return set;
 }
 
-/* ==================== Suivi de stabilité ====================
+/* ==================== Suivi continu ====================
    Relevés indépendants des séances, sur le même principe que les crises : un
-   état peut être noté à n'importe quel moment de la journée, dans ou hors
+   critère peut être noté à n'importe quel moment de la journée, dans ou hors
    atelier. Un relevé n'a pas de fin — il vaut jusqu'au suivant, comme un
-   interrupteur. Rien à refermer, donc aucun état laissé ouvert par oubli.
+   interrupteur, jusqu'à la fin de sa journée ou une clôture explicite.
+
+   Une personne peut être suivie sur plusieurs axes en parallèle (état
+   émotionnel, engagement…), chacun avec sa propre liste de critères
+   paramétrables — deux au plus, cf. MAX_SUIVIS, une limite d'affichage, pas de
+   modèle : la barre du bas ne tiendrait pas plus.
+
+   Le suivi est dormant tant qu'aucun relevé n'a été noté aujourd'hui : le
+   dernier relevé d'un autre jour ne compte pas, contrairement à la version
+   précédente de cette fonctionnalité, qui affichait le plus récent relevé
+   quel que soit son âge.
 
    Le croisement avec les ateliers se calcule après coup dans DatABA Manager,
    en comparant l'horodatage du relevé aux bornes des séances. Aucune saisie
    supplémentaire n'est demandée ici pour ça. */
-const ETATS_STABILITE = [
+const DEFAULT_CRITERES_SUIVI = [
   { k: 'stable', l: 'Stable', color: '#2E7D5B' },
   { k: 'pre-crise', l: 'Pré-crise', color: '#D69A2D' },
   { k: 'crise', l: 'Crise', color: CRISIS },
   { k: 'post-crise', l: 'Post-crise', color: '#5B6B8E' },
 ];
 
-function metaStabilite(k) {
-  return ETATS_STABILITE.find((e) => e.k === k) || null;
+/* Clé volontairement fixe (pas uid()) : c'est l'identifiant de l'axe
+   historique, celui que toutes les tablettes déjà en service migrent vers. */
+const DEFAULT_SUIVIS = [
+  { id: 'principal', nom: 'Suivi continu', criteres: DEFAULT_CRITERES_SUIVI },
+];
+
+/* Limite d'affichage, pas de modèle : la barre du bas ne tient pas plus de
+   deux axes lisiblement. */
+const MAX_SUIVIS = 2;
+
+/* Repli pour un critère renommé ou supprimé de la configuration : les relevés
+   passés qui le portaient restent affichés, sans jamais ressusciter la clé
+   retirée — même principe que TYPE_INCONNU pour les modes de cotation. */
+const CRITERE_INCONNU = { k: null, l: 'Critère retiré', color: '#9AA0A6' };
+
+/* Palette proposée à la création d'un critère, indépendante de celle des
+   guidances et des niveaux d'intervalle : ces listes n'ont pas à évoluer
+   ensemble. */
+const PALETTE_SUIVI = ['#2E7D5B', '#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', CRISIS, '#5B6B8E', '#2E6E8E', '#7A6A9A'];
+
+function metaCritere(criteres, k) {
+  return (criteres || []).find((c) => c.k === k) || CRITERE_INCONNU;
 }
 
-/* Relevé courant d'une personne : simplement le plus récent. */
-function etatStabilite(stabilite, studentId) {
-  let dernier = null;
-  (stabilite || []).forEach((r) => {
-    if (!r || r.studentId !== studentId) return;
-    const t = new Date(r.timestamp).getTime();
-    if (Number.isNaN(t)) return;
-    if (!dernier || t > new Date(dernier.timestamp).getTime()) dernier = r;
+function axeDe(suivis, suiviId) {
+  return (suivis || []).find((s) => s.id === suiviId) || null;
+}
+
+/* Même jour calendaire, en heure locale. Partagé avec libelleJour. */
+function memeJour(x, y) {
+  return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+}
+
+/* Relevés d'une personne sur un axe, pour le jour local de `ref`, triés du
+   plus ancien au plus récent. Les clôtures y figurent : elles bornent le
+   dernier segment de la journée. */
+function relevesDuJour(releves, studentId, suiviId, ref) {
+  const refDate = ref ? new Date(ref) : new Date();
+  return (releves || [])
+    .filter((r) => r && r.studentId === studentId && r.suiviId === suiviId)
+    .map((r) => ({ r, d: new Date(r.timestamp) }))
+    .filter(({ d }) => !Number.isNaN(d.getTime()) && memeJour(d, refDate))
+    .sort((a, b) => a.d - b.d)
+    .map(({ r }) => r);
+}
+
+/* Relevé en vigueur pour le jour de `ref` : le dernier relevé du jour, ou
+   `null` si aucun n'existe encore ou si le dernier est une clôture — c'est ce
+   qui rend un suivi dormant. */
+function critereCourant(releves, studentId, suiviId, ref) {
+  const jour = relevesDuJour(releves, studentId, suiviId, ref);
+  if (!jour.length) return null;
+  const dernier = jour[jour.length - 1];
+  return dernier.fin ? null : dernier;
+}
+
+function suiviDormant(releves, studentId, suiviId, ref) {
+  return !critereCourant(releves, studentId, suiviId, ref);
+}
+
+/* Découpage de la journée en segments proportionnels à leur durée réelle,
+   pour la frise de l'onglet Suivi. Le dernier segment court jusqu'à
+   `maintenant` s'il est fourni ; une clôture le borne à sa place ; à défaut
+   des deux, sa durée reste inconnue (`ms: null`) plutôt que d'être étirée
+   jusqu'à minuit — ce serait inventer une donnée jamais saisie. */
+function segmentsJournee(releves, studentId, suiviId, ref, maintenant) {
+  const jour = relevesDuJour(releves, studentId, suiviId, ref);
+  const segments = [];
+  for (let i = 0; i < jour.length; i++) {
+    const r = jour[i];
+    if (r.fin) continue;
+    const debut = new Date(r.timestamp).getTime();
+    const suivant = jour[i + 1];
+    let fin = null;
+    if (suivant) fin = new Date(suivant.timestamp).getTime();
+    else if (maintenant != null) fin = new Date(maintenant).getTime();
+    segments.push({ debut, fin, critere: r.critere, ms: fin != null ? fin - debut : null });
+  }
+  return segments;
+}
+
+/* Lignes de la feuille d'export « Suivi continu », sans en-tête. Une ligne par
+   relevé, triées chronologiquement ; la durée jusqu'au relevé suivant du même
+   couple personne/axe reste vide si ce relevé clôt la journée sans successeur
+   le même jour — même principe que les étapes manquées de « Détail par
+   essai », qui restent vides plutôt qu'à zéro pour ne pas fausser les
+   moyennes. */
+function lignesSuiviExport(releves, students, suivis, studentFilter) {
+  const keep = (sid) => !studentFilter || studentFilter.includes(sid);
+  const tries = (releves || [])
+    .filter((r) => r && keep(r.studentId))
+    .slice()
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  return tries.map((r, i) => {
+    const st = (students || []).find((s) => s.id === r.studentId);
+    const axe = axeDe(suivis, r.suiviId);
+    const d = new Date(r.timestamp);
+    const suivant = tries.slice(i + 1).find((x) => x.studentId === r.studentId && x.suiviId === r.suiviId);
+    let duree = '';
+    if (!r.fin && suivant) {
+      const dSuiv = new Date(suivant.timestamp);
+      if (memeJour(d, dSuiv)) duree = Math.round((dSuiv - d) / 60000);
+    }
+    let critereLabel = '— fin —';
+    if (!r.fin) {
+      const meta = metaCritere(axe ? axe.criteres : [], r.critere);
+      critereLabel = meta === CRITERE_INCONNU ? `${meta.l} (${r.critere})` : meta.l;
+    }
+    return [
+      d.toLocaleDateString('fr-FR'),
+      timeShort(r.timestamp),
+      libelleJour(d),
+      st ? st.initials : '?',
+      axe ? axe.nom : 'Suivi retiré',
+      critereLabel,
+      duree,
+    ];
   });
-  return dernier;
+}
+
+/* Alias transitoire pour un DatABA Manager pas encore mis à jour vers le
+   suivi continu : seuls les relevés de l'axe historique, dans une des quatre
+   clés d'origine, projetés au format v3 (`etat`). Ni le second axe ni les
+   clôtures n'y figurent — un Manager v3 continue de fonctionner exactement
+   comme avant, sans rien savoir de ce qu'il ne comprendrait pas. */
+const CLES_ETAT_HISTORIQUES = new Set(DEFAULT_CRITERES_SUIVI.map((c) => c.k));
+function releverAliasStabilite(releves) {
+  return (releves || [])
+    .filter((r) => r && !r.fin && r.suiviId === 'principal' && CLES_ETAT_HISTORIQUES.has(r.critere))
+    .map((r) => ({ id: r.id, studentId: r.studentId, timestamp: r.timestamp, etat: r.critere, source: r.source || 'pastille' }));
+}
+
+/* Migration depuis l'ancien format de relevé (`etat`, sans axe) : `etat`
+   devient `critere`, chaque relevé gagne son `suiviId`. Idempotente — un
+   relevé déjà au nouveau format traverse inchangé — pour pouvoir tourner à
+   chaque chargement sans jamais avoir besoin d'un drapeau « déjà migré ». */
+function migrerReleves(releves) {
+  return (releves || [])
+    .filter((r) => r && r.studentId && r.timestamp)
+    .map((r) => {
+      const suiviId = r.suiviId || 'principal';
+      if (r.critere !== undefined) return { ...r, suiviId };
+      return { id: r.id, studentId: r.studentId, suiviId, timestamp: r.timestamp, critere: r.etat, source: r.source || 'pastille' };
+    });
+}
+
+/* `student.suiviStabilite` (booléen) devient `student.suivisActifs`
+   (identifiants d'axes) — idempotente, même principe. */
+function migrerStudentsSuivi(students) {
+  return (students || []).map((s) => {
+    if (Array.isArray(s.suivisActifs)) return s;
+    const { suiviStabilite, ...rest } = s;
+    return { ...rest, suivisActifs: suiviStabilite ? ['principal'] : [] };
+  });
+}
+
+/* Repli sur la configuration par défaut si aucun axe n'a encore été
+   enregistré, et filtrage défensif des entrées mal formées — un axe stocké
+   sans liste de critères, ou un critère sans clé, ne doit pas faire planter
+   l'affichage. */
+function migrerAxesSuivi(stocke) {
+  if (!Array.isArray(stocke) || stocke.length === 0) return DEFAULT_SUIVIS;
+  return stocke
+    .filter((a) => a && a.id)
+    .map((a) => ({ id: a.id, nom: a.nom || 'Suivi continu', criteres: (a.criteres || []).filter((c) => c && c.k) }));
 }
 
 /* ==================== Regroupement par jour ====================
@@ -1327,7 +1487,6 @@ function grouperParJour(items, dateDe) {
 function libelleJour(d, maintenant) {
   if (!d) return 'Date inconnue';
   const ref = maintenant ? new Date(maintenant) : new Date();
-  const memeJour = (x, y) => x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
   const hier = new Date(ref.getTime() - 86400000);
   if (memeJour(d, ref)) return "Aujourd'hui";
   if (memeJour(d, hier)) return 'Hier';
@@ -1726,7 +1885,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   return rows;
 }
 
-function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], guidances, studentFilter) {
+function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], guidances, studentFilter, releves = [], axesSuivi = []) {
   const keepStudent = (sid) => !studentFilter || studentFilter.includes(sid);
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
@@ -1837,6 +1996,20 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   const ws3 = XLSX.utils.aoa_to_sheet(noteRows);
   ws3['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 10 }, { wch: 70 }];
   XLSX.utils.book_append_sheet(wb, ws3, 'Notes');
+
+  /* Suivi continu : une ligne par relevé, avec son heure et sa durée jusqu'au
+     relevé suivant du même couple personne/suivi. Toujours créée, même vide,
+     pour que le nombre de feuilles ne varie pas d'un rapport à l'autre. */
+  const suiviRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Suivi', 'Critère', 'Durée (min)']];
+  const lignesSuivi = lignesSuiviExport(releves, students, axesSuivi, studentFilter);
+  if (lignesSuivi.length) {
+    lignesSuivi.forEach((l) => suiviRows.push(l));
+  } else {
+    suiviRows.push(['', '', '', '', '', 'Aucun relevé de suivi continu sur cette sélection.', '']);
+  }
+  const ws5 = XLSX.utils.aoa_to_sheet(suiviRows);
+  ws5['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 16 }, { wch: 10 }, { wch: 18 }, { wch: 22 }, { wch: 12 }];
+  XLSX.utils.book_append_sheet(wb, ws5, 'Suivi continu');
 
   /* Tableau de bord : une ligne par personne/objectif, une colonne par date.
      Format matriciel directement exploitable en graphique ou tableau croisé. */
@@ -2266,6 +2439,103 @@ function Empty({ children }) {
   );
 }
 
+/* Une ligne de critère de suivi continu : pastille de couleur (ouvre une
+   palette au tap), libellé renommable, suppression. Distincte d'EditableRow
+   parce qu'elle porte une donnée de plus — la couleur — sans en faire un cas
+   particulier dans un composant partagé par d'autres listes. */
+function CritereRow({ critere, onRename, onRecolor, onRemove }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(critere.l);
+  const [palette, setPalette] = useState(false);
+
+  function commit() {
+    if (draft.trim() && draft.trim() !== critere.l) onRename(draft.trim());
+    setEditing(false);
+  }
+
+  return (
+    <div className="rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setPalette((v) => !v)}
+          className="w-6 h-6 rounded-full shrink-0 border"
+          style={{ backgroundColor: critere.color, borderColor: BORDER }}
+          aria-label="Changer la couleur"
+        />
+        {editing ? (
+          <>
+            <Field autoFocus value={draft} onChange={setDraft} onEnter={commit} />
+            <Btn onClick={commit} className="px-3 shrink-0 py-2.5"><Check size={16} /></Btn>
+            <Btn variant="ghost" onClick={() => { setDraft(critere.l); setEditing(false); }} className="px-3 shrink-0 py-2.5"><X size={16} /></Btn>
+          </>
+        ) : (
+          <>
+            <span className="text-sm flex-1">{critere.l}</span>
+            <button onClick={() => { setDraft(critere.l); setEditing(true); }} style={{ color: INK_SOFT }} title="Renommer"><Pencil size={14} /></button>
+            <button onClick={onRemove} style={{ color: INK_SOFT }} title="Supprimer"><X size={15} /></button>
+          </>
+        )}
+      </div>
+      {palette && (
+        <div className="flex flex-wrap gap-2 mt-2.5 pl-8">
+          {PALETTE_SUIVI.map((c) => (
+            <button
+              key={c}
+              onClick={() => { onRecolor(c); setPalette(false); }}
+              className="w-6 h-6 rounded-full border-2"
+              style={{ backgroundColor: c, borderColor: c === critere.color ? INK : 'transparent' }}
+              aria-label={c}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Liste de critères modifiable : ajout, renommage, couleur, suppression, et
+   réorganisation par appui long. La clé interne (`k`) est fixée à la
+   création et ne change plus jamais : renommer ou recolorer un critère ne
+   déconnecte pas les relevés qui le portent déjà. */
+function CritereListEditor({ criteres, onChange }) {
+  const [nouveau, setNouveau] = useState('');
+  const ajouter = () => {
+    const l = nouveau.trim();
+    if (!l || criteres.some((c) => c.l === l)) return;
+    const prises = new Set(criteres.map((c) => c.color));
+    const color = PALETTE_SUIVI.find((c) => !prises.has(c)) || PALETTE_SUIVI[criteres.length % PALETTE_SUIVI.length];
+    onChange([...criteres, { k: `c${uid()}`, l, color }]);
+    setNouveau('');
+  };
+  return (
+    <div className="mb-4">
+      {criteres.length > 0 && (
+        <ReorderList
+          items={criteres}
+          keyOf={(c) => c.k}
+          onReorder={onChange}
+          className="space-y-1.5 mb-2"
+          renderItem={(c) => (
+            <CritereRow
+              critere={c}
+              onRename={(l) => onChange(criteres.map((x) => (x.k === c.k ? { ...x, l } : x)))}
+              onRecolor={(color) => onChange(criteres.map((x) => (x.k === c.k ? { ...x, color } : x)))}
+              onRemove={() => onChange(criteres.filter((x) => x.k !== c.k))}
+            />
+          )}
+        />
+      )}
+      <div className="flex gap-2">
+        <Field value={nouveau} onChange={setNouveau} placeholder="Ajouter un critère" onEnter={ajouter} />
+        <Btn variant="ghost" onClick={ajouter} className="px-4 shrink-0"><Plus size={16} /></Btn>
+      </div>
+      {nouveau.trim() && criteres.some((c) => c.l === nouveau.trim()) && (
+        <div className="text-xs mt-1" style={{ color: CRISIS }}>Ce critère existe déjà.</div>
+      )}
+    </div>
+  );
+}
+
 /* Liste d'historique repliée par jour. Le jour le plus récent est ouvert, les
    autres se déplient à la demande — l'historique reste entier et consultable,
    sans être déroulé d'un bloc. */
@@ -2590,16 +2860,20 @@ function AbaApp() {
   const [guidances, setGuidances] = useState(DEFAULT_GUIDANCE);
   const [objectiveTemplates, setObjectiveTemplates] = useState([]);
   const [abcOptions, setAbcOptions] = useState(DEFAULT_ABC);
+  /* Axes de suivi continu et leurs critères, paramétrables — deux axes au
+     plus (MAX_SUIVIS), sur le modèle des réponses ABC. */
+  const [axesSuivi, setAxesSuivi] = useState(DEFAULT_SUIVIS);
   /* Nom de cet appareil. Il voyage dans chaque fichier produit et se retrouve
      dans son nom : sans lui, un dossier de sauvegardes ne dit pas de quelle
      tablette vient quoi. */
   const [appareil, setAppareil] = useState('');
   const [sessions, setSessions] = useState([]);
   const [crises, setCrises] = useState([]);
-  /* Relevés de stabilité : un tableau à part, indépendant des séances, sur le
-     même modèle que les crises. */
-  const [stabilite, setStabilite] = useState([]);
-  const [choixStabilite, setChoixStabilite] = useState(null); // personne dont on choisit l'état
+  /* Relevés de suivi continu : un tableau à part, indépendant des séances, sur
+     le même modèle que les crises. Tous axes confondus, distingués par
+     `suiviId` sur chaque relevé. */
+  const [releves, setReleves] = useState([]);
+  const [choixSuivi, setChoixSuivi] = useState(null); // personne dont on choisit le critère
 
   const [activeSession, setActiveSession] = useState(null);
   /* Plusieurs crises ou observations peuvent être ouvertes en même temps :
@@ -2771,7 +3045,7 @@ function AbaApp() {
       try {
         const d = JSON.parse(config);
         nbPersonnes = (d.students || []).length;
-        setStudents(d.students || []);
+        setStudents(migrerStudentsSuivi(d.students || []));
         setAteliers(d.ateliers || []);
         setIntervenants(d.intervenants || []);
         setAppareil(d.appareil || '');
@@ -2786,6 +3060,15 @@ function AbaApp() {
               : stored;
           setGuidances(merged);
         }
+        /* Ces trois listes étaient sauvegardées (persistAll et l'effet de
+           sauvegarde de la configuration écrivent déjà ces champs) mais
+           jamais relues ici : l'effet réécrivait aba:config avec les valeurs
+           par défaut à chaque chargement, effaçant silencieusement les
+           réponses ABC, les modèles d'objectifs et les axes de suivi continu
+           personnalisés. */
+        setAbcOptions({ ...DEFAULT_ABC, ...(d.abcOptions || {}) });
+        if (Array.isArray(d.objectiveTemplates)) setObjectiveTemplates(d.objectiveTemplates);
+        setAxesSuivi(migrerAxesSuivi(d.axesSuivi));
       } catch (e) {}
     }
 
@@ -2809,9 +3092,19 @@ function AbaApp() {
     }
     const cri = await store.get('aba:crises');
     if (cri) { try { loadedCrises = JSON.parse(cri) || []; } catch (e) {} }
-    let loadedStabilite = [];
-    const sta = await store.get('aba:stabilite');
-    if (sta) { try { loadedStabilite = JSON.parse(sta) || []; } catch (e) {} }
+    /* Nouvelle clé aba:suivi ; repli sur l'ancienne aba:stabilite tant qu'une
+       tablette n'a pas encore réécrit la sienne (voir clesDonnees et
+       persistAll : l'ancienne clé n'est vidée qu'une fois la nouvelle
+       confirmée). */
+    let loadedReleves = [];
+    const suv = await store.get('aba:suivi');
+    if (suv) {
+      try { loadedReleves = JSON.parse(suv) || []; } catch (e) {}
+    } else {
+      const sta = await store.get('aba:stabilite');
+      if (sta) { try { loadedReleves = JSON.parse(sta) || []; } catch (e) {} }
+    }
+    loadedReleves = migrerReleves(loadedReleves);
 
     // Purge automatique au-delà de la durée de conservation retenue
     if (retention > 0) {
@@ -2819,18 +3112,18 @@ function AbaApp() {
       limite.setMonth(limite.getMonth() - retention);
       const gardeS = loadedSessions.filter((x) => new Date(x.date) >= limite);
       const gardeC = loadedCrises.filter((x) => new Date(x.date) >= limite);
-      const gardeT = loadedStabilite.filter((x) => new Date(x.timestamp) >= limite);
-      const retires = (loadedSessions.length - gardeS.length) + (loadedCrises.length - gardeC.length) + (loadedStabilite.length - gardeT.length);
+      const gardeT = loadedReleves.filter((x) => new Date(x.timestamp) >= limite);
+      const retires = (loadedSessions.length - gardeS.length) + (loadedCrises.length - gardeC.length) + (loadedReleves.length - gardeT.length);
       if (retires > 0) {
         loadedSessions = gardeS;
         loadedCrises = gardeC;
-        loadedStabilite = gardeT;
+        loadedReleves = gardeT;
         setTimeout(() => notify(`${retires} enregistrement${retires > 1 ? 's' : ''} supprimé${retires > 1 ? 's' : ''} (durée de conservation)`), 600);
       }
     }
     setSessions(loadedSessions);
     setCrises(loadedCrises);
-    setStabilite(loadedStabilite);
+    setReleves(loadedReleves);
 
     const act = await store.get('aba:active');
     if (act) { try { setActiveSession(JSON.parse(act)); } catch (e) {} }
@@ -2845,7 +3138,7 @@ function AbaApp() {
 
   /* Toutes les clés contenant des données, mois par mois compris. */
   async function clesDonnees() {
-    const base = ['aba:config', 'aba:sessions', 'aba:crises', 'aba:stabilite', 'aba:active', SESSIONS_INDEX];
+    const base = ['aba:config', 'aba:sessions', 'aba:crises', 'aba:suivi', 'aba:stabilite', 'aba:active', SESSIONS_INDEX];
     const idx = await store.getRaw(SESSIONS_INDEX);
     if (!idx) return base;
     try {
@@ -2931,11 +3224,13 @@ function AbaApp() {
   /* Réécrit toutes les données avec la clé courante — utilisé après un
      changement de code, puisque l'ancienne clé ne déchiffrerait plus rien. */
   async function persistAll() {
-    await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, appareil }));
+    await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil }));
     moisEcrits.current = {};
     await persistSessions(sessions);
     await store.set('aba:crises', JSON.stringify(crises));
-    await store.set('aba:stabilite', JSON.stringify(stabilite));
+    if (await store.set('aba:suivi', JSON.stringify(releves))) {
+      await store.setRaw('aba:stabilite', '');
+    }
     await store.set('aba:active', JSON.stringify(activeSession));
   }
 
@@ -3004,8 +3299,8 @@ function AbaApp() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, appareil }));
-  }, [students, ateliers, intervenants, guidances, retentionMonths, objectiveTemplates, abcOptions, appareil, loaded]);
+    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil }));
+  }, [students, ateliers, intervenants, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, loaded]);
   /* Empreinte du dernier enregistrement de chaque mois, pour n'écrire que ce
      qui a réellement changé. */
   const moisEcrits = useRef({});
@@ -3042,8 +3337,16 @@ function AbaApp() {
   }, [crises, loaded]);
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:stabilite', JSON.stringify(stabilite));
-  }, [stabilite, loaded]);
+    /* L'ancienne clé n'est vidée qu'une fois la nouvelle confirmée : jamais
+       l'inverse, pour ne pas se retrouver sans aucune copie lisible. */
+    (async () => {
+      const ecrit = await store.set('aba:suivi', JSON.stringify(releves));
+      if (ecrit) {
+        const ancien = await store.getRaw('aba:stabilite');
+        if (ancien) await store.setRaw('aba:stabilite', '');
+      }
+    })();
+  }, [releves, loaded]);
   useEffect(() => {
     if (!loaded) return;
     store.set('aba:active', JSON.stringify(activeSession));
@@ -3103,6 +3406,7 @@ function AbaApp() {
       guidances,
       objectiveTemplates,
       abcOptions,
+      axesSuivi,
       appareil,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -3128,6 +3432,9 @@ function AbaApp() {
         consequences: [...cur.consequences, ...(d.abcOptions.consequences || []).filter((v) => !cur.consequences.includes(v))],
       }));
     }
+    if (Array.isArray(d.axesSuivi) && d.axesSuivi.length) {
+      setAxesSuivi((cur) => [...cur, ...d.axesSuivi.filter((a) => !cur.some((x) => x.nom === a.nom))].slice(0, MAX_SUIVIS));
+    }
     if (d.appareil && !appareil.trim()) setAppareil(d.appareil);
     notify('Configuration importée');
   }
@@ -3147,22 +3454,24 @@ function AbaApp() {
     const idsConcernes = new Set();
     seancesRetenues.forEach((se) => (se.studentIds || []).forEach((id) => idsConcernes.add(id)));
     const crisesRetenues = crises.filter((c) => !c.sessionId || seancesRetenues.some((se) => se.id === c.sessionId));
-    /* Les relevés de stabilité ne sont rattachés à aucune séance : on joint
-       ceux des personnes concernées par la sélection. C'est Manager qui les
-       croisera ensuite avec les bornes horaires des séances. */
-    const stabiliteRetenue = stabilite.filter((r) => idsConcernes.has(r.studentId));
+    /* Les relevés de suivi continu ne sont rattachés à aucune séance : on
+       joint ceux des personnes concernées par la sélection. C'est Manager qui
+       les croisera ensuite avec les bornes horaires des séances. */
+    const relevesRetenus = releves.filter((r) => idsConcernes.has(r.studentId));
     return {
       format: 'aba-backup',
-      version: 3,
+      version: 4,
       exportedAt: new Date().toISOString(),
       appareil,
       students: students.filter((st) => idsConcernes.has(st.id)),
       ateliers,
       intervenants,
       guidances,
+      axesSuivi,
       sessions: seancesRetenues,
       crises: crisesRetenues,
-      stabilite: stabiliteRetenue,
+      suivi: relevesRetenus,
+      stabilite: releverAliasStabilite(relevesRetenus),
     };
   }
 
@@ -3180,7 +3489,7 @@ function AbaApp() {
   /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
      transferts qui restent dans un espace déjà protégé. */
   function exportBackupClair() {
-    const payload = { format: 'aba-backup', version: 3, exportedAt: new Date().toISOString(), appareil, students, ateliers, intervenants, guidances, sessions, crises, stabilite };
+    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
     setBackupPrompt(null);
@@ -3196,7 +3505,7 @@ function AbaApp() {
       notify('Fichier Manager chiffré exporté');
       return;
     }
-    const payload = { format: 'aba-backup', version: 3, exportedAt: new Date().toISOString(), appareil, students, ateliers, intervenants, guidances, sessions, crises, stabilite };
+    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
     const envelope = await encryptJSON(payload, passphrase);
     const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json' });
     downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
@@ -3214,13 +3523,14 @@ function AbaApp() {
       `Restaurer cette sauvegarde ?\n\n${(d.students || []).length} personne(s), ${(d.sessions || []).length} séance(s).\n\nToutes les données actuelles de cette tablette seront remplacées.`
     );
     if (!ok) return;
-    setStudents(d.students || []);
+    setStudents(migrerStudentsSuivi(d.students || []));
     setAteliers(d.ateliers || []);
     setIntervenants(d.intervenants || []);
     if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
     setSessions(d.sessions || []);
     setCrises(d.crises || []);
-    setStabilite(d.stabilite || []);
+    setAxesSuivi(migrerAxesSuivi(d.axesSuivi));
+    setReleves(migrerReleves(d.suivi || d.stabilite || []));
     /* Le nom d'appareil du fichier ne s'impose pas à la tablette qui restaure :
        elle garde le sien s'il est déjà renseigné, sinon elle reprend celui de
        la sauvegarde plutôt que de rester anonyme. */
@@ -3406,9 +3716,14 @@ function AbaApp() {
     notify('Enregistrement supprimé');
   };
 
-  /* --- suivi de stabilité --- */
-  const toggleSuiviStabilite = (id) =>
-    setStudents((l) => l.map((x) => (x.id === id ? { ...x, suiviStabilite: !x.suiviStabilite } : x)));
+  /* --- suivi continu --- */
+  const toggleAxeSuivi = (studentId, suiviId) =>
+    setStudents((l) => l.map((x) => {
+      if (x.id !== studentId) return x;
+      const actifs = x.suivisActifs || [];
+      const suivisActifs = actifs.includes(suiviId) ? actifs.filter((id) => id !== suiviId) : [...actifs, suiviId];
+      return { ...x, suivisActifs };
+    }));
 
   /* --- suivi de renforcement ---
      Hors activation, aucun bouton de renforcement n'apparaît en séance : tout
@@ -3417,21 +3732,22 @@ function AbaApp() {
   const toggleSuiviRenforcement = (id) =>
     setStudents((l) => l.map((x) => (x.id === id ? { ...x, suiviRenforcement: !x.suiviRenforcement } : x)));
 
-  /* Un relevé s'ajoute simplement à la suite : il vaut jusqu'au suivant.
-     L'état « crise » crée en plus une fiche crise minimale dans le tableau
-     habituel — la même fiche que celle du bouton CRISE, pas une seconde
-     série. Elle est enregistrée directement, sans chronomètre : la durée reste
-     à renseigner à la main depuis l'écran Export.
+  /* Un relevé s'ajoute simplement à la suite : il vaut jusqu'au suivant, pour
+     la journée en cours — voir l'état dormant. Le critère de clé `crise` crée
+     en plus une fiche crise minimale dans le tableau habituel, quel que soit
+     l'axe — la même fiche que celle du bouton CRISE, pas une seconde série.
+     Elle est enregistrée directement, sans chronomètre : la durée reste à
+     renseigner à la main depuis l'écran Export.
 
      Le repère visuel signalant qu'une telle fiche reste à compléter n'est pas
      tranché : l'indicateur `aCompleter` est posé sur la fiche, rien ne
      l'affiche encore. */
-  const noterStabilite = (studentId, etat) => {
+  const noterSuivi = (studentId, suiviId, critere) => {
     const maintenant = new Date().toISOString();
-    setStabilite((l) => [...l, { id: uid(), studentId, timestamp: maintenant, etat, source: 'pastille' }]);
+    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp: maintenant, critere, source: 'pastille' }]);
     const st = students.find((s) => s.id === studentId);
     const nom = st ? st.initials : '';
-    if (etat === 'crise') {
+    if (critere === 'crise') {
       setCrises((list) => [
         {
           id: uid(),
@@ -3449,28 +3765,41 @@ function AbaApp() {
           comportementTags: [],
           consequenceTags: [],
           durationMs: 0,
-          origine: 'stabilite',
+          origine: 'suivi',
           aCompleter: true,
         },
         ...list,
       ]);
       notify(`${nom} — fiche crise créée, à compléter depuis Export`);
     } else {
-      notify(`${nom} — ${(metaStabilite(etat) || {}).l || etat}`);
+      const axe = axeDe(axesSuivi, suiviId);
+      notify(`${nom} — ${metaCritere(axe ? axe.criteres : [], critere).l}`);
     }
-    setChoixStabilite(null);
   };
 
-  /* Une pastille par personne dont le suivi de stabilité est activé. Les
-     autres n'en ont aucune : rien n'apparaît, rien n'encombre. */
-  const pastillesStabilite = students
-    .filter((s) => s.suiviStabilite)
+  /* Clôture la journée d'un axe : le dernier critère cesse de courir, le
+     suivi redevient dormant. Sans effet si rien n'était en cours. */
+  const cloturerSuivi = (studentId, suiviId) => {
+    if (!critereCourant(releves, studentId, suiviId, Date.now())) return;
+    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp: new Date().toISOString(), critere: null, fin: true, source: 'cloture' }]);
+  };
+
+  /* Une pastille par personne suivie sur au moins un axe. Les autres n'en ont
+     aucune : rien n'apparaît, rien n'encombre. Chaque pastille porte un pavé
+     par axe actif — avec deux axes, seule la couleur reste lisible, le
+     libellé se lit dans la feuille de choix. */
+  const pastillesSuivi = students
+    .filter((s) => (s.suivisActifs || []).length > 0)
     .map((st) => {
-      const releve = etatStabilite(stabilite, st.id);
-      const meta = releve ? metaStabilite(releve.etat) : null;
-      const perime = !!(releve && STABILITE_DERIVE_MS != null
-        && Date.now() - new Date(releve.timestamp).getTime() > STABILITE_DERIVE_MS);
-      return { st, releve, meta, perime };
+      const blocs = (st.suivisActifs || [])
+        .map((suiviId) => axeDe(axesSuivi, suiviId))
+        .filter(Boolean)
+        .map((axe) => {
+          const releve = critereCourant(releves, st.id, axe.id, Date.now());
+          const meta = releve ? metaCritere(axe.criteres, releve.critere) : null;
+          return { axe, releve, meta };
+        });
+      return { st, blocs };
     });
 
   if (!securityLoaded) {
@@ -3521,7 +3850,7 @@ function AbaApp() {
             students={students} guidances={guidances} templates={objectiveTemplates}
             premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
-            onToggleStabilite={toggleSuiviStabilite} onToggleRenforcement={toggleSuiviRenforcement}
+            axesSuivi={axesSuivi} onToggleAxeSuivi={toggleAxeSuivi} onToggleRenforcement={toggleSuiviRenforcement}
             addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective}
             duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase}
             onSaveTemplate={saveTemplate}
@@ -3550,10 +3879,13 @@ function AbaApp() {
         );
       case 'abc':
         return <PanneauAbc abcOptions={abcOptions} onSetAbc={setAbcOptions} />;
+      case 'suivicontinu':
+        return <PanneauSuiviContinu axes={axesSuivi} onSetAxes={setAxesSuivi} />;
       case 'suivi':
         return (
           <SuiviScreen
             students={students} sessions={sessions} guidances={guidances}
+            releves={releves} axesSuivi={axesSuivi}
             onResetTracking={resetTracking} onOuvrirMenu={ouvrirMenu}
           />
         );
@@ -3595,7 +3927,7 @@ function AbaApp() {
         return (
           <ExportScreen
             sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants}
-            guidances={guidances} appareil={appareil} notify={notify}
+            guidances={guidances} releves={releves} axesSuivi={axesSuivi} appareil={appareil} notify={notify}
             onEditCrisis={editCrisis} onMarkSent={markSent} onExportManager={exportManager}
             onOuvrirMenu={ouvrirMenu}
           />
@@ -3685,7 +4017,7 @@ function AbaApp() {
           ABC et Crise encadrent la pilule de navigation : le bas d'écran est la
           zone atteignable d'une main sur une tablette, ce que la fréquence du
           bouton Crise exige. Au-dessus, les pastilles — celles des fiches
-          ouvertes, puis celles du suivi de stabilité. */}
+          ouvertes, puis celles du suivi continu. */}
       <div
         className="fixed bottom-0 left-0 right-0 z-30 px-3 pt-8 pointer-events-none"
         style={{
@@ -3702,27 +4034,40 @@ function AbaApp() {
             transition: 'transform .18s ease-out',
           }}
         >
-        {/* Suivi de stabilité : une pastille par personne concernée, aucune pour les autres */}
-        {pastillesStabilite.length > 0 && (
+        {/* Suivi continu : une pastille par personne concernée, aucune pour les
+            autres. Un pavé par axe actif — gris quand l'axe est dormant
+            (aucun relevé aujourd'hui), coloré par le critère sinon. */}
+        {pastillesSuivi.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mb-2 justify-center">
-            {pastillesStabilite.map((p) => (
-              <button
-                key={p.st.id}
-                onClick={() => setChoixStabilite(p.st.id)}
-                className="rounded-2xl px-3 py-1.5 flex items-center gap-1.5 text-xs border shadow-sm"
-                style={{
-                  backgroundColor: p.meta ? p.meta.color : CARD,
-                  borderColor: p.meta ? p.meta.color : BORDER,
-                  color: p.meta ? '#fff' : INK_SOFT,
-                  opacity: p.perime ? 0.55 : 1,
-                  fontFamily: F_DISPLAY,
-                }}
-              >
-                <Activity size={12} />
-                <span>{p.st.initials}</span>
-                <span style={{ opacity: 0.85 }}>{p.meta ? p.meta.l : 'à noter'}</span>
-              </button>
-            ))}
+            {pastillesSuivi.map((p) => {
+              const unAxe = p.blocs.length === 1;
+              return (
+                <button
+                  key={p.st.id}
+                  onClick={() => setChoixSuivi(p.st.id)}
+                  className="rounded-2xl overflow-hidden flex items-stretch text-xs border shadow-sm"
+                  style={{ borderColor: BORDER, backgroundColor: CARD, fontFamily: F_DISPLAY }}
+                >
+                  <span className="px-2.5 py-1.5 flex items-center gap-1.5" style={{ color: INK_SOFT }}>
+                    <Activity size={12} />
+                    {p.st.initials}
+                  </span>
+                  {p.blocs.map((b) => (
+                    <span
+                      key={b.axe.id}
+                      title={`${b.axe.nom} — ${b.meta ? b.meta.l : 'non démarré'}`}
+                      className={unAxe ? 'px-2.5 py-1.5 flex items-center' : 'w-3 self-stretch'}
+                      style={{
+                        backgroundColor: b.meta ? b.meta.color : BORDER,
+                        color: '#fff',
+                      }}
+                    >
+                      {unAxe ? (b.meta ? b.meta.l : 'à noter') : ''}
+                    </span>
+                  ))}
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -3844,6 +4189,7 @@ function AbaApp() {
                 { k: 'modeles', label: "Modèles d'objectifs", icon: BookmarkPlus },
                 { k: 'guidances', label: 'Guidances', icon: SlidersHorizontal },
                 { k: 'abc', label: 'Réponses ABC', icon: AlertTriangle },
+                { k: 'suivicontinu', label: 'Suivi continu', icon: Activity },
                 { k: 'motsdepasse', label: 'Mots de passe', icon: Lock },
                 { k: 'donnees', label: 'Données', icon: Database },
               ].map((it) => {
@@ -3866,45 +4212,63 @@ function AbaApp() {
         </div>
       )}
 
-      {/* Choix de l'état de stabilité, depuis une pastille */}
-      {choixStabilite && (() => {
-        const st = students.find((s) => s.id === choixStabilite);
+      {/* Choix du critère de suivi continu, depuis une pastille — un bloc par
+          axe actif de la personne. */}
+      {choixSuivi && (() => {
+        const st = students.find((s) => s.id === choixSuivi);
         if (!st) return null;
-        const courant = etatStabilite(stabilite, st.id);
+        const axes = (st.suivisActifs || []).map((id) => axeDe(axesSuivi, id)).filter(Boolean);
         return (
           <div
             className="fixed inset-0 z-50 flex items-end justify-center"
             style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}
-            onClick={() => setChoixStabilite(null)}
+            onClick={() => setChoixSuivi(null)}
           >
             <div
-              className="w-full max-w-md rounded-t-3xl p-5"
-              style={{ backgroundColor: CARD, paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.25rem)' }}
+              className="w-full max-w-md rounded-t-3xl p-5 overflow-y-auto"
+              style={{ backgroundColor: CARD, maxHeight: '82vh', paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.25rem)' }}
               onClick={(ev) => ev.stopPropagation()}
             >
-              <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center justify-between mb-3">
                 <span className="text-lg font-semibold" style={{ fontFamily: F_DISPLAY }}>{st.initials}</span>
-                <button onClick={() => setChoixStabilite(null)} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
+                <button onClick={() => setChoixSuivi(null)} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
               </div>
-              <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
-                {courant
-                  ? `${(metaStabilite(courant.etat) || {}).l || courant.etat} depuis ${timeShort(courant.timestamp)}`
-                  : 'Aucun relevé pour le moment.'}
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                {ETATS_STABILITE.map((et) => (
-                  <button
-                    key={et.k}
-                    onClick={() => noterStabilite(st.id, et.k)}
-                    className="rounded-2xl py-4 text-sm font-semibold text-white active:scale-[0.98] transition-transform"
-                    style={{ backgroundColor: et.color, fontFamily: F_DISPLAY }}
-                  >
-                    {et.l}
-                  </button>
-                ))}
-              </div>
-              <p className="text-xs mt-3" style={{ color: INK_SOFT }}>
-                Un état vaut jusqu'au suivant, il n'y a rien à refermer.
+              {axes.map((axe) => {
+                const courant = critereCourant(releves, st.id, axe.id, Date.now());
+                return (
+                  <div key={axe.id} className="mb-5 last:mb-0">
+                    <div className="text-sm font-semibold mb-1" style={{ fontFamily: F_DISPLAY }}>{axe.nom}</div>
+                    <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+                      {courant
+                        ? `${metaCritere(axe.criteres, courant.critere).l} depuis ${timeShort(courant.timestamp)}`
+                        : "Suivi continu non démarré aujourd'hui."}
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {axe.criteres.map((c) => (
+                        <button
+                          key={c.k}
+                          onClick={() => noterSuivi(st.id, axe.id, c.k)}
+                          className="rounded-2xl py-4 text-sm font-semibold text-white active:scale-[0.98] transition-transform"
+                          style={{ backgroundColor: c.color, fontFamily: F_DISPLAY }}
+                        >
+                          {c.l}
+                        </button>
+                      ))}
+                    </div>
+                    {courant && (
+                      <button
+                        onClick={() => cloturerSuivi(st.id, axe.id)}
+                        className="w-full mt-2 rounded-2xl py-2.5 text-sm border"
+                        style={{ borderColor: BORDER, color: INK_SOFT, fontFamily: F_DISPLAY }}
+                      >
+                        Clôturer la journée
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              <p className="text-xs mt-1" style={{ color: INK_SOFT }}>
+                Un critère vaut jusqu'au suivant ou jusqu'à la clôture.
                 « Crise » crée en plus une fiche crise à compléter depuis l'écran Export.
               </p>
             </div>
@@ -4272,6 +4636,50 @@ function PanneauAbc({ abcOptions, onSetAbc }) {
   );
 }
 
+/* Axes de suivi continu et leurs critères — deux axes au plus, la barre du
+   bas ne tiendrait pas plus lisiblement. Chaque critère garde sa clé interne
+   au renommage ou au recoloriage : les relevés déjà notés restent rattachés. */
+function PanneauSuiviContinu({ axes, onSetAxes }) {
+  const ajouterAxe = () => {
+    if (axes.length >= MAX_SUIVIS) return;
+    onSetAxes([...axes, { id: uid(), nom: 'Nouveau suivi', criteres: [] }]);
+  };
+  const supprimerAxe = (axe) => {
+    if (!window.confirm(`Supprimer le suivi « ${axe.nom} » ?\n\nLes relevés déjà notés restent dans l'historique et l'export, marqués comme un suivi retiré.`)) return;
+    onSetAxes(axes.filter((a) => a.id !== axe.id));
+  };
+  return (
+    <div>
+      <SectionTitle sub="Les critères notés au fil de la journée, indépendamment des ateliers. Deux suivis au plus peuvent tourner en parallèle sur une même personne.">Suivi continu</SectionTitle>
+      {axes.map((axe) => (
+        <Card key={axe.id} className="mb-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Field
+              value={axe.nom}
+              onChange={(nom) => onSetAxes(axes.map((a) => (a.id === axe.id ? { ...a, nom } : a)))}
+              placeholder="Nom du suivi"
+            />
+            {axes.length > 1 && (
+              <button onClick={() => supprimerAxe(axe)} style={{ color: INK_SOFT }} title="Supprimer ce suivi">
+                <Trash2 size={16} />
+              </button>
+            )}
+          </div>
+          <CritereListEditor
+            criteres={axe.criteres}
+            onChange={(criteres) => onSetAxes(axes.map((a) => (a.id === axe.id ? { ...a, criteres } : a)))}
+          />
+        </Card>
+      ))}
+      {axes.length < MAX_SUIVIS && (
+        <Btn variant="ghost" onClick={ajouterAxe} className="w-full text-sm">
+          <Plus size={16} /> Ajouter un suivi
+        </Btn>
+      )}
+    </div>
+  );
+}
+
 function PanneauMotsDePasse({ security, onChangePin, onDisableProtection }) {
   const [changingPin, setChangingPin] = useState(false);
   return (
@@ -4406,7 +4814,7 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
         >
           <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Avec les données personnelles</div>
           <div className="text-xs" style={{ color: INK_SOFT }}>
-            Sauvegarde complète : initiales, objectifs, cotations, crises et relevés de stabilité.
+            Sauvegarde complète : initiales, objectifs, cotations, crises et relevés de suivi continu.
             C'est le seul moyen de récupérer l'historique après un effacement ou un changement
             d'appareil — et le seul fichier à protéger par mot de passe.
           </div>
@@ -4433,7 +4841,7 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Durée de conservation</span>
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Les séances, les crises et les relevés de stabilité plus anciens que cette durée sont
+          Les séances, les crises et les relevés de suivi continu plus anciens que cette durée sont
           supprimés automatiquement à l'ouverture de l'application. Exportez et transmettez vos
           rapports avant l'échéance : la suppression est définitive.
         </p>
@@ -4464,12 +4872,12 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
 }
 
 /* ==================== Écran 2 : personnes accompagnées et objectifs ==================== */
-/* Création des personnes, objectifs et activation du suivi de stabilité au
-   même endroit : la fiche d'une personne se tenait jusqu'ici à deux écrans de
+/* Création des personnes, objectifs et activation du suivi continu au même
+   endroit : la fiche d'une personne se tenait jusqu'ici à deux écrans de
    distance, une carte dans Gestion et une carte dans Personnes. */
 function PanneauPersonnes({
   students, guidances, templates, premiereConfiguration,
-  addStudent, removeStudent, renameStudent, onToggleStabilite, onToggleRenforcement,
+  addStudent, removeStudent, renameStudent, axesSuivi, onToggleAxeSuivi, onToggleRenforcement,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
 }) {
   const [openId, setOpenId] = useState(null);
@@ -4533,7 +4941,8 @@ function PanneauPersonnes({
                   <span className="block font-semibold" style={{ fontFamily: F_DISPLAY }}>{s.initials}</span>
                   <span className="block text-xs" style={{ color: INK_SOFT }}>
                     {s.objectives.length} objectif{s.objectives.length !== 1 ? 's' : ''}
-                    {s.suiviStabilite && ' · stabilité suivie'}
+                    {(s.suivisActifs || []).length > 0 &&
+                      ` · ${(s.suivisActifs || []).map((id) => (axeDe(axesSuivi, id) || {}).nom).filter(Boolean).join(', ')}`}
                     {s.suiviRenforcement && ' · renforcement suivi'}
                   </span>
                 </span>
@@ -4551,18 +4960,23 @@ function PanneauPersonnes({
                       if (window.confirm(`Supprimer ${s.initials} et ses ${s.objectives.length} objectif(s) ?`)) removeStudent(s.id);
                     }}
                   />
-                  <button onClick={() => onToggleStabilite(s.id)} className="flex items-start gap-2.5 text-left w-full mt-2.5">
-                    <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: s.suiviStabilite ? INK : BORDER }}>
-                      <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: s.suiviStabilite ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Suivi de stabilité</span>
-                      <span className="block text-xs" style={{ color: INK_SOFT }}>
-                        Ajoute une pastille en bas d'écran pour noter à tout moment son état — stable,
-                        pré-crise, crise, post-crise. Sans activation, aucune pastille n'apparaît.
-                      </span>
-                    </span>
-                  </button>
+                  {axesSuivi.map((axe) => {
+                    const actif = (s.suivisActifs || []).includes(axe.id);
+                    return (
+                      <button key={axe.id} onClick={() => onToggleAxeSuivi(s.id, axe.id)} className="flex items-start gap-2.5 text-left w-full mt-2.5">
+                        <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: actif ? INK : BORDER }}>
+                          <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: actif ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{axe.nom}</span>
+                          <span className="block text-xs" style={{ color: INK_SOFT }}>
+                            Ajoute une pastille en bas d'écran pour noter à tout moment son critère —
+                            {' '}{axe.criteres.map((c) => c.l).join(', ')}. Sans activation, aucune pastille n'apparaît.
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
                   <button onClick={() => onToggleRenforcement(s.id)} className="flex items-start gap-2.5 text-left w-full mt-2.5">
                     <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: s.suiviRenforcement ? INK : BORDER }}>
                       <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: s.suiviRenforcement ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
@@ -7575,7 +7989,91 @@ function BalanceWidget({ obj, entry, onChange }) {
 }
 
 /* ==================== Écran suivi : progression et maîtrise ==================== */
-function SuiviScreen({ students, sessions, guidances, onResetTracking, onOuvrirMenu }) {
+/* Bande de la journée en cours pour le suivi continu : un segment par
+   critère noté, large de sa durée réelle, du premier relevé du jour à
+   maintenant. Sans mention d'atelier — le relevé n'en porte pas, c'est
+   Manager qui recoupe après coup. Le rafraîchissement périodique vit ici,
+   pas dans SuiviScreen, qui a un retour anticipé avant tout hook. */
+function FriseJournee({ students, axesSuivi, releves }) {
+  const [maintenant, setMaintenant] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setMaintenant(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  const lignes = [];
+  students.forEach((st) => {
+    (st.suivisActifs || []).forEach((suiviId) => {
+      const axe = axeDe(axesSuivi, suiviId);
+      if (!axe) return;
+      lignes.push({ st, axe, segments: segmentsJournee(releves, st.id, suiviId, maintenant, maintenant) });
+    });
+  });
+  if (lignes.length === 0) return null;
+
+  return (
+    <Card className="mb-4">
+      <SectionTitle sub="Les critères notés aujourd'hui, dans l'ordre où ils sont arrivés — sans lien avec les ateliers.">
+        Aujourd'hui
+      </SectionTitle>
+      <div className="space-y-4">
+        {lignes.map(({ st, axe, segments }) => {
+          const label = `${st.initials} — ${axe.nom}`;
+          if (segments.length === 0) {
+            return (
+              <div key={`${st.id}-${axe.id}`}>
+                <div className="text-xs mb-1" style={{ color: INK_SOFT }}>{label}</div>
+                <div className="h-6 rounded-lg border border-dashed flex items-center px-2 text-xs" style={{ borderColor: BORDER, color: INK_SOFT }}>
+                  Non démarré aujourd'hui
+                </div>
+              </div>
+            );
+          }
+          const debut = segments[0].debut;
+          const dernier = segments[segments.length - 1];
+          const finVisible = dernier.fin != null ? Math.min(dernier.fin, maintenant) : maintenant;
+          const duree = Math.max(1, finVisible - debut);
+          const heures = [];
+          const premiere = new Date(debut);
+          premiere.setMinutes(0, 0, 0);
+          for (let h = premiere.getTime() + 3600000; h < finVisible; h += 3600000) heures.push(h);
+          return (
+            <div key={`${st.id}-${axe.id}`}>
+              <div className="text-xs mb-1" style={{ color: INK_SOFT }}>{label}</div>
+              <div className="relative h-6 rounded-lg overflow-hidden flex" style={{ backgroundColor: PAPER }}>
+                {segments.map((seg, j) => {
+                  const meta = metaCritere(axe.criteres, seg.critere);
+                  const largeur = seg.ms != null ? (seg.ms / duree) * 100 : 0;
+                  return (
+                    <span
+                      key={j}
+                      title={`${meta.l} — ${timeShort(new Date(seg.debut).toISOString())}${seg.fin != null ? ` à ${timeShort(new Date(seg.fin).toISOString())}` : ''}`}
+                      style={{ width: `${largeur}%`, backgroundColor: meta.color }}
+                    />
+                  );
+                })}
+                {heures.map((h) => (
+                  <span
+                    key={h}
+                    title={timeShort(new Date(h).toISOString())}
+                    className="absolute top-0 bottom-0 w-px"
+                    style={{ left: `${((h - debut) / duree) * 100}%`, backgroundColor: 'rgba(255,255,255,0.6)' }}
+                  />
+                ))}
+              </div>
+              <div className="flex justify-between text-xs mt-1" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
+                <span>{timeShort(new Date(debut).toISOString())}</span>
+                <span>{timeShort(new Date(finVisible).toISOString())}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onResetTracking, onOuvrirMenu }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
 
   if (students.length === 0) {
@@ -7599,6 +8097,7 @@ function SuiviScreen({ students, sessions, guidances, onResetTracking, onOuvrirM
         <BoutonMenu onClick={onOuvrirMenu} />
       </div>
 
+      <FriseJournee students={students} axesSuivi={axesSuivi} releves={releves} />
       <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} />
       <>
       <div className="space-y-3">
@@ -7878,7 +8377,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
 }
 
 /* ==================== Écran 4 : export ==================== */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, appareil, notify, onEditCrisis, onMarkSent, onExportManager, onOuvrirMenu }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, releves, axesSuivi, appareil, notify, onEditCrisis, onMarkSent, onExportManager, onOuvrirMenu }) {
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   // Valeur d'état initiale seulement : React l'ignore aux rendus suivants,
   // donc une sélection ajustée à la main n'est jamais écrasée par un
@@ -7903,12 +8402,22 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     return !c.sessionId || chosen.some((s) => s.id === c.sessionId);
   });
   const chosenSentCount = byStudent ? 0 : chosen.filter((s) => s.sentAt).length;
+  /* Les relevés de suivi continu ne portent pas de sessionId : en mode « par
+     séance », on les borne aux jours des séances retenues plutôt qu'à leur
+     seule liste de personnes, sinon cocher une seule séance d'hier exporterait
+     tout l'historique de ces personnes. */
+  const chosenReleves = byStudent
+    ? releves.filter((r) => pickedStudents.includes(r.studentId))
+    : releves.filter((r) => {
+        const jour = new Date(r.timestamp);
+        return chosen.some((s) => (s.studentIds || []).includes(r.studentId) && memeJour(new Date(s.date), jour));
+      });
 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || 'Séance libre';
   const sessionLabel = (sess) => (sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Balance Program' : 'Séance libre');
 
   function makeFile() {
-    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, guidances, studentFilter);
+    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, guidances, studentFilter, chosenReleves, axesSuivi);
     const blob = workbookBlob(wb);
     const initials = byStudent
       ? students.filter((s) => pickedStudents.includes(s.id)).map((s) => s.initials.replace(/\./g, '')).join('-')

@@ -137,6 +137,34 @@ modifiables : ajout, renommage, suppression, et réorganisation par appui long.
 Placez en tête ce que votre équipe coche le plus souvent : c'est l'ordre
 d'affichage.
 
+### Suivi continu
+
+Les critères notés au fil de la journée pour une personne, indépendamment des
+ateliers — « Stable », « Pré-crise », « Crise », « Post-crise » par défaut.
+Entièrement modifiable : ajout, renommage, couleur, suppression, réorganisation
+par appui long. Renommer un critère ne perd pas les relevés déjà notés sous
+son ancien nom ; en supprimer un les laisse visibles comme « Critère retiré »,
+sans jamais ressusciter la clé effacée.
+
+**Deux suivis au plus** peuvent tourner en parallèle sur une même personne
+(par exemple un axe « état émotionnel » et un axe « engagement »), chacun avec
+sa propre liste de critères. L'activation par personne se fait depuis l'écran
+Personnes accompagnées (section 5) : une pastille par axe activé apparaît
+alors en bas d'écran, sur tous les onglets.
+
+> Le libellé du critère en cours ne s'affiche que si la personne n'a qu'un
+> seul axe actif ; avec deux, seule la couleur reste lisible dans la barre du
+> bas — le libellé se lit dans la feuille de choix, ouverte au tap.
+
+**Grise, la pastille est dormante** : aucun critère n'a encore été noté ce
+jour-là pour cet axe, quel qu'ait été le dernier relevé les jours précédents.
+Un appui dessus propose de lancer les cotations de la journée. Le relevé peut
+être enregistré **à tout moment**, dans ou hors séance — un critère vaut
+jusqu'au suivant, il n'y a rien à refermer en cours de journée. **Clôturer la
+journée**, depuis la même feuille, arrête le dernier critère à l'instant
+présent et repasse la pastille au gris ; sans clôture, le dernier critère du
+jour reste en cours jusqu'au lendemain.
+
 ### Modèles d'objectifs
 
 Objectifs types réutilisables, avec leur mode de cotation, leurs cibles et leur
@@ -149,10 +177,10 @@ Longueur du code, modification, rappel des règles de verrouillage.
 
 ### Durée de conservation
 
-Aucune limite (par défaut), ou 6 / 12 / 24 / 36 mois. Les séances, crises et
-observations plus anciennes sont **supprimées automatiquement à l'ouverture**,
-avec un message indiquant le nombre d'éléments retirés. La date de coupure
-s'affiche.
+Aucune limite (par défaut), ou 6 / 12 / 24 / 36 mois. Les séances, crises,
+observations et relevés de suivi continu plus anciens sont **supprimés
+automatiquement à l'ouverture**, avec un message indiquant le nombre
+d'éléments retirés. La date de coupure s'affiche.
 
 > Cette suppression est **définitive**. Transmettez vos rapports avant l'échéance.
 
@@ -474,7 +502,14 @@ compris la date, l'heure et la durée si le bouton a été actionné en retard.
 
 ## 9. Écran Suivi
 
-En haut, **où en sont les objectifs** : quatre compteurs qui se déplient.
+Si au moins une personne a un suivi continu actif, tout en haut : **Aujourd'hui**,
+une bande par personne et par axe suivi, du premier relevé du jour à
+maintenant, découpée en segments colorés proportionnels à leur durée réelle.
+Sans mention d'atelier — le relevé n'en porte pas, c'est DatABA Manager qui
+recoupe après coup avec les horaires des séances. Un axe non encore noté ce
+jour-là s'affiche « Non démarré aujourd'hui ».
+
+Ensuite, **où en sont les objectifs** : quatre compteurs qui se déplient.
 
 | Groupe | Ce qu'il signale |
 |---|---|
@@ -528,7 +563,7 @@ Deux actions :
 
 ## 11. Exploiter les données dans Excel
 
-Le fichier produit contient cinq feuilles :
+Le fichier produit contient six feuilles :
 
 | Feuille | Contenu |
 |---|---|
@@ -536,7 +571,22 @@ Le fichier produit contient cinq feuilles :
 | **Détail par essai** | Une ligne par essai, étape ou intervalle |
 | **Crises et observations** | Grille ABC complète, avec le type |
 | **Notes** | Observations qualitatives |
+| **Suivi continu** | Une ligne par relevé, avec son heure et sa durée |
 | **Tableau de bord** | Une ligne par personne/objectif, une colonne par date |
+
+### La feuille « Suivi continu »
+
+Une ligne par relevé, triée par date et heure : personne, axe, critère, et la
+**durée en minutes** jusqu'au relevé suivant du même axe pour la même
+personne. Cette durée reste **vide** sur le dernier relevé d'une journée non
+clôturée, plutôt que d'être devinée jusqu'à minuit — même principe que la
+colonne Indépendant de « Détail par essai », qui reste vide plutôt qu'à zéro
+quand l'information manque réellement. Une clôture apparaît comme une ligne
+à part, avec le critère « — fin — ».
+
+En mode *Par séance*, seuls les relevés des jours couverts par les séances
+retenues sont repris ; en mode *Par personne*, tout l'historique de suivi
+continu des personnes cochées est repris, comme pour les autres feuilles.
 
 ### La feuille « Détail par essai »
 
@@ -610,7 +660,8 @@ les champs de saisie gardent la priorité sur le balayage.
 ## 13. Sauvegarde
 
 **Gestion → Sauvegarde → Exporter** produit un fichier contenant tout :
-personnes, objectifs, séances, crises et observations. Deux formes possibles :
+personnes, objectifs, séances, crises, observations et relevés de suivi
+continu. Deux formes possibles :
 
 - **Chiffrée par mot de passe** (recommandé) — le fichier reste illisible sans
   le mot de passe, y compris s'il est transmis par erreur. Ce mot de passe est
@@ -628,9 +679,9 @@ l'appareil après confirmation.
 ### Exporter la configuration seule
 
 Un second bouton produit un fichier de **configuration** : ateliers,
-intervenants, guidances, réponses ABC et modèles d'objectifs, **sans aucune
-personne ni séance**. Il ne contient donc aucune donnée d'usager et sert à
-équiper un nouvel appareil sans tout ressaisir.
+intervenants, guidances, réponses ABC, axes de suivi continu et modèles
+d'objectifs, **sans aucune personne ni séance**. Il ne contient donc aucune
+donnée d'usager et sert à équiper un nouvel appareil sans tout ressaisir.
 
 Il se restaure avec le même bouton **Restaurer** : l'application reconnaît le
 format et **complète** l'existant au lieu de le remplacer.
