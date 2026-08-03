@@ -7,6 +7,7 @@ import {
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
   ListOrdered, Gauge, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
+  Menu, ChevronLeft, ChevronDown, Activity, Database,
 } from 'lucide-react';
 
 /* ==================== Design tokens ==================== */
@@ -16,6 +17,25 @@ const PAPER = '#EFF2EC';
 const CARD = '#FBFCFA';
 const BORDER = '#DBE3D8';
 const CRISIS = '#B3261E';
+/* Fond de la barre de navigation du bas : un cran plus sombre que la page,
+   pour que la pilule se détache sans devenir un bloc noir en bas d'écran. */
+const NAV_BG = '#DFE5DA';
+
+/* ==================== Points restés ouverts ====================
+   Le document de décisions laisse plusieurs choix à trancher. Ils sont
+   rassemblés ici plutôt qu'arbitrés dans le code : une seule ligne à changer
+   le jour où la décision est prise, sans rouvrir les composants.
+
+   Point 1 — fermeture du tiroir latéral. Tant que les deux valent false, seul
+   le bouton de fermeture du tiroir le referme. Passer l'une ou l'autre (ou les
+   deux) à true ajoute le geste correspondant.
+
+   Point 6 — dérive visuelle de la pastille de stabilité. null : la pastille ne
+   change jamais d'aspect faute de relevé récent. Un nombre de millisecondes
+   active l'affichage estompé au-delà de ce délai. */
+const TIROIR_FERME_AU_TAP_DEHORS = false;
+const TIROIR_FERME_AU_BALAYAGE = false;
+const STABILITE_DERIVE_MS = null;
 
 const F_DISPLAY = "'Space Grotesk', system-ui, sans-serif";
 const F_BODY = "'IBM Plex Sans', system-ui, sans-serif";
@@ -42,9 +62,11 @@ function useFonts() {
       style.textContent = `
 @keyframes abaInFromRight { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
 @keyframes abaInFromLeft  { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+@keyframes abaTiroir { from { transform: translateX(-100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   @keyframes abaInFromRight { from { opacity: 1; } to { opacity: 1; } }
   @keyframes abaInFromLeft  { from { opacity: 1; } to { opacity: 1; } }
+  @keyframes abaTiroir { from { transform: none; } to { transform: none; } }
 }
 [data-reorder] {
   -webkit-user-select: none;
@@ -937,6 +959,70 @@ function crisisIntervals(session, crises, stepMinutes, studentId) {
   return set;
 }
 
+/* ==================== Suivi de stabilité ====================
+   Relevés indépendants des séances, sur le même principe que les crises : un
+   état peut être noté à n'importe quel moment de la journée, dans ou hors
+   atelier. Un relevé n'a pas de fin — il vaut jusqu'au suivant, comme un
+   interrupteur. Rien à refermer, donc aucun état laissé ouvert par oubli.
+
+   Le croisement avec les ateliers se calcule après coup dans DatABA Manager,
+   en comparant l'horodatage du relevé aux bornes des séances. Aucune saisie
+   supplémentaire n'est demandée ici pour ça. */
+const ETATS_STABILITE = [
+  { k: 'stable', l: 'Stable', color: '#2E7D5B' },
+  { k: 'pre-crise', l: 'Pré-crise', color: '#D69A2D' },
+  { k: 'crise', l: 'Crise', color: CRISIS },
+  { k: 'post-crise', l: 'Post-crise', color: '#5B6B8E' },
+];
+
+function metaStabilite(k) {
+  return ETATS_STABILITE.find((e) => e.k === k) || null;
+}
+
+/* Relevé courant d'une personne : simplement le plus récent. */
+function etatStabilite(stabilite, studentId) {
+  let dernier = null;
+  (stabilite || []).forEach((r) => {
+    if (!r || r.studentId !== studentId) return;
+    const t = new Date(r.timestamp).getTime();
+    if (Number.isNaN(t)) return;
+    if (!dernier || t > new Date(dernier.timestamp).getTime()) dernier = r;
+  });
+  return dernier;
+}
+
+/* ==================== Regroupement par jour ====================
+   Les listes d'historique plafonnaient à quelques entrées, sans aucun moyen
+   d'atteindre ce qui était plus ancien : la limite n'était pas seulement
+   visuelle, elle rendait le reste inaccessible. Un jour replié ne coûte rien à
+   l'affichage, il n'y a donc plus de raison de tronquer quoi que ce soit. */
+function grouperParJour(items, dateDe) {
+  const groupes = [];
+  const index = {};
+  (items || []).forEach((it) => {
+    const d = new Date(dateDe(it));
+    const valide = !Number.isNaN(d.getTime());
+    const cle = valide ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : '0000-00-00';
+    if (!index[cle]) {
+      index[cle] = { cle, date: valide ? d : null, items: [] };
+      groupes.push(index[cle]);
+    }
+    index[cle].items.push(it);
+  });
+  groupes.sort((a, b) => (a.cle < b.cle ? 1 : a.cle > b.cle ? -1 : 0));
+  return groupes;
+}
+
+function libelleJour(d, maintenant) {
+  if (!d) return 'Date inconnue';
+  const ref = maintenant ? new Date(maintenant) : new Date();
+  const memeJour = (x, y) => x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+  const hier = new Date(ref.getTime() - 86400000);
+  if (memeJour(d, ref)) return "Aujourd'hui";
+  if (memeJour(d, hier)) return 'Hier';
+  return d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
 /* Résumé texte d'une cotation, utilisé à l'écran et dans l'export */
 function summarize(obj, entry, guidances) {
   if (!entryMatches(obj, entry)) return { result: '—', detail: '' };
@@ -1527,6 +1613,26 @@ function workbookBlob(wb) {
   return new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
 
+/* ==================== Nommage des fichiers produits ====================
+   Un dossier de sauvegardes doit se lire sans ouvrir les fichiers : de quelle
+   tablette vient celui-ci, et de quel jour. L'appareil précède donc la date
+   dans chaque nom, et voyage aussi dans la charge utile — le nom de fichier
+   étant la première chose qu'un renommage manuel fait perdre. */
+function segmentAppareil(nom) {
+  const propre = (nom || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+  return propre ? `${propre}-` : '';
+}
+
+function nomFichier(base, appareil, ext) {
+  return `${base}-${segmentAppareil(appareil)}${new Date().toISOString().slice(0, 10)}.${ext}`;
+}
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1853,6 +1959,35 @@ function Empty({ children }) {
   );
 }
 
+/* Liste d'historique repliée par jour. Le jour le plus récent est ouvert, les
+   autres se déplient à la demande — l'historique reste entier et consultable,
+   sans être déroulé d'un bloc. */
+function ListeParJour({ items, dateDe, renderItem }) {
+  const groupes = grouperParJour(items, dateDe);
+  const [ouvert, setOuvert] = useState(undefined);
+  if (!groupes.length) return null;
+  const cleOuverte = ouvert === undefined ? groupes[0].cle : ouvert;
+  return (
+    <div className="space-y-1.5">
+      {groupes.map((g) => {
+        const on = cleOuverte === g.cle;
+        return (
+          <div key={g.cle} className="rounded-xl border overflow-hidden" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+            <button onClick={() => setOuvert(on ? null : g.cle)} className="w-full flex items-center gap-2 px-3 py-2.5 text-left">
+              <ChevronDown size={15} style={{ color: INK_SOFT, transform: on ? 'none' : 'rotate(-90deg)', transition: 'transform .15s' }} className="shrink-0" />
+              <span className="text-sm font-medium flex-1 min-w-0 truncate first-letter:uppercase" style={{ fontFamily: F_DISPLAY }}>
+                {libelleJour(g.date)}
+              </span>
+              <span className="text-xs shrink-0" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{g.items.length}</span>
+            </button>
+            {on && <div className="px-2 pb-2 space-y-1.5">{g.items.map(renderItem)}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* Densités d'affichage de la zone de cotation. Réduire fait tenir plus
    d'objectifs à l'écran, au prix de boutons plus petits. */
 const ZOOM_LEVELS = [
@@ -1863,8 +1998,13 @@ const ZOOM_LEVELS = [
 ];
 
 /* ==================== Navigation par balayage ====================
-   Ordre des onglets, utilisé pour savoir vers quel écran glisser. */
-const TAB_ORDER = ['admin', 'students', 'session', 'suivi', 'export'];
+   Ordre des onglets, utilisé pour savoir vers quel écran glisser. Gestion et
+   Personnes ont quitté la barre principale : ils vivent désormais dans le
+   tiroir latéral. Suivi devient l'extrémité gauche, ce qui libère le balayage
+   vers la droite depuis cet écran — c'est lui qui ouvre le tiroir, sans avoir
+   à délimiter une bande de bord qui entrerait en conflit avec le balayage
+   document déjà en place. */
+const TAB_ORDER = ['suivi', 'session', 'export'];
 
 /* Un balayage ne doit pas voler le geste à une zone qui défile déjà
    horizontalement (grille d'essais, grille d'intervalles), à un champ de
@@ -2029,7 +2169,13 @@ function PassphraseModal({ mode, error, onSubmit, onClose }) {
 /* ==================== Application ==================== */
 function AbaApp() {
   useFonts();
-  const [tab, setTab] = useState('admin');
+  /* L'application s'ouvre sur Session : c'est l'écran utilisé à chaque prise
+     de poste, alors que la gestion ne sert qu'épisodiquement. */
+  const [tab, setTab] = useState('session');
+  /* Écran ouvert depuis le tiroir latéral. Il prend la place du contenu
+     d'onglet ; la barre du bas reste visible, avec les boutons Crise et ABC. */
+  const [ecran, setEcran] = useState(null);
+  const [tiroir, setTiroir] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [security, setSecurity] = useState({ pinHash: null, pinSalt: null });
   const [securityLoaded, setSecurityLoaded] = useState(false);
@@ -2042,8 +2188,16 @@ function AbaApp() {
   const [guidances, setGuidances] = useState(DEFAULT_GUIDANCE);
   const [objectiveTemplates, setObjectiveTemplates] = useState([]);
   const [abcOptions, setAbcOptions] = useState(DEFAULT_ABC);
+  /* Nom de cet appareil. Il voyage dans chaque fichier produit et se retrouve
+     dans son nom : sans lui, un dossier de sauvegardes ne dit pas de quelle
+     tablette vient quoi. */
+  const [appareil, setAppareil] = useState('');
   const [sessions, setSessions] = useState([]);
   const [crises, setCrises] = useState([]);
+  /* Relevés de stabilité : un tableau à part, indépendant des séances, sur le
+     même modèle que les crises. */
+  const [stabilite, setStabilite] = useState([]);
+  const [choixStabilite, setChoixStabilite] = useState(null); // personne dont on choisit l'état
 
   const [activeSession, setActiveSession] = useState(null);
   /* Plusieurs crises ou observations peuvent être ouvertes en même temps :
@@ -2074,9 +2228,59 @@ function AbaApp() {
     },
     [tab]
   );
-  const onLeft = React.useCallback(() => goTab(1), [goTab]);
-  const onRight = React.useCallback(() => goTab(-1), [goTab]);
-  const { offset, dragging } = useHorizontalSwipe(null, { onLeft, onRight, onDocument: true });
+
+  /* Sélection directe depuis la barre du bas : referme un écran du tiroir et
+     anime dans le sens du déplacement. */
+  const allerA = React.useCallback(
+    (k) => {
+      const i = TAB_ORDER.indexOf(tab);
+      const j = TAB_ORDER.indexOf(k);
+      setDir(ecran ? 0 : Math.sign(j - i));
+      setEcran(null);
+      setTab(k);
+    },
+    [tab, ecran]
+  );
+
+  /* La barre est figée sur l'onglet Session, qui couvre les deux écrans
+     concernés : la configuration avant lancement et la cotation en cours. Un
+     balayage accidentel pendant une cotation ne doit jamais changer d'onglet,
+     et la barre ne doit pas se dérober sous le doigt. */
+  const navFige = !ecran && tab === 'session';
+  const swipeActif = !ecran && (tiroir ? TIROIR_FERME_AU_BALAYAGE : !navFige);
+
+  const onLeft = React.useCallback(() => {
+    if (tiroir) { if (TIROIR_FERME_AU_BALAYAGE) setTiroir(false); return; }
+    goTab(1);
+  }, [tiroir, goTab]);
+
+  /* Depuis Suivi — l'extrémité gauche — il n'y a pas d'onglet précédent : le
+     balayage vers la droite y est libre, c'est lui qui ouvre le tiroir. */
+  const onRight = React.useCallback(() => {
+    if (tiroir) return;
+    if (tab === TAB_ORDER[0]) { setTiroir(true); return; }
+    goTab(-1);
+  }, [tiroir, tab, goTab]);
+
+  const { offset, dragging } = useHorizontalSwipe(null, { onLeft, onRight, onDocument: true, enabled: swipeActif });
+
+  /* La barre se réduit pendant le défilement et reprend sa taille à l'arrêt —
+     sauf là où elle est figée. */
+  const [barreReduite, setBarreReduite] = useState(false);
+  useEffect(() => {
+    if (navFige) { setBarreReduite(false); return undefined; }
+    let t = null;
+    const onScroll = () => {
+      setBarreReduite(true);
+      clearTimeout(t);
+      t = setTimeout(() => setBarreReduite(false), 400);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      clearTimeout(t);
+    };
+  }, [navFige]);
 
   /* --- chargement ---
      Les réglages de sécurité se lisent en clair, avant tout déverrouillage.
@@ -2113,12 +2317,15 @@ function AbaApp() {
   async function loadData() {
     const config = await store.get('aba:config');
     let retention = 0;
+    let nbPersonnes = 0;
     if (config) {
       try {
         const d = JSON.parse(config);
+        nbPersonnes = (d.students || []).length;
         setStudents(d.students || []);
         setAteliers(d.ateliers || []);
         setIntervenants(d.intervenants || []);
+        setAppareil(d.appareil || '');
         retention = d.retentionMonths || 0;
         setRetentionMonths(retention);
         if (Array.isArray(d.guidances) && d.guidances.length) {
@@ -2153,6 +2360,9 @@ function AbaApp() {
     }
     const cri = await store.get('aba:crises');
     if (cri) { try { loadedCrises = JSON.parse(cri) || []; } catch (e) {} }
+    let loadedStabilite = [];
+    const sta = await store.get('aba:stabilite');
+    if (sta) { try { loadedStabilite = JSON.parse(sta) || []; } catch (e) {} }
 
     // Purge automatique au-delà de la durée de conservation retenue
     if (retention > 0) {
@@ -2160,24 +2370,33 @@ function AbaApp() {
       limite.setMonth(limite.getMonth() - retention);
       const gardeS = loadedSessions.filter((x) => new Date(x.date) >= limite);
       const gardeC = loadedCrises.filter((x) => new Date(x.date) >= limite);
-      const retires = (loadedSessions.length - gardeS.length) + (loadedCrises.length - gardeC.length);
+      const gardeT = loadedStabilite.filter((x) => new Date(x.timestamp) >= limite);
+      const retires = (loadedSessions.length - gardeS.length) + (loadedCrises.length - gardeC.length) + (loadedStabilite.length - gardeT.length);
       if (retires > 0) {
         loadedSessions = gardeS;
         loadedCrises = gardeC;
+        loadedStabilite = gardeT;
         setTimeout(() => notify(`${retires} enregistrement${retires > 1 ? 's' : ''} supprimé${retires > 1 ? 's' : ''} (durée de conservation)`), 600);
       }
     }
     setSessions(loadedSessions);
     setCrises(loadedCrises);
+    setStabilite(loadedStabilite);
 
     const act = await store.get('aba:active');
     if (act) { try { setActiveSession(JSON.parse(act)); } catch (e) {} }
+
+    /* Tablette neuve : rien à coter, on ouvre directement sur la configuration
+       des personnes accompagnées. Dès qu'une personne existe, l'application
+       reprend son comportement normal et démarre sur Session. */
+    if (nbPersonnes === 0) setEcran('personnes');
+
     setLoaded(true);
   }
 
   /* Toutes les clés contenant des données, mois par mois compris. */
   async function clesDonnees() {
-    const base = ['aba:config', 'aba:sessions', 'aba:crises', 'aba:active', SESSIONS_INDEX];
+    const base = ['aba:config', 'aba:sessions', 'aba:crises', 'aba:stabilite', 'aba:active', SESSIONS_INDEX];
     const idx = await store.getRaw(SESSIONS_INDEX);
     if (!idx) return base;
     try {
@@ -2263,10 +2482,11 @@ function AbaApp() {
   /* Réécrit toutes les données avec la clé courante — utilisé après un
      changement de code, puisque l'ancienne clé ne déchiffrerait plus rien. */
   async function persistAll() {
-    await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions }));
+    await store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, appareil }));
     moisEcrits.current = {};
     await persistSessions(sessions);
     await store.set('aba:crises', JSON.stringify(crises));
+    await store.set('aba:stabilite', JSON.stringify(stabilite));
     await store.set('aba:active', JSON.stringify(activeSession));
   }
 
@@ -2335,8 +2555,8 @@ function AbaApp() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions }));
-  }, [students, ateliers, intervenants, guidances, retentionMonths, objectiveTemplates, abcOptions, loaded]);
+    store.set('aba:config', JSON.stringify({ students, ateliers, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, appareil }));
+  }, [students, ateliers, intervenants, guidances, retentionMonths, objectiveTemplates, abcOptions, appareil, loaded]);
   /* Empreinte du dernier enregistrement de chaque mois, pour n'écrire que ce
      qui a réellement changé. */
   const moisEcrits = useRef({});
@@ -2371,6 +2591,10 @@ function AbaApp() {
     if (!loaded) return;
     store.set('aba:crises', JSON.stringify(crises));
   }, [crises, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    store.set('aba:stabilite', JSON.stringify(stabilite));
+  }, [stabilite, loaded]);
   useEffect(() => {
     if (!loaded) return;
     store.set('aba:active', JSON.stringify(activeSession));
@@ -2425,9 +2649,10 @@ function AbaApp() {
       guidances,
       objectiveTemplates,
       abcOptions,
+      appareil,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    downloadBlob(blob, `configuration-aba-${new Date().toISOString().slice(0, 10)}.json`);
+    downloadBlob(blob, nomFichier('configuration-aba', appareil, 'json'));
     notify('Configuration exportée');
   }
 
@@ -2449,6 +2674,7 @@ function AbaApp() {
         consequences: [...cur.consequences, ...(d.abcOptions.consequences || []).filter((v) => !cur.consequences.includes(v))],
       }));
     }
+    if (d.appareil && !appareil.trim()) setAppareil(d.appareil);
     notify('Configuration importée');
   }
 
@@ -2467,22 +2693,28 @@ function AbaApp() {
     const idsConcernes = new Set();
     seancesRetenues.forEach((se) => (se.studentIds || []).forEach((id) => idsConcernes.add(id)));
     const crisesRetenues = crises.filter((c) => !c.sessionId || seancesRetenues.some((se) => se.id === c.sessionId));
+    /* Les relevés de stabilité ne sont rattachés à aucune séance : on joint
+       ceux des personnes concernées par la sélection. C'est Manager qui les
+       croisera ensuite avec les bornes horaires des séances. */
+    const stabiliteRetenue = stabilite.filter((r) => idsConcernes.has(r.studentId));
     return {
       format: 'aba-backup',
-      version: 2,
+      version: 3,
       exportedAt: new Date().toISOString(),
+      appareil,
       students: students.filter((st) => idsConcernes.has(st.id)),
       ateliers,
       intervenants,
       guidances,
       sessions: seancesRetenues,
       crises: crisesRetenues,
+      stabilite: stabiliteRetenue,
     };
   }
 
   function exportManager(seancesRetenues, chiffre) {
     const payload = payloadManager(seancesRetenues);
-    const nom = `pour-manager-${new Date().toISOString().slice(0, 10)}.json`;
+    const nom = nomFichier('pour-manager', appareil, 'json');
     if (!chiffre) {
       downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), nom);
       notify('Fichier Manager exporté sans chiffrement');
@@ -2494,9 +2726,9 @@ function AbaApp() {
   /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
      transferts qui restent dans un espace déjà protégé. */
   function exportBackupClair() {
-    const payload = { format: 'aba-backup', version: 2, exportedAt: new Date().toISOString(), students, ateliers, intervenants, guidances, sessions, crises };
+    const payload = { format: 'aba-backup', version: 3, exportedAt: new Date().toISOString(), appareil, students, ateliers, intervenants, guidances, sessions, crises, stabilite };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    downloadBlob(blob, `sauvegarde-aba-${new Date().toISOString().slice(0, 10)}.json`);
+    downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
     setBackupPrompt(null);
     notify('Sauvegarde exportée sans chiffrement');
   }
@@ -2510,10 +2742,10 @@ function AbaApp() {
       notify('Fichier Manager chiffré exporté');
       return;
     }
-    const payload = { format: 'aba-backup', version: 2, exportedAt: new Date().toISOString(), students, ateliers, intervenants, guidances, sessions, crises };
+    const payload = { format: 'aba-backup', version: 3, exportedAt: new Date().toISOString(), appareil, students, ateliers, intervenants, guidances, sessions, crises, stabilite };
     const envelope = await encryptJSON(payload, passphrase);
     const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json' });
-    downloadBlob(blob, `sauvegarde-aba-${new Date().toISOString().slice(0, 10)}.json`);
+    downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
     setBackupPrompt(null);
     notify('Sauvegarde chiffrée exportée');
   }
@@ -2534,6 +2766,11 @@ function AbaApp() {
     if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
     setSessions(d.sessions || []);
     setCrises(d.crises || []);
+    setStabilite(d.stabilite || []);
+    /* Le nom d'appareil du fichier ne s'impose pas à la tablette qui restaure :
+       elle garde le sien s'il est déjà renseigné, sinon elle reprend celui de
+       la sauvegarde plutôt que de rester anonyme. */
+    if (d.appareil && !appareil.trim()) setAppareil(d.appareil);
     notify('Sauvegarde restaurée');
   }
 
@@ -2713,6 +2950,66 @@ function AbaApp() {
     notify('Enregistrement supprimé');
   };
 
+  /* --- suivi de stabilité --- */
+  const toggleSuiviStabilite = (id) =>
+    setStudents((l) => l.map((x) => (x.id === id ? { ...x, suiviStabilite: !x.suiviStabilite } : x)));
+
+  /* Un relevé s'ajoute simplement à la suite : il vaut jusqu'au suivant.
+     L'état « crise » crée en plus une fiche crise minimale dans le tableau
+     habituel — la même fiche que celle du bouton CRISE, pas une seconde
+     série. Elle est enregistrée directement, sans chronomètre : la durée reste
+     à renseigner à la main depuis l'écran Export.
+
+     Le repère visuel signalant qu'une telle fiche reste à compléter n'est pas
+     tranché : l'indicateur `aCompleter` est posé sur la fiche, rien ne
+     l'affiche encore. */
+  const noterStabilite = (studentId, etat) => {
+    const maintenant = new Date().toISOString();
+    setStabilite((l) => [...l, { id: uid(), studentId, timestamp: maintenant, etat, source: 'pastille' }]);
+    const st = students.find((s) => s.id === studentId);
+    const nom = st ? st.initials : '';
+    if (etat === 'crise') {
+      setCrises((list) => [
+        {
+          id: uid(),
+          date: maintenant,
+          kind: 'crise',
+          sessionId: (activeSession && activeSession.id) || null,
+          studentId,
+          atelierId: (activeSession && activeSession.atelierId) || null,
+          intervenantIds: activeSession && activeSession.intervenantId ? [activeSession.intervenantId] : [],
+          commentaire: '',
+          antecedent: '',
+          comportement: '',
+          consequence: '',
+          antecedentTags: [],
+          comportementTags: [],
+          consequenceTags: [],
+          durationMs: 0,
+          origine: 'stabilite',
+          aCompleter: true,
+        },
+        ...list,
+      ]);
+      notify(`${nom} — fiche crise créée, à compléter depuis Export`);
+    } else {
+      notify(`${nom} — ${(metaStabilite(etat) || {}).l || etat}`);
+    }
+    setChoixStabilite(null);
+  };
+
+  /* Une pastille par personne dont le suivi de stabilité est activé. Les
+     autres n'en ont aucune : rien n'apparaît, rien n'encombre. */
+  const pastillesStabilite = students
+    .filter((s) => s.suiviStabilite)
+    .map((st) => {
+      const releve = etatStabilite(stabilite, st.id);
+      const meta = releve ? metaStabilite(releve.etat) : null;
+      const perime = !!(releve && STABILITE_DERIVE_MS != null
+        && Date.now() - new Date(releve.timestamp).getTime() > STABILITE_DERIVE_MS);
+      return { st, releve, meta, perime };
+    });
+
   if (!securityLoaded) {
     return (
       <div ref={rootRef} className="min-h-screen flex items-center justify-center" style={{ background: PAPER, color: INK_SOFT, fontFamily: F_BODY }}>
@@ -2750,76 +3047,84 @@ function AbaApp() {
 
   return (
     <div ref={rootRef} className="min-h-screen" style={{ background: PAPER, color: INK, fontFamily: F_BODY }}>
-      {/* Navigation */}
-      <div
-        className="sticky top-0 z-20 px-4 pb-2"
-        style={{ background: PAPER, borderBottom: `1px solid ${BORDER}`, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)' }}
-      >
-        <div className="max-w-4xl mx-auto flex gap-1">
-          {[
-            { k: 'admin', label: 'Gestion', icon: Layers },
-            { k: 'students', label: 'Personnes', icon: Users },
-            { k: 'session', label: 'Session', icon: Play },
-            { k: 'suivi', label: 'Suivi', icon: TrendingUp },
-            { k: 'export', label: 'Export', icon: FileSpreadsheet },
-          ].map((t) => {
-            const Icon = t.icon;
-            const on = tab === t.k;
-            return (
-              <button
-                key={t.k}
-                onClick={() => setTab(t.k)}
-                className="flex-1 rounded-xl py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
-                style={{
-                  fontFamily: F_DISPLAY,
-                  backgroundColor: on ? INK : 'transparent',
-                  color: on ? '#fff' : INK_SOFT,
-                }}
-              >
-                <Icon size={15} />
-                <span className="hidden sm:inline">{t.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
+      {/* Contenu : l'onglet courant, ou un écran ouvert depuis le tiroir */}
       <div
         ref={contentRef}
-        className="max-w-4xl mx-auto px-4 pt-5 pb-28"
+        className="max-w-4xl mx-auto px-4 pb-44"
         style={{
+          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)',
           transform: offset ? `translateX(${offset}px)` : 'none',
           transition: dragging ? 'none' : 'transform .2s ease-out',
         }}
       >
         <div
-          key={tab}
+          key={ecran || tab}
           style={{
             animation: dir === 0 ? 'none' : `${dir > 0 ? 'abaInFromRight' : 'abaInFromLeft'} .18s ease-out`,
           }}
         >
-        {tab === 'admin' && (
-          <AdminScreen
-            students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances}
+        {ecran && (
+          <button
+            onClick={() => { setEcran(null); setTiroir(true); }}
+            className="flex items-center gap-1 text-sm mb-3"
+            style={{ color: INK_SOFT }}
+          >
+            <ChevronLeft size={16} /> Menu
+          </button>
+        )}
+        {ecran === 'ateliers' && (
+          <PanneauAteliers ateliers={ateliers} onAdd={addAtelier} onRename={renameAtelier} onRemove={removeAtelier} />
+        )}
+        {ecran === 'personnes' && (
+          <PanneauPersonnes
+            students={students} guidances={guidances} templates={objectiveTemplates}
+            premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
-            addAtelier={addAtelier} removeAtelier={removeAtelier} renameAtelier={renameAtelier}
-            addIntervenant={addIntervenant} removeIntervenant={removeIntervenant} renameIntervenant={renameIntervenant}
-            onAddGuidance={addGuidance} onRemoveGuidance={removeGuidance} onToggleIndependent={toggleIndependent} onReorderGuidances={setGuidances}
-            security={security} onChangePin={changePin} onDisableProtection={disableProtection}
-            retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
-            templates={objectiveTemplates} onRemoveTemplate={removeTemplate} onExportConfig={exportConfig}
-            abcOptions={abcOptions} onSetAbc={setAbcOptions}
-            onExportBackup={exportBackup} onImportBackup={importBackup}
+            onToggleStabilite={toggleSuiviStabilite}
+            addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective}
+            duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase}
+            onSaveTemplate={saveTemplate}
           />
         )}
-        {tab === 'students' && (
-          <StudentsScreen students={students} guidances={guidances} addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective} duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase} onSaveTemplate={saveTemplate} templates={objectiveTemplates} />
+        {ecran === 'intervenants' && (
+          <PanneauIntervenants intervenants={intervenants} onAdd={addIntervenant} onRename={renameIntervenant} onRemove={removeIntervenant} />
+        )}
+        {ecran === 'modeles' && (
+          <PanneauModeles templates={objectiveTemplates} onRemove={removeTemplate} />
+        )}
+        {ecran === 'motsdepasse' && (
+          <PanneauMotsDePasse security={security} onChangePin={changePin} onDisableProtection={disableProtection} />
+        )}
+        {ecran === 'donnees' && (
+          <PanneauDonnees
+            appareil={appareil} onSetAppareil={setAppareil}
+            retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
+            onExportConfig={exportConfig} onExportBackup={exportBackup} onImportBackup={importBackup}
+          />
+        )}
+        {ecran === 'guidances' && (
+          <PanneauGuidances
+            guidances={guidances} onAdd={addGuidance} onRemove={removeGuidance}
+            onToggleIndependent={toggleIndependent} onReorder={setGuidances}
+          />
+        )}
+        {ecran === 'abc' && (
+          <PanneauAbc abcOptions={abcOptions} onSetAbc={setAbcOptions} />
+        )}
+
+        {!ecran && (
+          <>
+        {tab === 'suivi' && (
+          <SuiviScreen
+            students={students} sessions={sessions} guidances={guidances}
+            onResetTracking={resetTracking} onOuvrirMenu={() => setTiroir(true)}
+          />
         )}
         {tab === 'session' && (
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
             sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
-            onSetAtelierGroup={setAtelierGroup} notify={notify}
+            onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => setEcran('personnes')}
             activeSession={activeSession} setActiveSession={setActiveSession}
             onFinish={(session) => {
               const { isEdit, ...rest } = session;
@@ -2845,22 +3150,65 @@ function AbaApp() {
             }}
           />
         )}
-        {tab === 'suivi' && <SuiviScreen students={students} sessions={sessions} guidances={guidances} onResetTracking={resetTracking} />}
         {tab === 'export' && (
-          <ExportScreen sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} guidances={guidances} notify={notify} onEditCrisis={editCrisis} onMarkSent={markSent} onExportManager={exportManager} />
+          <ExportScreen
+            sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants}
+            guidances={guidances} appareil={appareil} notify={notify}
+            onEditCrisis={editCrisis} onMarkSent={markSent} onExportManager={exportManager}
+          />
+        )}
+          </>
         )}
         </div>
       </div>
 
-      {/* Bouton de crise, présent sur tous les écrans */}
+      {/* ==================== Barre du bas ====================
+          ABC et Crise encadrent la pilule de navigation : le bas d'écran est la
+          zone atteignable d'une main sur une tablette, ce que la fréquence du
+          bouton Crise exige. Au-dessus, les pastilles — celles des fiches
+          ouvertes, puis celles du suivi de stabilité. */}
       <div
-        className="fixed bottom-0 left-0 right-0 z-30 px-4 pt-6"
-        style={{ background: `linear-gradient(to top, ${PAPER} 55%, transparent)`, paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)' }}
+        className="fixed bottom-0 left-0 right-0 z-30 px-3 pt-8 pointer-events-none"
+        style={{
+          background: `linear-gradient(to top, ${PAPER} 60%, transparent)`,
+          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.6rem)',
+        }}
       >
-        <div className="max-w-4xl mx-auto">
+        <div
+          className="max-w-4xl mx-auto pointer-events-auto"
+          style={{
+            transform: barreReduite ? 'scale(0.84)' : 'none',
+            transformOrigin: 'bottom center',
+            transition: 'transform .18s ease-out',
+          }}
+        >
+        {/* Suivi de stabilité : une pastille par personne concernée, aucune pour les autres */}
+        {pastillesStabilite.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2 justify-center">
+            {pastillesStabilite.map((p) => (
+              <button
+                key={p.st.id}
+                onClick={() => setChoixStabilite(p.st.id)}
+                className="rounded-2xl px-3 py-1.5 flex items-center gap-1.5 text-xs border shadow-sm"
+                style={{
+                  backgroundColor: p.meta ? p.meta.color : CARD,
+                  borderColor: p.meta ? p.meta.color : BORDER,
+                  color: p.meta ? '#fff' : INK_SOFT,
+                  opacity: p.perime ? 0.55 : 1,
+                  fontFamily: F_DISPLAY,
+                }}
+              >
+                <Activity size={12} />
+                <span>{p.st.initials}</span>
+                <span style={{ opacity: 0.85 }}>{p.meta ? p.meta.l : 'à noter'}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Une pastille par fiche ouverte : chacune garde son chronomètre */}
         {openCrises.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-2">
+          <div className="flex flex-wrap gap-1.5 mb-2 justify-center">
             {openCrises.map((c) => {
               const st = students.find((x) => x.id === c.studentId);
               return (
@@ -2882,26 +3230,191 @@ function AbaApp() {
             })}
           </div>
         )}
-        <div className="flex gap-2">
-          <button
-            onClick={openCrisis}
-            className="flex-1 rounded-2xl py-4 text-white font-semibold flex items-center justify-center gap-2 shadow-lg active:scale-[0.99] transition-transform"
-            style={{ backgroundColor: CRISIS, fontFamily: F_DISPLAY, letterSpacing: '0.02em' }}
-          >
-            <AlertTriangle size={19} /> CRISE
-          </button>
+
+        <div className="flex items-center justify-center gap-2">
           {/* Comportement à consigner sans qu'il relève d'une crise */}
           <button
             onClick={openObservation}
-            className="rounded-2xl px-5 py-4 font-semibold flex items-center justify-center gap-2 shadow-lg border-2 active:scale-[0.99] transition-transform"
-            style={{ backgroundColor: CARD, borderColor: '#B07A2E', color: '#B07A2E', fontFamily: F_DISPLAY, letterSpacing: '0.02em' }}
+            className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 shrink-0 active:scale-[0.96] transition-transform"
+            style={{ backgroundColor: CARD, borderColor: '#B07A2E', color: '#B07A2E' }}
             title="Observation ABC, hors crise"
+            aria-label="Observation ABC"
           >
-            ABC
+            <ClipboardList size={22} />
+          </button>
+
+          <div className="rounded-full flex items-center gap-0.5 p-1 shadow-lg" style={{ backgroundColor: NAV_BG }}>
+            {[
+              { k: 'suivi', label: 'Suivi', icon: TrendingUp },
+              { k: 'session', label: 'Session', icon: Play },
+              { k: 'export', label: 'Export', icon: FileSpreadsheet },
+            ].map((t) => {
+              const Icon = t.icon;
+              const on = !ecran && tab === t.k;
+              return (
+                <button
+                  key={t.k}
+                  onClick={() => allerA(t.k)}
+                  className="rounded-full px-4 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+                  style={{
+                    fontFamily: F_DISPLAY,
+                    backgroundColor: on ? INK : 'transparent',
+                    color: on ? '#fff' : INK_SOFT,
+                  }}
+                  aria-label={t.label}
+                >
+                  <Icon size={16} />
+                  <span className="hidden sm:inline">{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            onClick={openCrisis}
+            className="w-14 h-14 rounded-full flex items-center justify-center text-white shadow-lg shrink-0 active:scale-[0.96] transition-transform"
+            style={{ backgroundColor: CRISIS }}
+            title="Ouvrir une fiche de crise"
+            aria-label="Crise"
+          >
+            <AlertTriangle size={24} />
           </button>
         </div>
         </div>
       </div>
+
+      {/* ==================== Tiroir latéral ====================
+          Ouvert par un balayage vers la droite depuis l'écran Suivi, ou par le
+          bouton de cet écran. */}
+      {tiroir && (
+        <div
+          className="fixed inset-0 z-40"
+          style={{ backgroundColor: 'rgba(32,41,31,0.35)' }}
+          onClick={TIROIR_FERME_AU_TAP_DEHORS ? () => setTiroir(false) : undefined}
+        >
+          <div
+            className="h-full overflow-y-auto shadow-2xl"
+            style={{
+              width: '86%',
+              maxWidth: '22rem',
+              backgroundColor: CARD,
+              animation: 'abaTiroir .2s ease-out',
+              paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)',
+              paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)',
+            }}
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <div className="px-4 flex items-center justify-between mb-4">
+              <span className="font-semibold text-lg" style={{ fontFamily: F_DISPLAY }}>Menu</span>
+              <button
+                onClick={() => setTiroir(false)}
+                className="w-9 h-9 rounded-full flex items-center justify-center"
+                style={{ backgroundColor: PAPER, color: INK_SOFT }}
+                aria-label="Fermer le menu"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="px-2 space-y-0.5">
+              {[
+                { k: 'ateliers', label: 'Ateliers', icon: Layers },
+                { k: 'personnes', label: 'Personnes accompagnées', icon: Users },
+                { k: 'intervenants', label: 'Intervenants', icon: UserCog },
+                { k: 'modeles', label: "Modèles d'objectifs", icon: BookmarkPlus },
+                { k: 'motsdepasse', label: 'Mots de passe', icon: Lock },
+                { k: 'donnees', label: 'Données', icon: Database },
+              ].map((it) => {
+                const Icon = it.icon;
+                return (
+                  <button
+                    key={it.k}
+                    onClick={() => { setEcran(it.k); setTiroir(false); }}
+                    className="w-full flex items-center gap-3 rounded-xl px-3 py-3.5 text-left"
+                    style={{ backgroundColor: ecran === it.k ? PAPER : 'transparent' }}
+                  >
+                    <Icon size={17} style={{ color: INK_SOFT }} className="shrink-0" />
+                    <span className="text-sm flex-1 min-w-0" style={{ fontFamily: F_DISPLAY }}>{it.label}</span>
+                    <ChevronRight size={16} style={{ color: INK_SOFT }} className="shrink-0" />
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Ces deux écrans n'ont pas encore de place attribuée dans le menu.
+                Ils restent atteignables ici plutôt que de disparaître. */}
+            <div className="px-4 mt-6 mb-1">
+              <div className="text-xs uppercase tracking-wide" style={{ color: INK_SOFT }}>Emplacement provisoire</div>
+            </div>
+            <div className="px-2 space-y-0.5">
+              {[
+                { k: 'guidances', label: 'Guidances', icon: SlidersHorizontal },
+                { k: 'abc', label: 'Réponses ABC', icon: AlertTriangle },
+              ].map((it) => {
+                const Icon = it.icon;
+                return (
+                  <button
+                    key={it.k}
+                    onClick={() => { setEcran(it.k); setTiroir(false); }}
+                    className="w-full flex items-center gap-3 rounded-xl px-3 py-3.5 text-left"
+                    style={{ backgroundColor: ecran === it.k ? PAPER : 'transparent' }}
+                  >
+                    <Icon size={17} style={{ color: INK_SOFT }} className="shrink-0" />
+                    <span className="text-sm flex-1 min-w-0" style={{ fontFamily: F_DISPLAY }}>{it.label}</span>
+                    <ChevronRight size={16} style={{ color: INK_SOFT }} className="shrink-0" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Choix de l'état de stabilité, depuis une pastille */}
+      {choixStabilite && (() => {
+        const st = students.find((s) => s.id === choixStabilite);
+        if (!st) return null;
+        const courant = etatStabilite(stabilite, st.id);
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center"
+            style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}
+            onClick={() => setChoixStabilite(null)}
+          >
+            <div
+              className="w-full max-w-md rounded-t-3xl p-5"
+              style={{ backgroundColor: CARD, paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.25rem)' }}
+              onClick={(ev) => ev.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-lg font-semibold" style={{ fontFamily: F_DISPLAY }}>{st.initials}</span>
+                <button onClick={() => setChoixStabilite(null)} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
+              </div>
+              <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
+                {courant
+                  ? `${(metaStabilite(courant.etat) || {}).l || courant.etat} depuis ${timeShort(courant.timestamp)}`
+                  : 'Aucun relevé pour le moment.'}
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {ETATS_STABILITE.map((et) => (
+                  <button
+                    key={et.k}
+                    onClick={() => noterStabilite(st.id, et.k)}
+                    className="rounded-2xl py-4 text-sm font-semibold text-white active:scale-[0.98] transition-transform"
+                    style={{ backgroundColor: et.color, fontFamily: F_DISPLAY }}
+                  >
+                    {et.l}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs mt-3" style={{ color: INK_SOFT }}>
+                Un état vaut jusqu'au suivant, il n'y a rien à refermer.
+                « Crise » crée en plus une fiche crise à compléter depuis l'écran Export.
+              </p>
+            </div>
+          </div>
+        );
+      })()}
 
       {crisis && (
         <CrisisOverlay
@@ -2962,7 +3475,7 @@ function AbaApp() {
       )}
 
       {toast && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 rounded-xl text-sm text-white shadow-lg" style={{ backgroundColor: INK }}>
+        <div className="fixed left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 rounded-xl text-sm text-white shadow-lg" style={{ backgroundColor: INK, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8rem)' }}>
           {toast}
         </div>
       )}
@@ -3069,107 +3582,113 @@ function ChangePinModal({ security, onSave, onClose }) {
   );
 }
 
-function AdminScreen({ students, ateliers, intervenants, guidances, security, onChangePin, onDisableProtection, retentionMonths, onSetRetention, templates, onRemoveTemplate, onExportConfig, abcOptions, onSetAbc, addStudent, removeStudent, renameStudent, addAtelier, removeAtelier, renameAtelier, addIntervenant, removeIntervenant, renameIntervenant, onAddGuidance, onRemoveGuidance, onToggleIndependent, onReorderGuidances, onExportBackup, onImportBackup }) {
-  const [initials, setInitials] = useState('');
-  const [atelier, setAtelier] = useState('');
-  const [intervenant, setIntervenant] = useState('');
-  const [addingGuidance, setAddingGuidance] = useState(false);
-  const [gCode, setGCode] = useState('');
-  const [gLabel, setGLabel] = useState('');
-  const [gColor, setGColor] = useState(GUIDANCE_PALETTE[0]);
-  const [gIndep, setGIndep] = useState(false);
-  const fileRef = useRef(null);
-  const [changingPin, setChangingPin] = useState(false);
+/* ==================== Écrans du tiroir ====================
+   L'ancien écran Gestion réunissait tout dans une seule page à faire défiler.
+   Il est découpé ici en panneaux indépendants, atteignables un par un depuis
+   le tiroir latéral. Rien n'a été retiré au passage. */
 
+function PanneauAteliers({ ateliers, onAdd, onRename, onRemove }) {
+  const [nom, setNom] = useState('');
+  const ajouter = () => { if (nom.trim()) { onAdd(nom.trim()); setNom(''); } };
   return (
     <div>
-      <SectionTitle sub="Les personnes accompagnées sont identifiées par leurs initiales uniquement.">Gestion</SectionTitle>
-
-      <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Users size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Personnes accompagnées</span>
-          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{students.length}</span>
-        </div>
+      <SectionTitle sub="Les groupes dans lesquels se déroulent les séances.">Ateliers</SectionTitle>
+      <Card>
         <div className="flex gap-2 mb-3">
-          <Field value={initials} onChange={setInitials} placeholder="Initiales (ex. J.D.)" onEnter={() => { if (initials.trim()) { addStudent(initials.trim()); setInitials(''); } }} />
-          <Btn onClick={() => { if (initials.trim()) { addStudent(initials.trim()); setInitials(''); } }} className="px-4 shrink-0"><Plus size={18} /></Btn>
-        </div>
-        {students.length === 0 ? (
-          <Empty>Ajoutez une première personne accompagnée pour commencer.</Empty>
-        ) : (
-          <div className="space-y-1.5">
-            {students.map((s) => (
-              <EditableRow
-                key={s.id}
-                label={s.initials}
-                onRename={(v) => renameStudent(s.id, v)}
-                onRemove={() => {
-                  if (window.confirm(`Supprimer ${s.initials} et ses ${s.objectives.length} objectif(s) ?`)) removeStudent(s.id);
-                }}
-              />
-            ))}
-          </div>
-        )}
-      </Card>
-
-      <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Layers size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Ateliers</span>
-          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{ateliers.length}</span>
-        </div>
-        <div className="flex gap-2 mb-3">
-          <Field value={atelier} onChange={setAtelier} placeholder="Nom de l'atelier (ex. Groupe habiletés sociales)" onEnter={() => { if (atelier.trim()) { addAtelier(atelier.trim()); setAtelier(''); } }} />
-          <Btn onClick={() => { if (atelier.trim()) { addAtelier(atelier.trim()); setAtelier(''); } }} className="px-4 shrink-0"><Plus size={18} /></Btn>
+          <Field value={nom} onChange={setNom} placeholder="Nom de l'atelier (ex. Groupe habiletés sociales)" onEnter={ajouter} />
+          <Btn onClick={ajouter} className="px-4 shrink-0"><Plus size={18} /></Btn>
         </div>
         {ateliers.length === 0 ? (
           <Empty>Aucun atelier créé.</Empty>
         ) : (
           <div className="space-y-1.5">
             {ateliers.map((a) => (
-              <EditableRow key={a.id} label={a.name} onRename={(v) => renameAtelier(a.id, v)} onRemove={() => removeAtelier(a.id)} />
+              <EditableRow key={a.id} label={a.name} onRename={(v) => onRename(a.id, v)} onRemove={() => onRemove(a.id)} />
             ))}
           </div>
         )}
       </Card>
+    </div>
+  );
+}
 
-      <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-3">
-          <UserCog size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Intervenants</span>
-          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{intervenants.length}</span>
-        </div>
+function PanneauIntervenants({ intervenants, onAdd, onRename, onRemove }) {
+  const [nom, setNom] = useState('');
+  const ajouter = () => { if (nom.trim()) { onAdd(nom.trim()); setNom(''); } };
+  return (
+    <div>
+      <SectionTitle sub="Les professionnels qui cotent, pour la traçabilité des relevés.">Intervenants</SectionTitle>
+      <Card>
         <div className="flex gap-2 mb-3">
-          <Field value={intervenant} onChange={setIntervenant} placeholder="Nom de l'intervenant" onEnter={() => { if (intervenant.trim()) { addIntervenant(intervenant.trim()); setIntervenant(''); } }} />
-          <Btn onClick={() => { if (intervenant.trim()) { addIntervenant(intervenant.trim()); setIntervenant(''); } }} className="px-4 shrink-0"><Plus size={18} /></Btn>
+          <Field value={nom} onChange={setNom} placeholder="Nom de l'intervenant" onEnter={ajouter} />
+          <Btn onClick={ajouter} className="px-4 shrink-0"><Plus size={18} /></Btn>
         </div>
         {intervenants.length === 0 ? (
-          <Empty>Ajoutez les professionnels qui cotent, pour la traçabilité des relevés.</Empty>
+          <Empty>Aucun intervenant enregistré.</Empty>
         ) : (
           <div className="space-y-1.5">
             {intervenants.map((i) => (
-              <EditableRow key={i.id} label={i.name} onRename={(v) => renameIntervenant(i.id, v)} onRemove={() => removeIntervenant(i.id)} />
+              <EditableRow key={i.id} label={i.name} onRename={(v) => onRename(i.id, v)} onRemove={() => onRemove(i.id)} />
             ))}
           </div>
         )}
       </Card>
+    </div>
+  );
+}
 
-      <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-3">
-          <SlidersHorizontal size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Guidances</span>
-          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{guidances.length}</span>
-        </div>
+function PanneauModeles({ templates, onRemove }) {
+  return (
+    <div>
+      <SectionTitle sub="Objectifs types réutilisables, avec leur mode de cotation, leurs cibles et leur critère.">
+        Modèles d'objectifs
+      </SectionTitle>
+      <Card>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Bibliothèque proposée à la création d'un objectif. C'est ensuite dans chaque objectif que l'on
-          choisit les réponses retenues et celles qui comptent comme réussite autonome — l'étoile ci-dessous
-          ne fixe que la valeur par défaut. Appui long sur une ligne pour la déplacer.
+          On les enregistre depuis l'écran Personnes accompagnées, et on les applique à la création
+          d'un objectif.
+        </p>
+        {templates.length === 0 ? (
+          <Empty>Aucun modèle enregistré.</Empty>
+        ) : (
+          <div className="space-y-1.5">
+            {templates.map((t) => {
+              const meta = TYPES[t.type];
+              const Icon = meta.icon;
+              return (
+                <div key={t.id} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+                  <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
+                  <span className="text-sm flex-1 min-w-0 break-words">{t.name}</span>
+                  <button onClick={() => onRemove(t.id)} style={{ color: INK_SOFT }}><X size={15} /></button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function PanneauGuidances({ guidances, onAdd, onRemove, onToggleIndependent, onReorder }) {
+  const [ajout, setAjout] = useState(false);
+  const [gCode, setGCode] = useState('');
+  const [gLabel, setGLabel] = useState('');
+  const [gColor, setGColor] = useState(GUIDANCE_PALETTE[0]);
+  const [gIndep, setGIndep] = useState(false);
+  return (
+    <div>
+      <SectionTitle sub="Bibliothèque proposée à la création d'un objectif.">Guidances</SectionTitle>
+      <Card>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          C'est dans chaque objectif que l'on choisit les réponses retenues et celles qui comptent
+          comme réussite autonome — l'étoile ci-dessous ne fixe que la valeur par défaut.
+          Appui long sur une ligne pour la déplacer.
         </p>
         <ReorderList
           items={guidances}
           keyOf={(g) => g.code}
-          onReorder={onReorderGuidances}
+          onReorder={onReorder}
           className="space-y-1.5 mb-3"
           renderItem={(g) => (
             <div className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
@@ -3183,13 +3702,13 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
                 style={{ color: g.independent ? '#D69A2D' : INK_SOFT }}>
                 <Star size={15} fill={g.independent ? '#D69A2D' : 'none'} />
               </button>
-              <button onClick={() => onRemoveGuidance(g.code)} style={{ color: INK_SOFT }} title="Supprimer">
+              <button onClick={() => onRemove(g.code)} style={{ color: INK_SOFT }} title="Supprimer">
                 <X size={15} />
               </button>
             </div>
           )}
         />
-        {addingGuidance ? (
+        {ajout ? (
           <div className="rounded-xl border p-3 space-y-2" style={{ borderColor: BORDER }}>
             <div className="flex gap-2">
               <input
@@ -3215,76 +3734,54 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
                 onClick={() => {
                   const code = gCode.trim();
                   if (!code || !gLabel.trim()) return;
-                  onAddGuidance({ code, label: gLabel.trim(), color: gColor, independent: gIndep });
-                  setGCode(''); setGLabel(''); setGIndep(false); setAddingGuidance(false);
+                  onAdd({ code, label: gLabel.trim(), color: gColor, independent: gIndep });
+                  setGCode(''); setGLabel(''); setGIndep(false); setAjout(false);
                 }}
                 disabled={!gCode.trim() || !gLabel.trim() || guidances.some((x) => x.code === gCode.trim())}
                 className="flex-1 text-sm py-2.5"
               >
                 Ajouter
               </Btn>
-              <Btn variant="ghost" onClick={() => setAddingGuidance(false)} className="text-sm py-2.5">Annuler</Btn>
+              <Btn variant="ghost" onClick={() => setAjout(false)} className="text-sm py-2.5">Annuler</Btn>
             </div>
             {guidances.some((x) => x.code === gCode.trim()) && gCode.trim() && (
               <div className="text-xs" style={{ color: CRISIS }}>Ce code existe déjà.</div>
             )}
           </div>
         ) : (
-          <Btn variant="ghost" onClick={() => setAddingGuidance(true)} className="w-full text-sm">
+          <Btn variant="ghost" onClick={() => setAjout(true)} className="w-full text-sm">
             <Plus size={16} /> Ajouter une guidance
           </Btn>
         )}
       </Card>
+    </div>
+  );
+}
 
-      <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-2">
-          <AlertTriangle size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Réponses ABC</span>
-        </div>
+function PanneauAbc({ abcOptions, onSetAbc }) {
+  return (
+    <div>
+      <SectionTitle sub="Réponses proposées derrière le bouton + des zones A, B et C.">Réponses ABC</SectionTitle>
+      <Card>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Réponses proposées derrière le bouton + des zones A, B et C, pour les crises comme pour
-          les observations. Appui long sur une ligne pour la déplacer : l'ordre est celui d'affichage,
-          placez en tête ce que votre équipe coche le plus souvent.
+          Valables pour les crises comme pour les observations. Appui long sur une ligne pour la
+          déplacer : l'ordre est celui d'affichage, placez en tête ce que votre équipe coche le plus
+          souvent.
         </p>
         <TagListEditor titre="A — Antécédents" items={abcOptions.antecedents} onChange={(v) => onSetAbc({ ...abcOptions, antecedents: v })} />
         <TagListEditor titre="B — Comportements" items={abcOptions.comportements} onChange={(v) => onSetAbc({ ...abcOptions, comportements: v })} />
         <TagListEditor titre="C — Conséquences" items={abcOptions.consequences} onChange={(v) => onSetAbc({ ...abcOptions, consequences: v })} />
       </Card>
+    </div>
+  );
+}
 
-      <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-2">
-          <BookmarkPlus size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Modèles d'objectifs</span>
-          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{templates.length}</span>
-        </div>
-        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Objectifs types réutilisables, avec leur mode de cotation, leurs cibles et leur critère.
-          On les enregistre depuis l'écran Personnes, et on les applique à la création d'un objectif.
-        </p>
-        {templates.length === 0 ? (
-          <Empty>Aucun modèle enregistré.</Empty>
-        ) : (
-          <div className="space-y-1.5">
-            {templates.map((t) => {
-              const meta = TYPES[t.type];
-              const Icon = meta.icon;
-              return (
-                <div key={t.id} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
-                  <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
-                  <span className="text-sm flex-1 min-w-0 break-words">{t.name}</span>
-                  <button onClick={() => onRemoveTemplate(t.id)} style={{ color: INK_SOFT }}><X size={15} /></button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Card>
-
-      <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-2">
-          <Lock size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Sécurité</span>
-        </div>
+function PanneauMotsDePasse({ security, onChangePin, onDisableProtection }) {
+  const [changingPin, setChangingPin] = useState(false);
+  return (
+    <div>
+      <SectionTitle sub="Ce qui protège l'accès à l'application et le chiffrement des données.">Mots de passe</SectionTitle>
+      <Card>
         {security.disabled ? (
           <>
             <p className="text-xs mb-3" style={{ color: CRISIS }}>
@@ -3339,15 +3836,110 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
           />
         )}
       </Card>
+    </div>
+  );
+}
+
+/* Les deux exports existaient déjà, mais sous deux boutons aux libellés
+   proches. Ils sont présentés ici comme un seul choix explicite : avec ou sans
+   données personnelles. */
+function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup }) {
+  const fileRef = useRef(null);
+  const [nom, setNom] = useState(appareil || '');
+  useEffect(() => { setNom(appareil || ''); }, [appareil]);
+  return (
+    <div>
+      <SectionTitle sub="Sortir les données de cette tablette, ou en rapatrier.">Données</SectionTitle>
 
       <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <StickyNote size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Nom de cet appareil</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Il apparaît dans le nom de chaque fichier produit, avant la date — <span style={{ fontFamily: F_MONO }}>pour-manager-tablette-2-2026-08-03.json</span> —
+          et voyage aussi à l'intérieur du fichier, qu'un renommage ne fait donc pas perdre.
+          Sans lui, un dossier de sauvegardes ne dit plus de quelle tablette vient quoi.
+        </p>
+        <div className="flex gap-2">
+          <Field value={nom} onChange={setNom} placeholder="Ex. Tablette 2, Unité verte…" onEnter={() => onSetAppareil(nom.trim())} />
+          <Btn onClick={() => onSetAppareil(nom.trim())} disabled={nom.trim() === (appareil || '').trim()} className="px-4 shrink-0">
+            <Check size={18} />
+          </Btn>
+        </div>
+      </Card>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files && e.target.files[0];
+          if (f) onImportBackup(f);
+          e.target.value = '';
+        }}
+      />
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Download size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Exporter</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Deux fichiers très différents. Le second ne quitte pas l'établissement sans précaution.
+        </p>
+
+        <button
+          onClick={onExportConfig}
+          className="w-full rounded-2xl border p-3.5 mb-2 text-left"
+          style={{ borderColor: BORDER, backgroundColor: PAPER }}
+        >
+          <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Sans données personnelles</div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            Ateliers, intervenants, guidances et modèles. Aucune personne accompagnée, aucune séance,
+            aucune crise : le fichier ne contient donc aucune donnée d'usager et sert à équiper un
+            nouvel appareil sans tout ressaisir.
+          </div>
+        </button>
+
+        <button
+          onClick={onExportBackup}
+          className="w-full rounded-2xl border-2 p-3.5 text-left"
+          style={{ borderColor: INK, backgroundColor: CARD }}
+        >
+          <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Avec les données personnelles</div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            Sauvegarde complète : initiales, objectifs, cotations, crises et relevés de stabilité.
+            C'est le seul moyen de récupérer l'historique après un effacement ou un changement
+            d'appareil — et le seul fichier à protéger par mot de passe.
+          </div>
+        </button>
+      </Card>
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Upload size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Restaurer</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Le même bouton accepte les deux fichiers. Une configuration s'ajoute à l'existant ;
+          une sauvegarde complète remplace tout, après confirmation.
+        </p>
+        <Btn variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} className="w-full text-sm">
+          <Upload size={16} /> Choisir un fichier
+        </Btn>
+      </Card>
+
+      <Card>
         <div className="flex items-center gap-2 mb-2">
           <CalendarClock size={16} style={{ color: INK_SOFT }} />
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Durée de conservation</span>
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Les séances et les crises plus anciennes que cette durée sont supprimées automatiquement à l'ouverture
-          de l'application. Exportez et transmettez vos rapports avant l'échéance : la suppression est définitive.
+          Les séances, les crises et les relevés de stabilité plus anciens que cette durée sont
+          supprimés automatiquement à l'ouverture de l'application. Exportez et transmettez vos
+          rapports avant l'échéance : la suppression est définitive.
         </p>
         <div className="flex gap-1.5 flex-wrap">
           {[{ v: 0, l: 'Aucune limite' }, { v: 6, l: '6 mois' }, { v: 12, l: '12 mois' }, { v: 24, l: '24 mois' }, { v: 36, l: '36 mois' }].map((o) => {
@@ -3371,65 +3963,68 @@ function AdminScreen({ students, ateliers, intervenants, guidances, security, on
           );
         })()}
       </Card>
-
-      <Card>
-        <div className="flex items-center gap-2 mb-2">
-          <Save size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Sauvegarde</span>
-        </div>
-        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Les données ne vivent que sur cette tablette. Exportez régulièrement une sauvegarde chiffrée par mot de
-          passe : c'est le seul moyen de récupérer l'historique après un effacement ou un changement d'appareil.
-        </p>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/json,.json"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files && e.target.files[0];
-            if (f) onImportBackup(f);
-            e.target.value = '';
-          }}
-        />
-        <div className="flex gap-2 mb-3">
-          <Btn variant="outline" onClick={onExportBackup} className="flex-1 text-sm"><Download size={16} /> Exporter</Btn>
-          <Btn variant="ghost" onClick={() => fileRef.current && fileRef.current.click()} className="flex-1 text-sm"><Upload size={16} /> Restaurer</Btn>
-        </div>
-        <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: '0.75rem' }}>
-          <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
-            La <strong>configuration seule</strong> reprend ateliers, intervenants, guidances et modèles,
-            sans aucune personne ni séance : le fichier ne contient donc pas de donnée d'usager et sert à
-            équiper un nouvel appareil sans tout ressaisir. Il se restaure avec le même bouton.
-          </p>
-          <Btn variant="ghost" onClick={onExportConfig} className="w-full text-sm">
-            <Download size={16} /> Exporter la configuration seule
-          </Btn>
-        </div>
-      </Card>
     </div>
   );
 }
 
 /* ==================== Écran 2 : personnes accompagnées et objectifs ==================== */
-function StudentsScreen({ students, guidances, addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate, templates }) {
+/* Création des personnes, objectifs et activation du suivi de stabilité au
+   même endroit : la fiche d'une personne se tenait jusqu'ici à deux écrans de
+   distance, une carte dans Gestion et une carte dans Personnes. */
+function PanneauPersonnes({
+  students, guidances, templates, premiereConfiguration,
+  addStudent, removeStudent, renameStudent, onToggleStabilite,
+  addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
+}) {
   const [openId, setOpenId] = useState(null);
   const [editingObj, setEditingObj] = useState(null);
   const [copyingObj, setCopyingObj] = useState(null);
   const [copyTargets, setCopyTargets] = useState([]);
+  const [initials, setInitials] = useState('');
 
-  if (students.length === 0) {
-    return (
-      <div>
-        <SectionTitle>Personnes accompagnées</SectionTitle>
-        <Empty>Ajoutez d'abord des personnes accompagnées dans l'écran Gestion.</Empty>
-      </div>
-    );
-  }
+  const ajouter = () => {
+    const v = initials.trim();
+    if (!v) return;
+    addStudent(v);
+    setInitials('');
+  };
 
   return (
     <div>
-      <SectionTitle sub="Définissez les objectifs de chaque personne accompagnée et le mode de cotation associé.">Personnes accompagnées</SectionTitle>
+      <SectionTitle sub="Identifiées par leurs initiales uniquement. Objectifs et mode de cotation se règlent ici.">
+        Personnes accompagnées
+      </SectionTitle>
+
+      {premiereConfiguration && (
+        <Card className="mb-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Sun size={16} style={{ color: INK_SOFT }} />
+            <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Première configuration</span>
+          </div>
+          <p className="text-xs" style={{ color: INK_SOFT }}>
+            Cette tablette est vierge. Commencez par créer les personnes accompagnées, puis leurs
+            objectifs. Les ateliers et les intervenants se règlent ensuite depuis le menu — le bouton
+            <strong> Menu</strong> en haut de cet écran. Aux ouvertures suivantes, l'application
+            démarrera directement sur Session.
+          </p>
+        </Card>
+      )}
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Users size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Ajouter</span>
+          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{students.length}</span>
+        </div>
+        <div className="flex gap-2">
+          <Field value={initials} onChange={setInitials} placeholder="Initiales (ex. J.D.)" onEnter={ajouter} />
+          <Btn onClick={ajouter} className="px-4 shrink-0"><Plus size={18} /></Btn>
+        </div>
+      </Card>
+
+      {students.length === 0 ? (
+        <Empty>Ajoutez une première personne accompagnée pour commencer.</Empty>
+      ) : (
       <div className="space-y-3">
         {students.map((s) => (
           <Card key={s.id}>
@@ -3440,7 +4035,10 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
                 </span>
                 <span className="text-left">
                   <span className="block font-semibold" style={{ fontFamily: F_DISPLAY }}>{s.initials}</span>
-                  <span className="block text-xs" style={{ color: INK_SOFT }}>{s.objectives.length} objectif{s.objectives.length !== 1 ? 's' : ''}</span>
+                  <span className="block text-xs" style={{ color: INK_SOFT }}>
+                    {s.objectives.length} objectif{s.objectives.length !== 1 ? 's' : ''}
+                    {s.suiviStabilite && ' · stabilité suivie'}
+                  </span>
                 </span>
               </span>
               <ChevronRight size={18} style={{ color: INK_SOFT, transform: openId === s.id ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
@@ -3448,6 +4046,27 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
 
             {openId === s.id && (
               <div className="mt-4">
+                <div className="rounded-xl px-3 py-2.5 mb-3" style={{ backgroundColor: PAPER }}>
+                  <EditableRow
+                    label={s.initials}
+                    onRename={(v) => renameStudent(s.id, v)}
+                    onRemove={() => {
+                      if (window.confirm(`Supprimer ${s.initials} et ses ${s.objectives.length} objectif(s) ?`)) removeStudent(s.id);
+                    }}
+                  />
+                  <button onClick={() => onToggleStabilite(s.id)} className="flex items-start gap-2.5 text-left w-full mt-2.5">
+                    <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: s.suiviStabilite ? INK : BORDER }}>
+                      <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: s.suiviStabilite ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Suivi de stabilité</span>
+                      <span className="block text-xs" style={{ color: INK_SOFT }}>
+                        Ajoute une pastille en bas d'écran pour noter à tout moment son état — stable,
+                        pré-crise, crise, post-crise. Sans activation, aucune pastille n'apparaît.
+                      </span>
+                    </span>
+                  </button>
+                </div>
                 <div className="space-y-1.5 mb-3">
                   {s.objectives.map((o) => {
                     const meta = TYPES[o.type];
@@ -3563,6 +4182,7 @@ function StudentsScreen({ students, guidances, addObjective, removeObjective, up
           </Card>
         ))}
       </div>
+      )}
     </div>
   );
 }
@@ -4322,7 +4942,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, activeSession, setActiveSession, onFinish }) {
+function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
     return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} onFinish={onFinish} />;
   }
@@ -4330,13 +4950,13 @@ function SessionScreen({ students, ateliers, intervenants, sessions, crises, gui
     <SessionSetup
       students={students} ateliers={ateliers} intervenants={intervenants} sessions={sessions}
       onEditSession={onEditSession} onDeleteSession={onDeleteSession} onDeleteAllSessions={onDeleteAllSessions}
-      onSetAtelierGroup={onSetAtelierGroup} notify={notify}
+      onSetAtelierGroup={onSetAtelierGroup} notify={notify} onOuvrirConfiguration={onOuvrirConfiguration}
       onStart={setActiveSession}
     />
   );
 }
 
-function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onStart }) {
+function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onStart }) {
   const [atelierId, setAtelierId] = useState(null);
   const [intervenantId, setIntervenantId] = useState(null);
   const [studentIds, setStudentIds] = useState([]);
@@ -4354,8 +4974,17 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   const [atelierFavorites, setAtelierFavorites] = useState([]);
   const [doubleCotation, setDoubleCotation] = useState(false);
 
-  const applyGroup = (ids, savedObjectives, known) => {
+  /* Une configuration d'atelier mémorisée n'a pas à être revérifiée en entier
+     à chaque lancement. Quand elle s'applique, seul ce qui diffère de
+     l'habituel est montré — les objectifs apparus depuis la mémorisation — et
+     le détail complet reste à un appui de distance. */
+  const [depuisMemoire, setDepuisMemoire] = useState(false);
+  const [nouveautes, setNouveautes] = useState({});
+  const [detailObjectifs, setDetailObjectifs] = useState(false);
+
+  const applyGroup = (ids, savedObjectives, known, memoire) => {
     const next = {};
+    const neufs = {};
     let nbNouveaux = 0;
     ids.forEach((id) => {
       const st = students.find((s) => s.id === id);
@@ -4378,6 +5007,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
         .map((o) => o.id);
 
       nbNouveaux += nouveaux.length;
+      if (nouveaux.length) neufs[id] = nouveaux;
       next[id] = [...retenus, ...nouveaux];
       if (!next[id].length) next[id] = visiblesIds;
     });
@@ -4385,6 +5015,9 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
     setStudentIds(ids);
     setSelected(next);
     setAutoApplied(true);
+    setDepuisMemoire(!!memoire);
+    setNouveautes(neufs);
+    setDetailObjectifs(false);
     if (nbNouveaux > 0) {
       setTimeout(() => notify(`${nbNouveaux} nouvel${nbNouveaux > 1 ? 'x' : ''} objectif${nbNouveaux > 1 ? 's' : ''} ajouté${nbNouveaux > 1 ? 's' : ''} à cet atelier`), 400);
     }
@@ -4393,11 +5026,11 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   const pickAtelier = (id) => {
     const next = atelierId === id ? null : id;
     setAtelierId(next);
-    if (!next) { setAtelierFavorites([]); return; }
+    if (!next) { setAtelierFavorites([]); setDepuisMemoire(false); return; }
     const a = ateliers.find((x) => x.id === next);
     const usual = a && a.usualStudentIds ? a.usualStudentIds.filter((sid) => students.some((s) => s.id === sid)) : [];
     setAtelierFavorites((a && a.favoriteObjectiveIds) || []);
-    if (usual.length && (studentIds.length === 0 || autoApplied)) applyGroup(usual, a && a.usualObjectives, a && a.knownObjectiveIds);
+    if (usual.length && (studentIds.length === 0 || autoApplied)) applyGroup(usual, a && a.usualObjectives, a && a.knownObjectiveIds, true);
   };
 
   const toggleStudent = (id) => {
@@ -4409,11 +5042,13 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       return { ...sel, [id]: st ? visibleObjectives(st).map((o) => o.id) : [] };
     });
   };
-  const toggleObjective = (sid, oid) =>
+  const toggleObjective = (sid, oid) => {
+    setDetailObjectifs(true);
     setSelected((sel) => {
       const cur = sel[sid] || [];
       return { ...sel, [sid]: cur.includes(oid) ? cur.filter((x) => x !== oid) : [...cur, oid] };
     });
+  };
   const toggleAtelierFavorite = (oid) =>
     setAtelierFavorites((cur) => (cur.includes(oid) ? cur.filter((x) => x !== oid) : [...cur, oid]));
 
@@ -4493,7 +5128,10 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
     return (
       <div>
         <SectionTitle>Session</SectionTitle>
-        <Empty>Créez au moins une personne accompagnée dans l'écran Gestion.</Empty>
+        <Empty>Aucune personne accompagnée n'est enregistrée sur cette tablette.</Empty>
+        <Btn onClick={onOuvrirConfiguration} className="w-full mt-3">
+          <Users size={17} /> Créer une personne accompagnée
+        </Btn>
       </div>
     );
   }
@@ -4536,7 +5174,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
           return (
             <button
               key={m.k}
-              onClick={() => { setMode(m.k); setStudentIds([]); setSelected({}); setAutoApplied(false); }}
+              onClick={() => { setMode(m.k); setStudentIds([]); setSelected({}); setAutoApplied(false); setDepuisMemoire(false); setNouveautes({}); }}
               className="flex-1 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-1.5 border"
               style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}
             >
@@ -4641,7 +5279,63 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
         </div>
       </Card>
 
-      {studentIds.map((sid) => {
+      {/* Configuration mémorisée appliquée : on ne montre que ce qui diffère de
+          l'habituel, plutôt que de redérouler toute la liste à revérifier. */}
+      {depuisMemoire && !detailObjectifs && studentIds.length > 0 && (() => {
+        const nbObjectifs = studentIds.reduce((n, sid) => n + (selected[sid] || []).length, 0);
+        const lignesNeuves = Object.keys(nouveautes).flatMap((sid) => {
+          const st = students.find((x) => x.id === sid);
+          if (!st) return [];
+          return nouveautes[sid]
+            .map((oid) => st.objectives.find((o) => o.id === oid))
+            .filter(Boolean)
+            .map((o) => ({ cle: `${sid}-${o.id}`, initiales: st.initials, nom: o.name, type: o.type }));
+        });
+        return (
+          <Card className="mb-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Star size={16} style={{ color: '#D69A2D' }} />
+              <span className="font-semibold text-sm" style={{ fontFamily: F_DISPLAY }}>Configuration habituelle appliquée</span>
+            </div>
+            <div className="text-xs mb-3" style={{ color: INK_SOFT }}>
+              <span style={{ fontFamily: F_MONO }}>{studentIds.length}</span> personne{studentIds.length !== 1 ? 's' : ''} ·{' '}
+              <span style={{ fontFamily: F_MONO }}>{nbObjectifs}</span> objectif{nbObjectifs !== 1 ? 's' : ''} coché{nbObjectifs !== 1 ? 's' : ''}
+            </div>
+
+            {lignesNeuves.length === 0 ? (
+              <div className="text-xs mb-3" style={{ color: INK_SOFT }}>
+                Rien de nouveau depuis la dernière mémorisation. Décochez une personne absente
+                ci-dessus si besoin, sinon lancez directement.
+              </div>
+            ) : (
+              <div className="mb-3">
+                <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
+                  Ajouté{lignesNeuves.length !== 1 ? 's' : ''} depuis la mémorisation, coché{lignesNeuves.length !== 1 ? 's' : ''} d'office :
+                </div>
+                <div className="space-y-1.5">
+                  {lignesNeuves.map((l) => {
+                    const meta = TYPES[l.type];
+                    const Icon = meta.icon;
+                    return (
+                      <div key={l.cle} className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm" style={{ backgroundColor: PAPER }}>
+                        <Icon size={14} style={{ color: meta.color }} className="shrink-0" />
+                        <span className="font-semibold shrink-0" style={{ fontFamily: F_DISPLAY }}>{l.initiales}</span>
+                        <span className="min-w-0 flex-1 truncate">{l.nom}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <Btn variant="ghost" onClick={() => setDetailObjectifs(true)} className="w-full text-sm">
+              <Eye size={15} /> Afficher le détail des objectifs
+            </Btn>
+          </Card>
+        );
+      })()}
+
+      {(!depuisMemoire || detailObjectifs) && studentIds.map((sid) => {
         const st = students.find((s) => s.id === sid);
         if (!st) return null;
         return (
@@ -4698,34 +5392,37 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       {sessions && sessions.length > 0 && (
         <div className="mt-8">
           <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
-            Séances enregistrées — appuyez pour corriger
+            Séances enregistrées — <span style={{ fontFamily: F_MONO }}>{sessions.length}</span> au total
           </div>
           <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
-            Appuyez sur une séance pour corriger ses cotations. Les rapports et les fichiers destinés
-            à DatABA Manager se génèrent depuis l'écran <strong>Export</strong>.
+            Dépliez un jour, puis appuyez sur une séance pour corriger ses cotations. Les rapports et
+            les fichiers destinés à DatABA Manager se génèrent depuis l'écran <strong>Export</strong>.
           </p>
-          <div className="space-y-1.5">
-            {sessions.slice(0, 15).map((s) => {
+          <ListeParJour
+            items={sessions}
+            dateDe={(s) => s.date}
+            renderItem={(s) => {
               const a = ateliers.find((x) => x.id === s.atelierId);
               return (
-                <div key={s.id} className="flex items-center gap-2 rounded-xl border px-3 py-2.5" style={{ borderColor: BORDER, backgroundColor: CARD }}>
-                  <button className="flex-1 text-left" onClick={() => onEditSession(s)}>
-                    <div className="text-sm font-medium">{a ? a.name : s.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</div>
+                <div key={s.id} className="flex items-center gap-2 rounded-xl border px-3 py-2.5" style={{ borderColor: BORDER, backgroundColor: PAPER }}>
+                  <button className="flex-1 text-left min-w-0" onClick={() => onEditSession(s)}>
+                    <div className="text-sm font-medium truncate">{a ? a.name : s.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</div>
                     <div className="text-xs" style={{ color: INK_SOFT }}>
-                      {new Date(s.date).toLocaleDateString('fr-FR')} {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
+                      {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
                       {s.doubleCotation && ' · double cotation'}
                     </div>
                   </button>
                   <button
                     onClick={() => { if (window.confirm('Supprimer définitivement cette séance ?')) onDeleteSession(s.id); }}
                     style={{ color: INK_SOFT }}
+                    className="shrink-0"
                   >
                     <Trash2 size={15} />
                   </button>
                 </div>
               );
-            })}
-          </div>
+            }}
+          />
           {sessions.length > 1 && (
             <button
               onClick={onDeleteAllSessions}
@@ -6164,13 +6861,29 @@ function LatencyWidget({ entry, now, onChange }) {
 }
 
 /* ==================== Écran suivi : progression et maîtrise ==================== */
-function SuiviScreen({ students, sessions, guidances, onResetTracking }) {
+function SuiviScreen({ students, sessions, guidances, onResetTracking, onOuvrirMenu }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
+
+  /* Le menu s'ouvre par un balayage depuis le bord gauche, geste qui ne
+     s'apprend pas tout seul et n'existe pas au clavier. Ce bouton y donne
+     accès depuis le même écran, sans ouvrir une seconde porte ailleurs. */
+  const boutonMenu = (
+    <button
+      onClick={onOuvrirMenu}
+      className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm shrink-0"
+      style={{ borderColor: BORDER, backgroundColor: CARD, color: INK_SOFT }}
+    >
+      <Menu size={16} /> Menu
+    </button>
+  );
 
   if (students.length === 0) {
     return (
       <div>
-        <SectionTitle>Suivi</SectionTitle>
+        <div className="flex items-start justify-between gap-3">
+          <SectionTitle>Suivi</SectionTitle>
+          {boutonMenu}
+        </div>
         <Empty>Ajoutez des personnes accompagnées et enregistrez des séances pour voir les courbes.</Empty>
       </div>
     );
@@ -6180,7 +6893,10 @@ function SuiviScreen({ students, sessions, guidances, onResetTracking }) {
 
   return (
     <div>
-      <SectionTitle sub="Où en est chaque objectif, et comment il évolue.">Suivi</SectionTitle>
+      <div className="flex items-start justify-between gap-3">
+        <SectionTitle sub="Où en est chaque objectif, et comment il évolue.">Suivi</SectionTitle>
+        {boutonMenu}
+      </div>
 
       <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} />
       <>
@@ -6461,7 +7177,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
 }
 
 /* ==================== Écran 4 : export ==================== */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, notify, onEditCrisis, onMarkSent, onExportManager }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, appareil, notify, onEditCrisis, onMarkSent, onExportManager }) {
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   // Valeur d'état initiale seulement : React l'ignore aux rendus suivants,
   // donc une sélection ajustée à la main n'est jamais écrasée par un
@@ -6497,8 +7213,8 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
       ? students.filter((s) => pickedStudents.includes(s.id)).map((s) => s.initials.replace(/\./g, '')).join('-')
       : '';
     const name = byStudent
-      ? `rapport-${initials}-${new Date().toISOString().slice(0, 10)}.xlsx`
-      : `rapport-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      ? nomFichier(`rapport-${initials}`, appareil, 'xlsx')
+      : nomFichier('rapport', appareil, 'xlsx');
     return { blob, name };
   }
 
@@ -6590,8 +7306,11 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
             </button>
           </div>
 
-          <div className="space-y-1.5 mb-4">
-            {ordered.slice(0, 60).map((s) => {
+          <div className="mb-4">
+            <ListeParJour
+            items={ordered}
+            dateDe={(s) => s.date}
+            renderItem={(s) => {
               const on = picked.includes(s.id);
               const sent = !!s.sentAt;
               return (
@@ -6600,7 +7319,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                   <button className="flex-1 text-left min-w-0" onClick={() => setPicked((p) => (on ? p.filter((x) => x !== s.id) : [...p, s.id]))}>
                     <div className="text-sm font-medium truncate">{sessionLabel(s)}</div>
                     <div className="text-xs" style={{ color: INK_SOFT }}>
-                      {new Date(s.date).toLocaleDateString('fr-FR')} {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
+                      {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
                     </div>
                   </button>
                   <button
@@ -6621,7 +7340,8 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                   </button>
                 </div>
               );
-            })}
+            }}
+            />
           </div>
           </>
           )}
@@ -6674,15 +7394,17 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
       {crises.length > 0 && (
         <div className="mt-6">
           <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
-            Crises et observations — appuyez pour modifier
+            Crises et observations — <span style={{ fontFamily: F_MONO }}>{crises.length}</span> au total
           </div>
-          <div className="space-y-1.5">
-            {crises.slice(0, 20).map((c) => {
+          <ListeParJour
+            items={crises}
+            dateDe={(c) => c.date}
+            renderItem={(c) => {
               const st = students.find((s) => s.id === c.studentId);
               const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
               const names = ids.map((id) => (intervenants.find((i) => i.id === id) || {}).name).filter(Boolean);
               return (
-                <button key={c.id} onClick={() => onEditCrisis(c)} className="w-full text-left rounded-2xl border p-4" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+                <button key={c.id} onClick={() => onEditCrisis(c)} className="w-full text-left rounded-2xl border p-4" style={{ borderColor: BORDER, backgroundColor: PAPER }}>
                   <div className="flex items-center justify-between gap-2 mb-1">
                     <span className="text-sm font-semibold min-w-0 truncate" style={{ fontFamily: F_DISPLAY }}>{st ? st.initials : 'Personne non renseignée'}</span>
                     <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5"
@@ -6710,7 +7432,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                     )}
                   </div>
                   <div className="text-xs" style={{ color: INK_SOFT }}>
-                    {new Date(c.date).toLocaleDateString('fr-FR')} {timeShort(c.date)}
+                    {timeShort(c.date)}
                     {c.atelierId && <> · {atelierName(c.atelierId)}</>}
                     {names.length > 0 && <> · {names.join(', ')}</>}
                   </div>
@@ -6719,8 +7441,8 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                   </div>
                 </button>
               );
-            })}
-          </div>
+            }}
+          />
         </div>
       )}
     </div>
