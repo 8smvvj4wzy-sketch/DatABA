@@ -6178,7 +6178,11 @@ function ObjectiveHeader({ obj, entry, guidances }) {
    sur les fiches crise et ABC. Composant unique pour les deux emplacements
    — CLAUDE.md interdit les implémentations parallèles. */
 function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chronoSeconds, now, couleur, onChange }) {
-  const [ouvert, setOuvert] = useState(null); // null | 'compteur' | 'chrono'
+  /* Deux booléens indépendants plutôt qu'un seul « panneau ouvert » : le
+     compteur et le chrono se pilotent en même temps, sans que l'ouverture de
+     l'un ne referme l'autre. */
+  const [ouvertCompteur, setOuvertCompteur] = useState(false);
+  const [ouvertChrono, setOuvertChrono] = useState(false);
   const m = mesures || mesuresVides();
   const compteur = m.compteur || mesuresVides().compteur;
   const chrono = m.chrono || mesuresVides().chrono;
@@ -6213,7 +6217,7 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chr
   }
   function validerCompteur() {
     ecrire({ compteur: { ...compteur, valideA: new Date().toISOString() } });
-    setOuvert(null);
+    setOuvertCompteur(false);
   }
 
   function basculerChrono() {
@@ -6233,7 +6237,7 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chr
       ? { ...chrono, running: false, elapsedMs: (chrono.elapsedMs || 0) + (Date.now() - chrono.startedAt), startedAt: null }
       : chrono;
     ecrire({ chrono: { ...fige, valideA: new Date().toISOString() } });
-    setOuvert(null);
+    setOuvertChrono(false);
   }
 
   if (!avecCompteur && !avecChrono) return null;
@@ -6243,7 +6247,7 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chr
       <div className="flex items-center gap-3">
         {avecCompteur && (
           <button
-            onClick={() => setOuvert((v) => (v === 'compteur' ? null : 'compteur'))}
+            onClick={() => setOuvertCompteur((v) => !v)}
             className="flex items-center gap-1.5 text-xs py-1 px-0.5"
             style={{ color: INK_SOFT }}
             title="Compteur auxiliaire"
@@ -6255,7 +6259,7 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chr
         )}
         {avecChrono && (
           <button
-            onClick={() => setOuvert((v) => (v === 'chrono' ? null : 'chrono'))}
+            onClick={() => setOuvertChrono((v) => !v)}
             className="flex items-center gap-1.5 text-xs py-1 px-0.5"
             style={{ color: INK_SOFT }}
             title="Chronomètre auxiliaire"
@@ -6267,7 +6271,7 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chr
         )}
       </div>
 
-      {ouvert === 'compteur' && (
+      {ouvertCompteur && (
         <div className="mt-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
           <div className="flex items-center gap-3">
             <button onClick={() => ajusterCompteur(-1)} disabled={compteur.total === 0}
@@ -6286,7 +6290,7 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chr
         </div>
       )}
 
-      {ouvert === 'chrono' && (
+      {ouvertChrono && (
         <div className="mt-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
           <div className="flex items-center gap-3">
             <span className="text-xl font-semibold tabular-nums" style={{ fontFamily: F_MONO, color: ecoule ? COLOR_CHRONO : INK }}>

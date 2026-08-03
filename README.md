@@ -277,9 +277,12 @@ mélangés à un score ni à une courbe de progression.
 Dès qu'une option est activée sur un objectif, une icône discrète apparaît sur
 sa carte pendant la séance. Un appui déplie un petit panneau sous la carte
 (compteur avec correction à la baisse, ou chrono démarrer/arrêter/remettre à
-zéro), qu'un bouton discret **Enregistrer** valide et horodate. Une mesure non
-validée reste modifiable ; une mesure jamais prise n'apparaît nulle part dans
-les rapports — elle n'est pas confondue avec une mesure à zéro.
+zéro), qu'un bouton discret **Enregistrer** valide et horodate. Les deux
+panneaux se déplient indépendamment et peuvent rester ouverts ensemble, l'un
+sous l'autre — compter et chronométrer en même temps sans repasser par
+l'icône à chaque fois. Une mesure non validée reste modifiable ; une mesure
+jamais prise n'apparaît nulle part dans les rapports — elle n'est pas
+confondue avec une mesure à zéro.
 
 Le chrono admet un second mode, **temps limite** : une durée fixée à
 l'avance, avec son et vibration une fois écoulée — le chrono se fige sans se
