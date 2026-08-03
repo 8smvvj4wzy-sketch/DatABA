@@ -13,7 +13,7 @@ rien n'est envoyé vers un serveur.
 3. [Le code de sécurité](#3-le-code-de-sécurité)
 4. [Écran Gestion](#4-écran-gestion)
 5. [Écran Personnes accompagnées](#5-écran-personnes-accompagnées)
-6. [Les huit modes de cotation](#6-les-huit-modes-de-cotation)
+6. [Les quatre modes de cotation](#6-les-quatre-modes-de-cotation)
 7. [Écran Session](#7-écran-session)
 8. [Crises et observations ABC](#8-crises-et-observations-abc)
 9. [Écran Suivi](#9-écran-suivi)
@@ -212,7 +212,7 @@ quelle séance l'intervention a commencé.
 
 ---
 
-## 6. Les huit modes de cotation
+## 6. Les quatre modes de cotation
 
 ### Essai par essai
 Une réponse par essai, avec son niveau de guidance. Nombre d'essais **sans
@@ -225,23 +225,6 @@ sous sa case et reprise dans les rapports. Au choix chronomètre libre, ou temps
 limite avec son et vibration à échéance.
 
 → Score : pourcentage de réponses autonomes. La durée moyenne s'affiche à côté.
-
-### Probe (1 / 0)
-Réussi ou échoué, en un appui. Option : **coter par guidance** plutôt qu'en 1/0.
-→ Score : 100 % ou 0 %.
-
-### Par occurrence
-Compteur simple, avec correction possible à la baisse.
-→ Score : nombre d'occurrences.
-
-### Timer (durée)
-**Chronomètre** (mesure libre) ou **temps fixé** (compte à rebours de 5 secondes
-à 60 minutes, minutes et secondes, ex. 1 min 30), avec barre de progression, son
-et vibration à zéro.
-→ Score : durée.
-
-> Pour associer une durée à une cotation, utilisez plutôt l'option
-> *chronométrer chaque essai* du mode **Essai par essai**.
 
 ### Niveau par intervalle
 Relevé périodique du niveau de fonctionnement. Le **pas est libre, de 10
@@ -270,11 +253,6 @@ intervalles qu'elle traverse, et apparaît dans le rapport.
 Une séquence d'étapes, chacune cotée par son niveau de guidance.
 → Score : pourcentage d'étapes autonomes.
 
-### Latence
-Un bouton : **Consigne donnée** lance le chrono, **Réponse** l'arrête. Plusieurs
-mesures par séance ; appuyez sur une mesure pour la retirer si elle est fausse.
-→ Score : latence moyenne en secondes.
-
 ### Balance Program
 Une séquence d'étapes, cotée sur **plusieurs essais** dans la même séance.
 
@@ -294,6 +272,19 @@ apparaissent en puces E1, E2, E3 ; on peut revenir corriger l'un d'eux.
 → Score : pourcentage de réussites. **Les étapes manquées sont écartées du
 calcul** — une étape non présentée n'est pas un échec — mais restent
 comptabilisées à part.
+
+### Mesures annexes : compteur et chronomètre
+Deux options, indépendantes l'une de l'autre, disponibles sur les quatre modes
+ci-dessus **et** sur les fiches crise et ABC. Elles produisent une donnée à
+part de la cotation — un comptage ou une durée relevés en marge, jamais
+mélangés à un score ni à une courbe de progression.
+
+Dès qu'une option est activée sur un objectif, une icône discrète apparaît sur
+sa carte pendant la séance. Un appui déplie un petit panneau sous la carte
+(compteur avec correction à la baisse, ou chrono démarrer/arrêter/remettre à
+zéro), qu'un bouton discret **Enregistrer** valide et horodate. Une mesure non
+validée reste modifiable ; une mesure jamais prise n'apparaît nulle part dans
+les rapports — elle n'est pas confondue avec une mesure à zéro.
 
 ---
 
@@ -554,7 +545,7 @@ Les étapes manquées laissent cette colonne **vide** plutôt qu'à 0, pour ne p
 fausser les moyennes.
 
 Une colonne **Durée (s)** accompagne les cotations chronométrées : essais
-chronométrés, timers, latences et périodes d'intervalle.
+chronométrés et périodes d'intervalle.
 
 ### Copier rapidement vers un tableau de bord
 
@@ -593,7 +584,7 @@ l'ouverture du fichier** : le classeur se met à jour tout seul à l'ouverture.
 | Balayage dans la zone de cotation | Basculer Prioritaires ↔ Par personne |
 | Appui long puis glissement | Réordonner les guidances, les réponses ABC, ou les objectifs en séance |
 | Double-appui sur un intitulé | Agrandir la fiche de l'objectif |
-| Appui sur une mesure de latence | La supprimer |
+| Appui sur l'icône compteur ou chronomètre | Déplier le panneau de mesure annexe |
 | Appui sur une pastille Envoyé | Corriger le statut |
 | Appui sur un comportement coché | Le retirer de la chaîne |
 

@@ -137,9 +137,13 @@ fi
 # ── 3. Tests ───────────────────────────────────────────────────────────
 echo
 echo "── 3. Tests ──"
-if [ -d tests ] && ls tests/*.mjs >/dev/null 2>&1; then
+DOSSIER_TESTS=""
+for d in tests test; do
+  if [ -d "$d" ] && ls "$d"/*.mjs >/dev/null 2>&1; then DOSSIER_TESTS="$d"; break; fi
+done
+if [ -n "$DOSSIER_TESTS" ]; then
   N_OK=0; N_KO=0
-  for t in tests/*.mjs; do
+  for t in "$DOSSIER_TESTS"/*.mjs; do
     if SORTIE=$(node "$t" 2>&1); then
       N_OK=$((N_OK + 1))
     else
@@ -151,7 +155,11 @@ if [ -d tests ] && ls tests/*.mjs >/dev/null 2>&1; then
   echo "  $N_OK suite(s) au vert, $N_KO en échec"
   [ "$N_KO" -gt 0 ] && ECHECS=$((ECHECS + 1))
 else
-  echo "  ⚠ aucun test trouvé dans tests/"
+  # Aucun test trouvé : un vérificateur qui reste vert sans jamais exécuter de
+  # test ne vérifie rien. C'est ce qui a laissé passer l'oubli du dossier
+  # tests/ (pluriel) pendant que le dépôt écrivait test/ (singulier).
+  echo "  ✗ aucun test trouvé dans tests/ ni test/"
+  ECHECS=$((ECHECS + 1))
 fi
 
 echo
