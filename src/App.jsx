@@ -2336,9 +2336,10 @@ function ownsHorizontalGesture(target, boundary, ignoreNoSwipe) {
    Le contenu suit le doigt de façon amortie et plafonnée : assez pour que le
    geste soit tangible, sans déplacer toute la page hors de l'écran — ce qui
    provoquait des blancs de rendu sur iOS. */
-function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument = false, ignoreNoSwipe = false }) {
+function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument = false, ignoreNoSwipe = false, peek = false, measureRef = null }) {
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [largeur, setLargeur] = useState(0);
   const [el, setEl] = useState(null);
   const state = useRef(null);
 
@@ -2356,6 +2357,10 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
     const boundary = onDocument ? null : el;
 
     const MAX = 80;
+    const largeurRef = () => {
+      const m = measureRef && measureRef.current ? measureRef.current.clientWidth : el ? el.clientWidth : window.innerWidth;
+      return m || window.innerWidth;
+    };
 
     function start(e) {
       if (e.touches.length !== 1 || reorderDragging || ownsHorizontalGesture(e.target, boundary, ignoreNoSwipe)) {
@@ -2363,7 +2368,7 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
         return;
       }
       const t = e.touches[0];
-      state.current = { x: t.clientX, y: t.clientY, axis: null, dx: 0, time: Date.now() };
+      state.current = { x: t.clientX, y: t.clientY, axis: null, dx: 0, time: Date.now(), largeur: largeurRef() };
     }
 
     function move(e) {
@@ -2382,23 +2387,37 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
       if (!g.axis) {
         if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
         g.axis = Math.abs(dx) > Math.abs(dy) + 4 ? 'x' : 'y';
-        if (g.axis === 'x') setDragging(true);
+        if (g.axis === 'x') { setDragging(true); if (peek) setLargeur(g.largeur); }
       }
       if (g.axis !== 'x') return;
       if (e.cancelable) e.preventDefault();
       g.dx = dx;
-      setOffset(Math.sign(dx) * Math.min(Math.abs(dx) * 0.45, MAX));
+      // Sans aperçu : léger suivi amorti, juste de quoi sentir le geste.
+      // Avec aperçu : le doigt mène jusqu'au bord, sans amortissement — la
+      // résistance vient de l'écran voisin qui se dévoile, pas d'un facteur.
+      setOffset(peek ? Math.max(-g.largeur, Math.min(g.largeur, dx)) : Math.sign(dx) * Math.min(Math.abs(dx) * 0.45, MAX));
     }
 
     function end() {
       const g = state.current;
       state.current = null;
       setDragging(false);
-      setOffset(0);
-      if (!g || g.axis !== 'x') return;
+      if (!g || g.axis !== 'x') { setOffset(0); return; }
       const speed = Math.abs(g.dx) / Math.max(1, Date.now() - g.time);
-      if (Math.abs(g.dx) < 55 && speed < 0.4) return;
-      if (g.dx < 0) { if (onLeft) onLeft(); } else if (onRight) onRight();
+      const seuil = peek ? Math.min(g.largeur * 0.28, 110) : 55;
+      if (Math.abs(g.dx) < seuil && speed < 0.4) { setOffset(0); return; }
+      const sens = g.dx < 0 ? -1 : 1;
+      if (!peek) {
+        setOffset(0);
+        if (sens < 0) { if (onLeft) onLeft(); } else if (onRight) onRight();
+        return;
+      }
+      // Termine la course jusqu'au bord dans la continuité du doigt ; l'écran
+      // ne commute qu'à l'arrivée, pas avant que le geste ait fini son mouvement.
+      setOffset(sens * g.largeur);
+      setTimeout(() => {
+        setOffset(0);
+        if (sens < 0) { if (onLeft) onLeft(); } else if (onRight) onRight(); }, 200);
     }
 
     target.addEventListener('touchstart', start, { passive: true });
@@ -2411,7 +2430,83 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
       target.removeEventListener('touchend', end);
       target.removeEventListener('touchcancel', end);
     };
-  }, [el, onLeft, onRight, enabled, onDocument, ignoreNoSwipe]);
+  }, [el, onLeft, onRight, enabled, onDocument, ignoreNoSwipe, peek, measureRef]);
+
+  return { offset, dragging, largeur };
+}
+
+/* Glissement vertical de haut en bas, engagé depuis une zone de préhension
+   (l'en-tête d'une fiche plein écran) plutôt que sur tout le document : on ne
+   veut réduire la fiche qu'à partir d'un geste délibéré depuis le haut, pas
+   depuis n'importe quel défilement du contenu. Suit le doigt sans
+   amortissement jusqu'au bas de l'écran, comme le balayage horizontal avec
+   aperçu ; seul le sens vers le bas est retenu. */
+function useVerticalDismiss(ref, { onDismiss, enabled = true }) {
+  const [offset, setOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [el, setEl] = useState(null);
+  const state = useRef(null);
+
+  useEffect(() => {
+    setEl(ref && ref.current ? ref.current : null);
+  });
+
+  useEffect(() => {
+    if (!el || !enabled) return undefined;
+
+    function start(e) {
+      if (e.touches.length !== 1) { state.current = null; return; }
+      const t = e.touches[0];
+      state.current = { x: t.clientX, y: t.clientY, axis: null, dy: 0, time: Date.now() };
+    }
+
+    function move(e) {
+      const g = state.current;
+      if (!g || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const dx = t.clientX - g.x;
+      const dy = t.clientY - g.y;
+      if (!g.axis) {
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+        g.axis = Math.abs(dy) > Math.abs(dx) + 4 ? 'y' : 'x';
+        if (g.axis === 'y') setDragging(true);
+      }
+      if (g.axis !== 'y') return;
+      if (dy < 0) return; // vers le haut : on laisse la zone défiler normalement
+      if (e.cancelable) e.preventDefault();
+      g.dy = dy;
+      const h = window.innerHeight;
+      // Résistance au-delà de la hauteur de l'écran, pour ne jamais dépasser
+      // largement la course utile même avec un geste très ample.
+      setOffset(dy < h ? dy : h + (dy - h) * 0.25);
+    }
+
+    function end() {
+      const g = state.current;
+      state.current = null;
+      setDragging(false);
+      if (!g || g.axis !== 'y' || g.dy <= 0) { setOffset(0); return; }
+      const speed = g.dy / Math.max(1, Date.now() - g.time);
+      const h = window.innerHeight;
+      const depasse = g.dy > h * 0.32 || speed > 0.55;
+      if (!depasse) { setOffset(0); return; }
+      // Termine la course jusqu'en bas dans la continuité du doigt ; la
+      // réduction en pastille n'a lieu qu'à l'arrivée.
+      setOffset(h);
+      setTimeout(() => { setOffset(0); if (onDismiss) onDismiss(); }, 200);
+    }
+
+    el.addEventListener('touchstart', start, { passive: true });
+    el.addEventListener('touchmove', move, { passive: false });
+    el.addEventListener('touchend', end, { passive: true });
+    el.addEventListener('touchcancel', end, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', start);
+      el.removeEventListener('touchmove', move);
+      el.removeEventListener('touchend', end);
+      el.removeEventListener('touchcancel', end);
+    };
+  }, [el, enabled, onDismiss]);
 
   return { offset, dragging };
 }
@@ -2560,14 +2655,29 @@ function AbaApp() {
      action, ouvrir le tiroir, quel que soit l'endroit d'où elle part. */
   const ouvrirMenu = React.useCallback(() => { setEcran(null); setTiroir(true); }, []);
 
+  /* Changement d'onglet déclenché par le geste, pas par un tap sur la barre :
+     l'aperçu qui suit le doigt joue déjà le rôle d'animation d'arrivée, donc
+     contrairement à goTab on ne pose pas `dir` — ça éviterait de rejouer le
+     fondu par-dessus un mouvement déjà terminé. */
+  const avancerOngletParGeste = React.useCallback(
+    (delta) => {
+      const i = TAB_ORDER.indexOf(tab);
+      const next = i + delta;
+      if (next < 0 || next >= TAB_ORDER.length) return;
+      setTab(TAB_ORDER[next]);
+    },
+    [tab]
+  );
+
   const onLeft = React.useCallback(() => {
     if (tiroir) { if (TIROIR_FERME_AU_BALAYAGE) setTiroir(false); return; }
+    setDir(0);
     // Depuis un écran ouvert par le tiroir : retour direct à l'onglet
     // d'origine (celui d'où le bouton Menu ou le balayage a été déclenché),
     // sans repasser par le tiroir — `tab` n'a jamais changé entre-temps.
     if (ecran) { setEcran(null); return; }
-    goTab(1);
-  }, [tiroir, ecran, goTab]);
+    avancerOngletParGeste(1);
+  }, [tiroir, ecran, avancerOngletParGeste]);
 
   /* Depuis Suivi — l'extrémité gauche — il n'y a pas d'onglet précédent : le
      balayage vers la droite y est libre, c'est lui qui ouvre le tiroir. Depuis
@@ -2575,12 +2685,15 @@ function AbaApp() {
      symétrique avec le bouton Menu, pas avec le retour de gauche. */
   const onRight = React.useCallback(() => {
     if (tiroir) return;
+    setDir(0);
     if (ecran) { ouvrirMenu(); return; }
     if (tab === TAB_ORDER[0]) { setTiroir(true); return; }
-    goTab(-1);
-  }, [tiroir, ecran, tab, ouvrirMenu, goTab]);
+    avancerOngletParGeste(-1);
+  }, [tiroir, ecran, tab, ouvrirMenu, avancerOngletParGeste]);
 
-  const { offset, dragging } = useHorizontalSwipe(null, { onLeft, onRight, onDocument: true, enabled: swipeActif });
+  const { offset, dragging, largeur } = useHorizontalSwipe(null, {
+    onLeft, onRight, onDocument: true, enabled: swipeActif, peek: true, measureRef: contentRef,
+  });
 
   /* La barre se réduit pendant le défilement et reprend sa taille à l'arrêt —
      sauf là où elle est figée. */
@@ -3395,39 +3508,15 @@ function AbaApp() {
     );
   }
 
-  return (
-    <div ref={rootRef} className="min-h-screen" style={{ background: PAPER, color: INK, fontFamily: F_BODY }}>
-      {/* Contenu : l'onglet courant, ou un écran ouvert depuis le tiroir */}
-      <div
-        ref={contentRef}
-        className="max-w-4xl mx-auto px-4 pb-44"
-        style={{
-          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)',
-          // Tiroir ouvert, le contenu ne doit pas suivre le doigt : il est
-          // rendu hors du panneau et glisserait dans la bande visible à droite.
-          transform: offset && !tiroir ? `translateX(${offset}px)` : 'none',
-          transition: dragging ? 'none' : 'transform .2s ease-out',
-        }}
-      >
-        <div
-          key={ecran || tab}
-          style={{
-            animation: dir === 0 ? 'none' : `${dir > 0 ? 'abaInFromRight' : 'abaInFromLeft'} .18s ease-out`,
-          }}
-        >
-        {ecran && (
-          <button
-            onClick={ouvrirMenu}
-            className="flex items-center gap-1 text-sm mb-3"
-            style={{ color: INK_SOFT }}
-          >
-            <ChevronLeft size={16} /> Menu
-          </button>
-        )}
-        {ecran === 'ateliers' && (
-          <PanneauAteliers ateliers={ateliers} onAdd={addAtelier} onRename={renameAtelier} onRemove={removeAtelier} />
-        )}
-        {ecran === 'personnes' && (
+  /* Contenu d'un onglet ou d'un écran ouvert depuis le tiroir, désigné par sa
+     clé (nom d'onglet, ou nom d'écran) — pour pouvoir en afficher deux à la
+     fois, côte à côte, pendant un balayage. */
+  const contenuPourCle = (cle) => {
+    switch (cle) {
+      case 'ateliers':
+        return <PanneauAteliers ateliers={ateliers} onAdd={addAtelier} onRename={renameAtelier} onRemove={removeAtelier} />;
+      case 'personnes':
+        return (
           <PanneauPersonnes
             students={students} guidances={guidances} templates={objectiveTemplates}
             premiereConfiguration={students.length === 0}
@@ -3437,42 +3526,39 @@ function AbaApp() {
             duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase}
             onSaveTemplate={saveTemplate}
           />
-        )}
-        {ecran === 'intervenants' && (
-          <PanneauIntervenants intervenants={intervenants} onAdd={addIntervenant} onRename={renameIntervenant} onRemove={removeIntervenant} />
-        )}
-        {ecran === 'modeles' && (
-          <PanneauModeles templates={objectiveTemplates} onRemove={removeTemplate} />
-        )}
-        {ecran === 'motsdepasse' && (
-          <PanneauMotsDePasse security={security} onChangePin={changePin} onDisableProtection={disableProtection} />
-        )}
-        {ecran === 'donnees' && (
+        );
+      case 'intervenants':
+        return <PanneauIntervenants intervenants={intervenants} onAdd={addIntervenant} onRename={renameIntervenant} onRemove={removeIntervenant} />;
+      case 'modeles':
+        return <PanneauModeles templates={objectiveTemplates} onRemove={removeTemplate} />;
+      case 'motsdepasse':
+        return <PanneauMotsDePasse security={security} onChangePin={changePin} onDisableProtection={disableProtection} />;
+      case 'donnees':
+        return (
           <PanneauDonnees
             appareil={appareil} onSetAppareil={setAppareil}
             retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
             onExportConfig={exportConfig} onExportBackup={exportBackup} onImportBackup={importBackup}
           />
-        )}
-        {ecran === 'guidances' && (
+        );
+      case 'guidances':
+        return (
           <PanneauGuidances
             guidances={guidances} onAdd={addGuidance} onRemove={removeGuidance}
             onToggleIndependent={toggleIndependent} onReorder={setGuidances}
           />
-        )}
-        {ecran === 'abc' && (
-          <PanneauAbc abcOptions={abcOptions} onSetAbc={setAbcOptions} />
-        )}
-
-        {!ecran && (
-          <>
-        {tab === 'suivi' && (
+        );
+      case 'abc':
+        return <PanneauAbc abcOptions={abcOptions} onSetAbc={setAbcOptions} />;
+      case 'suivi':
+        return (
           <SuiviScreen
             students={students} sessions={sessions} guidances={guidances}
             onResetTracking={resetTracking} onOuvrirMenu={ouvrirMenu}
           />
-        )}
-        {tab === 'session' && (
+        );
+      case 'session':
+        return (
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
             sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
@@ -3504,18 +3590,95 @@ function AbaApp() {
               }
             }}
           />
-        )}
-        {tab === 'export' && (
+        );
+      case 'export':
+        return (
           <ExportScreen
             sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants}
             guidances={guidances} appareil={appareil} notify={notify}
             onEditCrisis={editCrisis} onMarkSent={markSent} onExportManager={exportManager}
             onOuvrirMenu={ouvrirMenu}
           />
+        );
+      default:
+        return null;
+    }
+  };
+
+  const estOngletPrincipal = (cle) => cle === 'suivi' || cle === 'session' || cle === 'export';
+
+  const volet = (cle) => (
+    <>
+      {!estOngletPrincipal(cle) && (
+        <button onClick={ouvrirMenu} className="flex items-center gap-1 text-sm mb-3" style={{ color: INK_SOFT }}>
+          <ChevronLeft size={16} /> Menu
+        </button>
+      )}
+      {contenuPourCle(cle)}
+    </>
+  );
+
+  const cleCourante = ecran || tab;
+  const sensGeste = offset < 0 ? -1 : offset > 0 ? 1 : 0;
+  /* Écran qui se dévoilerait si le geste en cours allait à son terme — null
+     quand il n'y en a pas (bord de la liste d'onglets, ou balayage qui ouvre
+     le tiroir plutôt qu'un écran) : dans ce cas on retombe sur le simple
+     suivi amorti de l'écran courant, sans aperçu. */
+  const cleVoisine =
+    !sensGeste || tiroir
+      ? null
+      : ecran
+      ? sensGeste < 0
+        ? tab
+        : null
+      : (() => {
+          const i = TAB_ORDER.indexOf(tab);
+          return sensGeste < 0 ? (i < TAB_ORDER.length - 1 ? TAB_ORDER[i + 1] : null) : i > 0 ? TAB_ORDER[i - 1] : null;
+        })();
+  const offsetSansApercu = Math.sign(offset) * Math.min(Math.abs(offset) * 0.45, 80);
+
+  return (
+    <div ref={rootRef} className="min-h-screen" style={{ background: PAPER, color: INK, fontFamily: F_BODY }}>
+      {/* Contenu : l'onglet courant, ou un écran ouvert depuis le tiroir.
+          Pendant un balayage qui a un voisin défini, les deux volets sont
+          montés côte à côte et translatés ensemble : le geste dévoile
+          progressivement l'écran suivant au lieu de le faire apparaître
+          d'un coup à la fin. Sans voisin (bord de liste, ouverture du
+          tiroir), on retombe sur le simple suivi amorti de l'écran courant. */}
+      <div
+        ref={contentRef}
+        className="max-w-4xl mx-auto px-4 pb-44"
+        style={{
+          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)',
+          overflowX: cleVoisine ? 'hidden' : 'visible',
+        }}
+      >
+        {cleVoisine ? (
+          <div
+            style={{
+              display: 'flex',
+              transform: `translateX(${(sensGeste < 0 ? offset : offset - largeur) || 0}px)`,
+              transition: dragging ? 'none' : 'transform .2s ease-out',
+            }}
+          >
+            <div style={{ flex: '0 0 100%', minWidth: 0 }}>{volet(sensGeste < 0 ? cleCourante : cleVoisine)}</div>
+            <div style={{ flex: '0 0 100%', minWidth: 0 }}>{volet(sensGeste < 0 ? cleVoisine : cleCourante)}</div>
+          </div>
+        ) : (
+          <div
+            key={cleCourante}
+            style={{
+              // Tiroir ouvert, le contenu ne doit pas suivre le doigt : il
+              // est rendu hors du panneau et glisserait dans la bande
+              // visible à droite.
+              transform: offset && !tiroir ? `translateX(${offsetSansApercu}px)` : 'none',
+              transition: dragging ? 'none' : 'transform .2s ease-out',
+              animation: dir === 0 ? 'none' : `${dir > 0 ? 'abaInFromRight' : 'abaInFromLeft'} .18s ease-out`,
+            }}
+          >
+            {volet(cleCourante)}
+          </div>
         )}
-          </>
-        )}
-        </div>
       </div>
 
       {/* ==================== Barre du bas ====================
@@ -8016,9 +8179,24 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
   const toggleIntervenant = (id) =>
     set({ intervenantIds: selectedIntervenants.includes(id) ? selectedIntervenants.filter((x) => x !== id) : [...selectedIntervenants, id] });
 
+  /* Glissement de haut en bas depuis l'en-tête : réduit la fiche en pastille,
+     de façon progressive — même geste que le bouton Réduire, en plus du tap. */
+  const enTeteRef = useRef(null);
+  const reduction = useVerticalDismiss(enTeteRef, { onDismiss: onMinimize, enabled: !!onMinimize });
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto overflow-x-hidden" style={{ backgroundColor: PAPER }}>
+    <div
+      className="fixed inset-0 z-50 overflow-y-auto overflow-x-hidden"
+      style={{
+        backgroundColor: PAPER,
+        transform: reduction.offset ? `translateY(${reduction.offset}px) scale(${1 - Math.min(0.06, (reduction.offset / window.innerHeight) * 0.06)})` : 'none',
+        transformOrigin: 'top center',
+        opacity: reduction.offset ? Math.max(0.4, 1 - reduction.offset / window.innerHeight) : 1,
+        transition: reduction.dragging ? 'none' : 'transform .2s ease-out, opacity .2s ease-out',
+      }}
+    >
       <div
+        ref={enTeteRef}
         className="sticky top-0 px-4 pb-4 text-white"
         style={{ backgroundColor: estObservation ? '#B07A2E' : CRISIS, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
       >
