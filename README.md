@@ -138,8 +138,16 @@ Un atelier peut aussi mémoriser sa configuration au fil d'une séance réelle
 cohérents entre eux. Si le jour en cours porte une liste propre, c'est elle que
 la mémorisation met à jour, pas le réglage commun.
 
-> L'ordre des ateliers dans une journée suit l'ordre dans lequel leurs jours ont
-> été cochés. Il n'est plus réglable depuis un tableau à part.
+**La semaine.** Sous la liste des ateliers, une grille horizontale montre les
+jours de la semaine, chacun avec ses ateliers dans l'ordre où ils se
+dérouleront. Appui long sur un atelier pour changer sa place dans la journée
+(comme partout ailleurs où un réordonnancement est proposé). **Appliquer aux
+autres jours**, sous une colonne, reprend cet ordre pour les autres jours —
+sans jamais programmer ni déprogrammer un atelier : seuls les ateliers déjà
+communs aux deux jours sont repositionnés, les ateliers propres à un jour
+restent à leur place. C'est un geste ponctuel, pas une règle permanente : un
+atelier ajouté plus tard à un jour ne se replace pas tout seul, il faut
+réappliquer.
 
 ### Intervenants
 
@@ -411,27 +419,33 @@ essai » de l'export.
 
 ### Préparer
 
-1. **Type de séance** : *Atelier* ou *Balance Program*. En mode Balance Program,
-   seuls les objectifs de ce type sont proposés, chaque personne cotant le sien.
-2. **Atelier** — facultatif. Un second appui le retire ; la séance est alors
-   dite « libre ».
-3. **Intervenant** qui cote.
-4. **Personnes présentes**.
-5. **Objectifs** de chacune. L'étoile à droite d'un objectif le rend
-   **prioritaire pour cet atelier seulement** : la même personne peut avoir des
-   priorités différentes selon le groupe.
-6. **Mémoriser cette configuration** — enregistre pour cet atelier : les
-   personnes, leurs objectifs, et les prioritaires. Au prochain choix de cet
-   atelier, tout se recoche automatiquement.
+L'écran propose d'emblée, **dépliée et prête à lancer**, la carte du premier
+atelier non encore joué de la semaine type (section 4) : sa classe du jour est
+déjà cochée, avec les objectifs habituels de chacune repliés sous
+**Objectifs et options**. L'**intervenant qui cote** se choisit juste
+au-dessus, en haut de l'écran.
 
-En haut de l'écran, **Relancer la dernière séance** reprend telle quelle la
-configuration de la précédente — mode, atelier, personnes, objectifs — sans
-qu'elle ait besoin d'avoir été mémorisée au préalable. Une personne ou un
-objectif supprimé depuis est simplement écarté.
+**Lancer un autre atelier** déplie, sans faire défiler le reste de l'écran, la
+liste de tous les autres ateliers — les restants de la semaine type d'abord —
+suivie de **Balance Program** et **Séance libre**. Chaque ligne propose deux
+gestes :
 
-> **Les objectifs créés ensuite sont ajoutés d'office** au rappel de la
-> configuration, avec un message le signalant. En revanche, un objectif que vous
-> aviez volontairement décoché reste décoché.
+- l'icône **▶** lance directement l'atelier avec sa classe habituelle du
+  jour, sans rien déplier — pour l'atelier suivant, quand rien n'a besoin
+  d'être ajusté ;
+- un appui sur le nom déplie sa fiche complète : personnes présentes,
+  intervenant propre à cet atelier si besoin, objectifs de chacune (l'étoile
+  les rend **prioritaires pour cet atelier seulement**), deux observateurs en
+  parallèle, et **Mémoriser cette configuration**, qui enregistre pour cet
+  atelier les personnes, leurs objectifs et les prioritaires.
+
+En mode **Balance Program**, seuls les objectifs de ce type sont proposés,
+chaque personne cotant le sien. **Séance libre** ouvre la même fiche sans
+atelier associé.
+
+> **Les objectifs créés depuis la dernière mémorisation sont ajoutés
+> d'office**, avec un message le signalant. Un objectif volontairement
+> décoché reste décoché.
 
 ### Coter
 
@@ -481,16 +495,6 @@ nombreuses étapes.
 
 L'écran reste allumé pendant la cotation (mention « écran maintenu »). Si elle
 n'apparaît pas, réglez la mise en veille de l'appareil sur « jamais ».
-
-### Séances enregistrées
-
-En bas de l'écran de préparation : la liste des séances passées. Appuyez sur
-l'une d'elles pour **corriger ses cotations**, sur l'icône de partage pour
-transmettre son rapport, ou sur la corbeille pour la supprimer.
-
-Un bouton en fin de liste permet de **supprimer toutes les séances** d'un coup,
-après deux confirmations. Les courbes de suivi repartent alors de zéro :
-exportez vos rapports et une sauvegarde avant.
 
 ### Accord inter-observateurs
 
@@ -621,11 +625,16 @@ la date de reprise change.
 C'est l'endroit où l'on **relit et corrige avant de transmettre**. Trois
 collections y figurent, dans cet ordre :
 
-- **Rapports de séance** — le crayon rouvre la séance en correction ;
+- **Rapports de séance** — le crayon rouvre la séance en correction, la
+  corbeille la supprime (avec confirmation) ;
 - **Crises et observations** — un appui ouvre la fiche, y compris pour
   renseigner l'ABC, l'intensité ou la durée ;
 - **Suivi continu** — une entrée par personne, axe et journée ; un appui ouvre
   la journée relevé par relevé (section 4).
+
+**Supprimer toutes les séances enregistrées**, en bas d'écran, efface la
+totalité de l'historique d'un coup, après confirmation. Les courbes de suivi
+repartent alors de zéro : exportez vos rapports et une sauvegarde avant.
 
 Ce qui reste **à transmettre** vient en premier. Les **options d'export** se
 placent juste dessous. Tout ce qui est déjà parti descend dans le dépliant

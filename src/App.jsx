@@ -1080,6 +1080,40 @@ function objectifsParDefaut(student, atelier, mode) {
   return prioritaires.length ? prioritaires : ids;
 }
 
+/* Préremplissage complet d'un atelier au moment où on l'ouvre pour lancer une
+   séance : la classe prévue ce jour-là, avec pour chacun ses objectifs
+   mémorisés (les nouveaux depuis la mémorisation cochés d'office), à défaut
+   ses prioritaires, à défaut tous. Extraite pour que le lancement rapide
+   (bouton ▶ sur une ligne repliée) et le dépli complet calculent exactement
+   la même chose — deux copies auraient fini par diverger. */
+function configurerAtelier(students, atelier, jour, mode) {
+  const favorites = (atelier && atelier.favoriteObjectiveIds) || [];
+  if (!atelier) return { studentIds: [], selected: {}, favorites, nouveautes: {} };
+  const ids = personnesPrevues(atelier, jour).filter((sid) => students.some((s) => s.id === sid));
+  const savedObjectives = atelier.usualObjectives;
+  const known = atelier.knownObjectiveIds;
+  const visibleObjectives = (st) => (mode === 'balance' ? st.objectives.filter((o) => o.type === 'balance') : st.objectives);
+  const selected = {};
+  const nouveautes = {};
+  ids.forEach((id) => {
+    const st = students.find((s) => s.id === id);
+    if (!st) return;
+    const visibles = visibleObjectives(st);
+    const visiblesIds = visibles.map((o) => o.id);
+    const saved = savedObjectives && savedObjectives[id];
+    if (!saved) { selected[id] = visiblesIds; return; }
+    const retenus = saved.filter((oid) => visiblesIds.includes(oid));
+    const nouveaux = visibles
+      .filter((o) => !saved.includes(o.id))
+      .filter((o) => (known ? !known.includes(o.id) : !!o.favorite))
+      .map((o) => o.id);
+    if (nouveaux.length) nouveautes[id] = nouveaux;
+    selected[id] = [...retenus, ...nouveaux];
+    if (!selected[id].length) selected[id] = visiblesIds;
+  });
+  return { studentIds: ids, selected, favorites, nouveautes };
+}
+
 /* Résumé en une ligne du réglage d'un objectif — ou d'un modèle, qui a la
    même forme amputée des seules clés d'instance. Partagé par la fiche
    personne et la bibliothèque de modèles pour ne pas en garder deux versions
@@ -1660,6 +1694,55 @@ function migrerEmploiDuTemps(stocke) {
 function ateliersDuJour(emploiDuTemps, ateliers, jour) {
   const ids = (emploiDuTemps && emploiDuTemps[String(jour)]) || [];
   return ids.map((id) => (ateliers || []).find((a) => a.id === id)).filter(Boolean);
+}
+
+/* Reprend l'ordre d'un jour de référence pour un autre jour, sans jamais
+   programmer ni déprogrammer d'atelier — seuls les ids déjà communs aux deux
+   jours sont repositionnés. Les ateliers propres au jour cible (absents du
+   jour de référence) se rangent entre le bloc commun et la queue commune
+   contiguë : ainsi « commence par accueil, finit par goûter » survit même si
+   le jour cible porte un atelier que le jour de référence n'a pas. Si le jour
+   cible suit déjà l'ordre complet du jour de référence, rien ne bouge. */
+function fusionnerOrdreJour(source, cible) {
+  const src = source || [];
+  const dst = cible || [];
+  const communs = src.filter((id) => dst.includes(id));
+  if (communs.length === 0) return dst;
+  const propres = dst.filter((id) => !src.includes(id));
+  let queue = [];
+  for (let i = src.length - 1; i >= 0; i--) {
+    if (dst.includes(src[i])) queue.unshift(src[i]);
+    else break;
+  }
+  if (queue.length === src.length) queue = [];
+  const communsSansQueue = communs.filter((id) => !queue.includes(id));
+  return [...communsSansQueue, ...propres, ...queue];
+}
+
+/* Applique l'ordre d'un jour aux six autres, jour par jour, via
+   fusionnerOrdreJour — un geste ponctuel, pas une règle permanente. Un jour
+   sans atelier n'est pas touché. */
+function appliquerOrdreAuxAutresJours(emploiDuTemps, jourSource) {
+  const source = (emploiDuTemps && emploiDuTemps[String(jourSource)]) || [];
+  const suivant = { ...emploiDuTemps };
+  JOURS.forEach(({ k }) => {
+    if (k === jourSource) return;
+    const cle = String(k);
+    const cible = emploiDuTemps[cle];
+    if (!cible || cible.length === 0) return;
+    suivant[cle] = fusionnerOrdreJour(source, cible);
+  });
+  return suivant;
+}
+
+/* Un atelier écarté, les restants de la semaine type en tête dans leur ordre
+   — c'est le prochain qu'on cherche le plus souvent en enchaînant — avant les
+   autres, inchangés. Partagée entre la proposition de lancement et le
+   chaînage en cours de séance : deux copies auraient fini par diverger. */
+function ordonnerPropositions(ateliers, restants, exclureId) {
+  const autres = (ateliers || []).filter((a) => a.id !== exclureId);
+  const idsRestants = new Set((restants || []).map((a) => a.id));
+  return [...autres.filter((a) => idsRestants.has(a.id)), ...autres.filter((a) => !idsRestants.has(a.id))];
 }
 
 /* Ce qui reste à jouer aujourd'hui : les ateliers du jour dont aucune séance
@@ -3673,7 +3756,16 @@ function AbaApp() {
   const removeStudent = (id) => setStudents((s) => s.filter((x) => x.id !== id));
   const renameStudent = (id, initials) => setStudents((s) => s.map((x) => (x.id === id ? { ...x, initials } : x)));
   const addAtelier = (name) => setAteliers((a) => [...a, { id: uid(), name }]);
-  const removeAtelier = (id) => setAteliers((a) => a.filter((x) => x.id !== id));
+  const removeAtelier = (id) => {
+    setAteliers((a) => a.filter((x) => x.id !== id));
+    // Sans ce nettoyage, l'id supprimé reste dans emploiDuTemps — absorbé en
+    // silence par ateliersDuJour, mais visible dans la grille de la semaine.
+    setEmploiDuTemps((e) => {
+      const suivant = {};
+      Object.keys(e).forEach((cle) => { suivant[cle] = e[cle].filter((aid) => aid !== id); });
+      return suivant;
+    });
+  };
   const renameAtelier = (id, name) => setAteliers((a) => a.map((x) => (x.id === id ? { ...x, name } : x)));
   /* Mémorisation cumulative : la liste des personnes habituelles et celle des
      prioritaires sont remplacées, mais les objectifs mémorisés des personnes
@@ -3709,6 +3801,8 @@ function AbaApp() {
       const ids = e[cle] || [];
       return { ...e, [cle]: ids.includes(atelierId) ? ids.filter((id) => id !== atelierId) : [...ids, atelierId] };
     });
+  const reordonnerJourAtelier = (jour, ids) => setEmploiDuTemps((e) => ({ ...e, [String(jour)]: ids }));
+  const appliquerOrdreJour = (jour) => setEmploiDuTemps((e) => appliquerOrdreAuxAutresJours(e, jour));
   const setAtelierPersonnes = (atelierId, studentIds) =>
     setAteliers((a) => a.map((x) => (x.id === atelierId ? { ...x, usualStudentIds: studentIds } : x)));
   /* Liste propre à un jour. `studentIds === null` supprime la variante : le
@@ -4286,6 +4380,8 @@ function AbaApp() {
             onBasculerJour={basculerAtelierJour} onSetPersonnes={setAtelierPersonnes}
             onSetPersonnesJour={setAtelierPersonnesJour}
             onSetObjectifs={setAtelierObjectifs} onToggleFavori={toggleAtelierFavori}
+            onReordonnerJour={reordonnerJourAtelier} onAppliquerOrdre={appliquerOrdreJour}
+            notify={notify}
             onOuvrirPersonnes={() => ouvrirEcran('personnes')}
             onOuvrirPersonne={(sid) => ouvrirEcran('personnes', { personne: sid })}
           />
@@ -4351,7 +4447,7 @@ function AbaApp() {
         return (
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
-            sessions={sessions} crises={crises} guidances={guidances} onEditSession={editSession} onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
+            crises={crises} guidances={guidances}
             onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => setEcran('personnes')}
             onOuvrirMenu={ouvrirMenu} planDuJour={planDuJour}
             activeSession={activeSession} setActiveSession={setActiveSession}
@@ -4391,6 +4487,7 @@ function AbaApp() {
             onEditCrisis={editCrisis} onMarkSent={markSent}
             onMarkCrisesSent={markCrisesSent} onMarkRelevesSent={markRelevesSent}
             onEditSession={(s) => { editSession(s); allerA('session'); }}
+            onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
             onOuvrirJournee={(j) => setJourneeSuivi({ studentId: j.studentId, suiviId: j.suiviId, jour: j.jour })}
             onExportManager={exportManager}
             onOuvrirMenu={ouvrirMenu}
@@ -4932,13 +5029,16 @@ function ChangePinModal({ security, onSave, onClose }) {
    consultaient déjà côte à côte à la création d'une séance (l'atelier, puis
    qui doit s'y trouver) n'avaient pas de raison d'être séparées ici.
 
-   Un seul endroit règle désormais la semaine : les puces Jours de la fiche
-   atelier. Le bloc « Semaine type », qui doublait ce réglage jour par jour,
-   n'apportait plus que l'ordre des ateliers dans la journée ; cet ordre suit à
-   présent celui dans lequel les puces ont été cochées. */
+   La programmation (quels jours) reste réglée par les puces Jours de la
+   fiche atelier. L'ordre dans la journée, lui, se règle dans la grille de la
+   semaine ci-dessous — appui long pour déplacer, comme partout ailleurs dans
+   l'application (ReorderList). « Appliquer aux autres jours » ne programme ni
+   ne déprogramme rien : il ne fait que reprendre cet ordre pour les ateliers
+   déjà communs aux autres jours. */
 function PanneauEmploiDuTemps({
   ateliers, students, onAdd, onRename, onRemove, emploiDuTemps,
   onBasculerJour, onSetPersonnes, onSetPersonnesJour, onSetObjectifs, onToggleFavori,
+  onReordonnerJour, onAppliquerOrdre, notify,
   onOuvrirPersonnes, onOuvrirPersonne,
 }) {
   const [nom, setNom] = useState('');
@@ -5126,6 +5226,57 @@ function PanneauEmploiDuTemps({
                         );
                       })}
                     </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <div className="font-semibold text-sm mb-1" style={{ fontFamily: F_DISPLAY }}>Semaine</div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Appui long sur un atelier pour changer sa place dans la journée. La programmation elle-même
+          — quels jours — se règle par les puces Jours de la fiche atelier, ci-dessus.
+        </p>
+        {ateliers.length === 0 ? (
+          <Empty>Aucun atelier créé.</Empty>
+        ) : (
+          <div className="flex gap-2 overflow-x-auto pb-1" data-no-swipe>
+            {JOURS.filter((j) => (j.k !== 0 && j.k !== 6) || (emploiDuTemps[String(j.k)] || []).length > 0).map((j) => {
+              const duJour = ateliersDuJour(emploiDuTemps, ateliers, j.k);
+              const autreJourProgramme = JOURS.some((autre) => autre.k !== j.k && (emploiDuTemps[String(autre.k)] || []).length > 0);
+              return (
+                <div key={j.k} className="rounded-xl p-2 shrink-0" style={{ backgroundColor: PAPER, minWidth: '8.5rem' }}>
+                  <div className="text-xs font-semibold mb-1.5 flex items-center justify-between" style={{ fontFamily: F_DISPLAY }}>
+                    <span>{j.label}</span>
+                    <span style={{ color: INK_SOFT, fontFamily: F_MONO }}>{duJour.length}</span>
+                  </div>
+                  {duJour.length === 0 ? (
+                    <div className="text-xs" style={{ color: INK_SOFT }}>—</div>
+                  ) : (
+                    <ReorderList
+                      items={duJour}
+                      keyOf={(a) => a.id}
+                      onReorder={(liste) => onReordonnerJour(j.k, liste.map((a) => a.id))}
+                      className="space-y-1"
+                      renderItem={(a) => (
+                        <div className="flex items-center gap-1.5 rounded-lg px-2 py-1.5" style={{ backgroundColor: CARD }}>
+                          <GripVertical size={12} style={{ color: INK_SOFT }} className="shrink-0" />
+                          <span className="text-xs truncate">{a.name}</span>
+                        </div>
+                      )}
+                    />
+                  )}
+                  {duJour.length > 1 && autreJourProgramme && (
+                    <button
+                      onClick={() => { onAppliquerOrdre(j.k); notify('Ordre appliqué aux autres jours'); }}
+                      className="w-full mt-2 rounded-lg px-2 py-1.5 text-xs flex items-center justify-center gap-1"
+                      style={{ color: INK_SOFT, backgroundColor: CARD }}
+                    >
+                      <Copy size={12} /> Appliquer aux autres jours
+                    </button>
                   )}
                 </div>
               );
@@ -6733,14 +6884,13 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, sessions, crises, guidances, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish }) {
+function SessionScreen({ students, ateliers, intervenants, crises, guidances, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish }) {
   if (activeSession) {
     return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} notify={notify} onFinish={onFinish} suiteDuJour={planDuJour && planDuJour.restants} />;
   }
   return (
     <SessionSetup
-      students={students} ateliers={ateliers} intervenants={intervenants} sessions={sessions}
-      onEditSession={onEditSession} onDeleteSession={onDeleteSession} onDeleteAllSessions={onDeleteAllSessions}
+      students={students} ateliers={ateliers} intervenants={intervenants}
       onSetAtelierGroup={onSetAtelierGroup} notify={notify} onOuvrirConfiguration={onOuvrirConfiguration}
       onOuvrirMenu={onOuvrirMenu} planDuJour={planDuJour}
       onStart={setActiveSession}
@@ -6748,110 +6898,43 @@ function SessionScreen({ students, ateliers, intervenants, sessions, crises, gui
   );
 }
 
-function SessionSetup({ students, ateliers, intervenants, sessions, onEditSession, onDeleteSession, onDeleteAllSessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, onStart }) {
-  const [atelierId, setAtelierId] = useState(null);
-  const [intervenantId, setIntervenantId] = useState(null);
-  const [studentIds, setStudentIds] = useState([]);
-  const [selected, setSelected] = useState({});
-  const [autoApplied, setAutoApplied] = useState(false);
-  const [mode, setMode] = useState('atelier');
-
-  /* En mode Balance Program, seuls les objectifs de ce type sont proposés :
-     chaque personne a le sien. Il reste disponible dans un atelier classique. */
-  const visibleObjectives = (st) => (mode === 'balance' ? st.objectives.filter((o) => o.type === 'balance') : st.objectives);
-
-  /* Objectifs prioritaires propres à cet atelier : une même personne peut avoir des
-     priorités différentes d'un atelier à l'autre. Distinct du prioritaire posé
-     à la création de l'objectif, qui vaut lui quel que soit l'atelier. */
-  const [atelierFavorites, setAtelierFavorites] = useState([]);
+/* Tout le réglage d'un atelier avant lancement — personnes présentes,
+   intervenant (facultatif : la carte du haut couvre déjà la proposition du
+   jour), objectifs et options — dans un seul bloc réutilisé pour la
+   proposition du jour comme pour n'importe quel autre atelier déplié.
+   Chaque instance a son propre état local : deux ateliers ouverts à la fois
+   ne doivent pas se marcher dessus. */
+function AtelierLancement({
+  students, atelier, mode, jour, intervenants, intervenantIdParDefaut, avecIntervenant,
+  notify, onSetAtelierGroup, onLancer, banniere, titre,
+}) {
+  const initial = React.useMemo(() => configurerAtelier(students, atelier, jour, mode), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [studentIds, setStudentIds] = useState(initial.studentIds);
+  const [selected, setSelected] = useState(initial.selected);
+  const [atelierFavorites, setAtelierFavorites] = useState(initial.favorites);
   const [doubleCotation, setDoubleCotation] = useState(false);
-
-  /* Proposition automatique au montage : le prochain atelier de la semaine
-     type se précharge comme si on l'avait choisi à la main, mais seulement
-     si rien n'a encore été touché — jamais par-dessus une sélection en
-     cours. Se redéclenche à chaque retour sur cet écran (fin ou abandon
-     d'une séance), pas seulement à l'ouverture de l'application, puisque
-     SessionSetup démonte et remonte à chaque bascule avec SessionRunning. */
-  useEffect(() => {
-    if (atelierId || studentIds.length > 0) return;
-    const proposition = planDuJour && planDuJour.restants && planDuJour.restants[0];
-    if (proposition) pickAtelier(proposition.id);
-  }, []);
-
-  /* Une configuration d'atelier mémorisée n'a pas à être revérifiée en entier
-     à chaque lancement. Quand elle s'applique, seul ce qui diffère de
-     l'habituel est montré — les objectifs apparus depuis la mémorisation — et
-     le détail complet reste à un appui de distance. */
-  const [depuisMemoire, setDepuisMemoire] = useState(false);
-  const [nouveautes, setNouveautes] = useState({});
+  const [depuisMemoire, setDepuisMemoire] = useState(!!atelier && initial.studentIds.length > 0);
   const [detailObjectifs, setDetailObjectifs] = useState(false);
+  const [intervenantId, setIntervenantId] = useState(intervenantIdParDefaut ?? null);
 
-  const applyGroup = (ids, savedObjectives, known, memoire) => {
-    const next = {};
-    const neufs = {};
-    let nbNouveaux = 0;
-    ids.forEach((id) => {
-      const st = students.find((s) => s.id === id);
-      if (!st) return;
-      const visibles = visibleObjectives(st);
-      const visiblesIds = visibles.map((o) => o.id);
-      const saved = savedObjectives && savedObjectives[id];
-      if (!saved) { next[id] = visiblesIds; return; }
-
-      // On ne retient que les objectifs encore existants et visibles dans ce mode
-      const retenus = saved.filter((oid) => visiblesIds.includes(oid));
-
-      /* Objectifs créés depuis la mémorisation : cochés d'office, pour qu'un
-         nouvel objectif n'échappe pas à un atelier déjà configuré. Pour les
-         configurations enregistrées avant l'ajout de ce repère, on se rabat
-         sur les objectifs marqués prioritaires. */
-      const nouveaux = visibles
-        .filter((o) => !saved.includes(o.id))
-        .filter((o) => (known ? !known.includes(o.id) : !!o.favorite))
-        .map((o) => o.id);
-
-      nbNouveaux += nouveaux.length;
-      if (nouveaux.length) neufs[id] = nouveaux;
-      next[id] = [...retenus, ...nouveaux];
-      if (!next[id].length) next[id] = visiblesIds;
-    });
-
-    setStudentIds(ids);
-    setSelected(next);
-    setAutoApplied(true);
-    setDepuisMemoire(!!memoire);
-    setNouveautes(neufs);
-    setDetailObjectifs(false);
+  useEffect(() => {
+    const nbNouveaux = Object.values(initial.nouveautes).reduce((n, l) => n + l.length, 0);
     if (nbNouveaux > 0) {
       setTimeout(() => notify(`${nbNouveaux} nouvel${nbNouveaux > 1 ? 'x' : ''} objectif${nbNouveaux > 1 ? 's' : ''} ajouté${nbNouveaux > 1 ? 's' : ''} à cet atelier`), 400);
     }
-  };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const pickAtelier = (id) => {
-    const next = atelierId === id ? null : id;
-    setAtelierId(next);
-    if (!next) { setAtelierFavorites([]); setDepuisMemoire(false); return; }
-    const a = ateliers.find((x) => x.id === next);
-    // La classe rechargée est celle prévue pour aujourd'hui : un atelier qui
-    // n'accueille pas le même groupe selon le jour arrive avec le bon.
-    const usual = personnesPrevues(a, new Date().getDay()).filter((sid) => students.some((s) => s.id === sid));
-    setAtelierFavorites((a && a.favoriteObjectiveIds) || []);
-    // Change d'atelier recharge toujours sa classe et ses objectifs habituels :
-    // aucune séance n'est encore lancée à ce stade, rien à perdre.
-    if (usual.length) applyGroup(usual, a && a.usualObjectives, a && a.knownObjectiveIds, true);
-  };
-
-  const currentAtelier = ateliers.find((a) => a.id === atelierId);
+  const visibleObjectives = (st) => (mode === 'balance' ? st.objectives.filter((o) => o.type === 'balance') : st.objectives);
+  const intervenantActif = avecIntervenant ? intervenantId : intervenantIdParDefaut;
 
   const toggleStudent = (id) => {
-    setAutoApplied(false);
     setStudentIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
     setSelected((sel) => {
       if (sel[id]) { const n = { ...sel }; delete n[id]; return n; }
       const st = students.find((s) => s.id === id);
       // Même cascade qu'en cours de séance (FeuilleAjout, changerAtelier) :
       // mémorisé pour cet atelier, à défaut prioritaires, à défaut tous.
-      return { ...sel, [id]: st ? objectifsParDefaut(st, currentAtelier, mode) : [] };
+      return { ...sel, [id]: st ? objectifsParDefaut(st, atelier, mode) : [] };
     });
     setDepuisMemoire(false);
   };
@@ -6868,12 +6951,12 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   /* Le bouton de mémorisation n'apparaît que si la configuration en cours
      diffère de celle déjà enregistrée pour cet atelier. */
   const sameAsUsual = (() => {
-    if (!currentAtelier) return false;
-    const savedIds = personnesPrevues(currentAtelier, new Date().getDay());
+    if (!atelier) return false;
+    const savedIds = personnesPrevues(atelier, jour);
     if (savedIds.length !== studentIds.length || !savedIds.every((id) => studentIds.includes(id))) return false;
-    const savedFav = currentAtelier.favoriteObjectiveIds || [];
+    const savedFav = atelier.favoriteObjectiveIds || [];
     if (savedFav.length !== atelierFavorites.length || !savedFav.every((id) => atelierFavorites.includes(id))) return false;
-    const savedObj = currentAtelier.usualObjectives || {};
+    const savedObj = atelier.usualObjectives || {};
     return studentIds.every((id) => {
       const a = savedObj[id] || [];
       const b = selected[id] || [];
@@ -6882,127 +6965,24 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
   })();
 
   const ready = studentIds.length > 0 && studentIds.every((id) => (selected[id] || []).length > 0);
-
-  function start() {
-    primeAudio();
-    const stamp = Date.now();
-    const { snapshot, data } = construireDonneesSeance(students, studentIds, selected, atelierFavorites, mode);
-    const presence = {};
-    studentIds.forEach((sid) => { presence[sid] = { from: stamp, to: null }; });
-    onStart({
-      id: uid(),
-      date: new Date(stamp).toISOString(),
-      startedAt: stamp,
-      mode,
-      atelierId: mode === 'balance' ? null : atelierId,
-      intervenantId,
-      doubleCotation,
-      studentIds,
-      selectedObjectives: selected,
-      objectiveSnapshot: snapshot,
-      notes: {},
-      data,
-      presence,
-      pauses: [],
-    });
-  }
-
-  if (students.length === 0) {
-    return (
-      <div>
-        <div className="flex items-start justify-between gap-3">
-          <SectionTitle>Session</SectionTitle>
-          <BoutonMenu onClick={onOuvrirMenu} />
-        </div>
-        <Empty>Aucune personne accompagnée n'est enregistrée sur cette tablette.</Empty>
-        <Btn onClick={onOuvrirConfiguration} className="w-full mt-3">
-          <Users size={17} /> Créer une personne accompagnée
-        </Btn>
-      </div>
-    );
-  }
+  const lancer = () => onLancer({
+    mode, atelierId: atelier ? atelier.id : null, studentIds, selected,
+    favorites: atelierFavorites, doubleCotation, intervenantId: intervenantActif,
+  });
 
   return (
-    <div>
-      <div className="flex items-start justify-between gap-3">
-        <SectionTitle sub="Choisissez l'atelier, les personnes présentes et les objectifs travaillés.">Nouvelle session</SectionTitle>
-        <BoutonMenu onClick={onOuvrirMenu} />
-      </div>
-
-      {planDuJour && planDuJour.restants && planDuJour.restants.length > 0 && atelierId === planDuJour.restants[0].id && (
-        <Card className="mb-4">
-          <div className="flex items-center gap-1.5 text-xs mb-1" style={{ color: INK_SOFT }}>
-            <CalendarDays size={13} />
-            {(JOURS.find((j) => j.k === planDuJour.jour) || {}).label} · {(() => {
-              const rang = planDuJour.total - planDuJour.restants.length + 1;
-              return rang === 1 ? '1er' : `${rang}e`;
-            })()} sur {planDuJour.total}
-          </div>
-          <div className="font-semibold mb-1" style={{ fontFamily: F_DISPLAY }}>{planDuJour.restants[0].name}</div>
-          <div className="text-sm mb-3" style={{ color: INK_SOFT }}>
-            {studentIds.length} personne{studentIds.length !== 1 ? 's' : ''}
-          </div>
-          <Btn onClick={start} disabled={!ready} className="w-full">
-            <Play size={16} /> Lancer
-          </Btn>
-        </Card>
-      )}
-
-      <div className="flex gap-1.5 mb-4">
-        {[
-          { k: 'atelier', label: 'Atelier', icon: Layers },
-          { k: 'balance', label: 'Balance Program', icon: Route },
-        ].map((m) => {
-          const Icon = m.icon;
-          const on = mode === m.k;
-          return (
-            <button
-              key={m.k}
-              onClick={() => { setMode(m.k); setStudentIds([]); setSelected({}); setAutoApplied(false); setDepuisMemoire(false); setNouveautes({}); }}
-              className="flex-1 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-1.5 border"
-              style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}
-            >
-              <Icon size={15} /> {m.label}
-            </button>
-          );
-        })}
-      </div>
+    <>
+      {banniere}
+      {titre && <div className="font-semibold mb-3" style={{ fontFamily: F_DISPLAY }}>{titre}</div>}
 
       {mode === 'balance' && (
-        <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
           Sélectionnez les personnes concernées : chacune cotera son propre Balance Program.
         </p>
       )}
 
-      {mode === 'atelier' && (
-      <Card className="mb-4">
-        <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Atelier <span style={{ opacity: 0.7 }}>— facultatif, appuyez à nouveau pour retirer</span></div>
-        <div className="space-y-1.5">
-          {ateliers.map((a) => {
-            const prevusAujourdhui = personnesPrevues(a, new Date().getDay());
-            return (
-            <button key={a.id} onClick={() => pickAtelier(a.id)} className="w-full rounded-xl px-3 py-3 text-left flex items-center justify-between border"
-              style={{ borderColor: atelierId === a.id ? INK : BORDER, backgroundColor: atelierId === a.id ? INK : 'transparent', color: atelierId === a.id ? '#fff' : INK }}>
-              <span>
-                {a.name}
-                {prevusAujourdhui.length > 0 && (
-                  <span className="block text-xs mt-0.5" style={{ opacity: 0.7 }}>
-                    Prévu aujourd'hui : {prevusAujourdhui.length} personne{prevusAujourdhui.length !== 1 ? 's' : ''}
-                    {a.favoriteObjectiveIds && a.favoriteObjectiveIds.length > 0 &&
-                      ` · ${a.favoriteObjectiveIds.length} prioritaire${a.favoriteObjectiveIds.length !== 1 ? 's' : ''}`}
-                  </span>
-                )}
-              </span>
-              {atelierId === a.id && <Check size={16} className="shrink-0" />}
-            </button>
-            );
-          })}
-        </div>
-      </Card>
-      )}
-
-      {intervenants.length > 0 && (
-        <Card className="mb-4">
+      {avecIntervenant && intervenants.length > 0 && (
+        <Card className="mb-3">
           <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Intervenant qui cote</div>
           <div className="flex flex-wrap gap-2">
             {intervenants.map((i) => {
@@ -7018,62 +6998,58 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
         </Card>
       )}
 
-      <Card className="mb-4">
-        <button onClick={() => setDoubleCotation((v) => !v)} className="flex items-start gap-2.5 text-left w-full">
-          <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: doubleCotation ? INK : BORDER }}>
-            <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: doubleCotation ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-          </span>
-          <span className="min-w-0">
-            <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Deux observateurs en parallèle</span>
-            <span className="block text-xs" style={{ color: INK_SOFT }}>
-              À cocher par chacun des deux intervenants qui cotent cette même séance, chacun sur son
-              appareil. DatABA Manager repérera ensuite les deux relevés pour mesurer leur accord.
-            </span>
-          </span>
-        </button>
-      </Card>
-
-      <Card className="mb-4">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs" style={{ color: INK_SOFT }}>Personnes présentes</span>
-          {mode === 'atelier' && atelierId && studentIds.length > 0 && !sameAsUsual && (
-            <button
-              onClick={() => {
-                const known = studentIds.flatMap((sid) => {
-                  const st = students.find((x) => x.id === sid);
-                  return st ? st.objectives.map((o) => o.id) : [];
-                });
-                onSetAtelierGroup(atelierId, { studentIds, objectives: selected, favorites: atelierFavorites, known });
-                notify('Configuration mémorisée pour cet atelier');
-              }}
-              className="text-xs flex items-center gap-1"
-              style={{ color: INK_SOFT }}
-            >
-              <Star size={12} /> Mémoriser cette configuration
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs" style={{ color: INK_SOFT }}>Personnes présentes</span>
+        {atelier && studentIds.length > 0 && !sameAsUsual && (
+          <button
+            onClick={() => {
+              const known = studentIds.flatMap((sid) => {
+                const st = students.find((x) => x.id === sid);
+                return st ? st.objectives.map((o) => o.id) : [];
+              });
+              onSetAtelierGroup(atelier.id, { studentIds, objectives: selected, favorites: atelierFavorites, known });
+              notify('Configuration mémorisée pour cet atelier');
+            }}
+            className="text-xs flex items-center gap-1"
+            style={{ color: INK_SOFT }}
+          >
+            <Star size={12} /> Mémoriser cette configuration
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2 mb-3">
+        {students.map((s) => {
+          const on = studentIds.includes(s.id);
+          return (
+            <button key={s.id} onClick={() => toggleStudent(s.id)} className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
+              style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+              {s.initials}
             </button>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {students.map((s) => {
-            const on = studentIds.includes(s.id);
-            return (
-              <button key={s.id} onClick={() => toggleStudent(s.id)} className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
-                style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
-                {s.initials}
-              </button>
-            );
-          })}
-        </div>
-      </Card>
+          );
+        })}
+      </div>
+
+      <button onClick={() => setDoubleCotation((v) => !v)} className="flex items-start gap-2.5 text-left w-full mb-3">
+        <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: doubleCotation ? INK : BORDER }}>
+          <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: doubleCotation ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+        </span>
+        <span className="min-w-0">
+          <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Deux observateurs en parallèle</span>
+          <span className="block text-xs" style={{ color: INK_SOFT }}>
+            À cocher par chacun des deux intervenants qui cotent cette même séance, chacun sur son
+            appareil. DatABA Manager repérera ensuite les deux relevés pour mesurer leur accord.
+          </span>
+        </span>
+      </button>
 
       {/* Configuration mémorisée appliquée : on ne montre que ce qui diffère de
           l'habituel, plutôt que de redérouler toute la liste à revérifier. */}
       {depuisMemoire && !detailObjectifs && studentIds.length > 0 && (() => {
         const nbObjectifs = studentIds.reduce((n, sid) => n + (selected[sid] || []).length, 0);
-        const lignesNeuves = Object.keys(nouveautes).flatMap((sid) => {
+        const lignesNeuves = Object.keys(initial.nouveautes).flatMap((sid) => {
           const st = students.find((x) => x.id === sid);
           if (!st) return [];
-          return nouveautes[sid]
+          return initial.nouveautes[sid]
             .map((oid) => st.objectives.find((o) => o.id === oid))
             .filter(Boolean)
             .map((o) => ({ cle: `${sid}-${o.id}`, initiales: st.initials, nom: o.name, type: o.type }));
@@ -7153,7 +7129,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
                         {on && <Check size={15} style={{ color: meta.color }} className="shrink-0" />}
                       </button>
                       {/* Prioritaire pour cet atelier seulement */}
-                      {mode === 'atelier' && atelierId && on && !o.favorite && (
+                      {atelier && on && !o.favorite && (
                         <button
                           onClick={() => toggleAtelierFavorite(o.id)}
                           className="shrink-0"
@@ -7172,53 +7148,181 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
         );
       })}
 
-      <Btn onClick={start} disabled={!ready} className="w-full mt-2">
-        <Play size={17} /> Lancer les cotations
+      <Btn onClick={lancer} disabled={!ready} className="w-full mt-2">
+        <Play size={17} /> Lancer
       </Btn>
+    </>
+  );
+}
 
-      {sessions && sessions.length > 0 && (
-        <div className="mt-8">
-          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
-            Séances enregistrées — <span style={{ fontFamily: F_MONO }}>{sessions.length}</span> au total
-          </div>
-          <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
-            Dépliez un jour, puis appuyez sur une séance pour corriger ses cotations. Les rapports et
-            les fichiers destinés à DatABA Manager se génèrent depuis l'écran <strong>Export</strong>.
-          </p>
-          <ListeParJour
-            items={sessions}
-            dateDe={(s) => s.date}
-            renderItem={(s) => {
-              const a = ateliers.find((x) => x.id === s.atelierId);
+function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, onStart }) {
+  const proposition = planDuJour && planDuJour.restants && planDuJour.restants[0];
+  const [intervenantId, setIntervenantId] = useState(null);
+  const [autresOuverts, setAutresOuverts] = useState(() => !proposition);
+  const [ouvertId, setOuvertId] = useState(null);
+
+  const jour = planDuJour ? planDuJour.jour : new Date().getDay();
+  const autresAteliers = ordonnerPropositions(ateliers, planDuJour && planDuJour.restants, proposition ? proposition.id : null);
+
+  const demarrer = ({ mode, atelierId, studentIds, selected, favorites, doubleCotation, intervenantId: intId }) => {
+    primeAudio();
+    const stamp = Date.now();
+    const { snapshot, data } = construireDonneesSeance(students, studentIds, selected, favorites, mode);
+    const presence = {};
+    studentIds.forEach((sid) => { presence[sid] = { from: stamp, to: null }; });
+    onStart({
+      id: uid(),
+      date: new Date(stamp).toISOString(),
+      startedAt: stamp,
+      mode,
+      atelierId: mode === 'balance' ? null : atelierId,
+      intervenantId: intId,
+      doubleCotation,
+      studentIds,
+      selectedObjectives: selected,
+      objectiveSnapshot: snapshot,
+      notes: {},
+      data,
+      presence,
+      pauses: [],
+    });
+  };
+
+  if (students.length === 0) {
+    return (
+      <div>
+        <div className="flex items-start justify-between gap-3">
+          <SectionTitle>Session</SectionTitle>
+          <BoutonMenu onClick={onOuvrirMenu} />
+        </div>
+        <Empty>Aucune personne accompagnée n'est enregistrée sur cette tablette.</Empty>
+        <Btn onClick={onOuvrirConfiguration} className="w-full mt-3">
+          <Users size={17} /> Créer une personne accompagnée
+        </Btn>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-3">
+        <SectionTitle sub="Choisissez l'atelier, les personnes présentes et les objectifs travaillés.">Nouvelle session</SectionTitle>
+        <BoutonMenu onClick={onOuvrirMenu} />
+      </div>
+
+      {intervenants.length > 0 && (
+        <Card className="mb-4">
+          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Intervenant qui cote</div>
+          <div className="flex flex-wrap gap-2">
+            {intervenants.map((i) => {
+              const on = intervenantId === i.id;
               return (
-                <div key={s.id} className="flex items-center gap-2 rounded-xl border px-3 py-2.5" style={{ borderColor: BORDER, backgroundColor: PAPER }}>
-                  <button className="flex-1 text-left min-w-0" onClick={() => onEditSession(s)}>
-                    <div className="text-sm font-medium truncate">{a ? a.name : s.mode === 'balance' ? 'Balance Program' : 'Séance libre'}</div>
-                    <div className="text-xs" style={{ color: INK_SOFT }}>
-                      {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
-                      {s.doubleCotation && ' · double cotation'}
-                    </div>
+                <button key={i.id} onClick={() => setIntervenantId(on ? null : i.id)} className="rounded-xl px-4 py-2.5 border text-sm"
+                  style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+                  {i.name}
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {proposition ? (
+        <Card className="mb-4">
+          <AtelierLancement
+            key={proposition.id}
+            students={students} atelier={proposition} mode="atelier" jour={jour}
+            intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant={false}
+            notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
+            titre={proposition.name}
+            banniere={
+              <div className="flex items-center gap-1.5 text-xs mb-1" style={{ color: INK_SOFT }}>
+                <CalendarDays size={13} />
+                {(JOURS.find((j) => j.k === planDuJour.jour) || {}).label} · {(() => {
+                  const rang = planDuJour.total - planDuJour.restants.length + 1;
+                  return rang === 1 ? '1er' : `${rang}e`;
+                })()} sur {planDuJour.total}
+              </div>
+            }
+          />
+        </Card>
+      ) : (
+        <Card className="mb-4">
+          <Empty>Aucun atelier programmé aujourd'hui.</Empty>
+        </Card>
+      )}
+
+      {!autresOuverts ? (
+        <Btn variant="ghost" onClick={() => setAutresOuverts(true)} className="w-full">
+          <ChevronDown size={16} /> Lancer un autre atelier
+        </Btn>
+      ) : (
+        <div className="space-y-2">
+          <div className="text-xs uppercase tracking-wide" style={{ color: INK_SOFT }}>Un autre atelier</div>
+          {autresAteliers.map((a) => {
+            const apercu = configurerAtelier(students, a, jour, 'atelier');
+            const open = ouvertId === a.id;
+            return (
+              <div key={a.id} className="rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+                <div className="flex items-center gap-2">
+                  <button className="flex-1 text-left min-w-0" onClick={() => setOuvertId(open ? null : a.id)}>
+                    <span className="block font-semibold text-sm truncate" style={{ fontFamily: F_DISPLAY }}>{a.name}</span>
+                    <span className="block text-xs" style={{ color: INK_SOFT }}>
+                      {apercu.studentIds.length} personne{apercu.studentIds.length !== 1 ? 's' : ''} prévue{apercu.studentIds.length !== 1 ? 's' : ''}
+                    </span>
                   </button>
-                  <button
-                    onClick={() => { if (window.confirm('Supprimer définitivement cette séance ?')) onDeleteSession(s.id); }}
-                    style={{ color: INK_SOFT }}
-                    className="shrink-0"
-                  >
-                    <Trash2 size={15} />
+                  {apercu.studentIds.length > 0 && (
+                    <button
+                      onClick={() => demarrer({
+                        mode: 'atelier', atelierId: a.id, studentIds: apercu.studentIds, selected: apercu.selected,
+                        favorites: apercu.favorites, doubleCotation: false, intervenantId,
+                      })}
+                      className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                      style={{ backgroundColor: INK, color: '#fff' }}
+                      title="Lancer directement avec la configuration habituelle"
+                    >
+                      <Play size={16} />
+                    </button>
+                  )}
+                  <button onClick={() => setOuvertId(open ? null : a.id)} className="shrink-0" style={{ color: INK_SOFT }}>
+                    <ChevronRight size={18} style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
                   </button>
                 </div>
-              );
-            }}
-          />
-          {sessions.length > 1 && (
-            <button
-              onClick={onDeleteAllSessions}
-              className="w-full mt-2 rounded-xl border px-3 py-2 text-xs flex items-center justify-center gap-1.5"
-              style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-            >
-              <Trash2 size={13} /> Supprimer toutes les séances enregistrées
-            </button>
-          )}
+                {open && (
+                  <div className="mt-3">
+                    <AtelierLancement
+                      key={`${a.id}-ouvert`}
+                      students={students} atelier={a} mode="atelier" jour={jour}
+                      intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant
+                      notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {[{ cle: 'balance', label: 'Balance Program', mode: 'balance' }, { cle: 'libre', label: 'Séance libre', mode: 'atelier' }].map((entree) => {
+            const open = ouvertId === entree.cle;
+            return (
+              <div key={entree.cle} className="rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+                <button className="w-full flex items-center justify-between" onClick={() => setOuvertId(open ? null : entree.cle)}>
+                  <span className="font-semibold text-sm" style={{ fontFamily: F_DISPLAY }}>{entree.label}</span>
+                  <ChevronRight size={18} style={{ color: INK_SOFT, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
+                </button>
+                {open && (
+                  <div className="mt-3">
+                    <AtelierLancement
+                      key={`${entree.cle}-ouvert`}
+                      students={students} atelier={null} mode={entree.mode} jour={jour}
+                      intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant
+                      notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -7926,12 +8030,8 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
     setChecked(new Set([...aCoter, ...prevusPour(id)]));
   }
 
-  /* Les ateliers restants de la semaine type passent en tête, dans leur
-     ordre — c'est le prochain qu'on cherche le plus souvent en enchaînant —
-     avant les autres, inchangés. */
-  const autres = ateliers.filter((a) => a.id !== session.atelierId);
+  const ordonnes = ordonnerPropositions(ateliers, suiteDuJour, session.atelierId);
   const idsSuite = new Set((suiteDuJour || []).map((a) => a.id));
-  const ordonnes = [...autres.filter((a) => idsSuite.has(a.id)), ...autres.filter((a) => !idsSuite.has(a.id))];
 
   useEffect(() => {
     if (ordonnes[0]) choisir(ordonnes[0].id);
@@ -9460,7 +9560,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
    dessous, puis une archive dépliante pour ce qui est déjà parti. Tout y est
    corrigeable, avant comme après l'envoi : c'est le seul endroit où l'on relit
    avant de transmettre. */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, releves, axesSuivi, appareil, notify, onEditCrisis, onEditSession, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onOuvrirMenu }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, releves, axesSuivi, appareil, notify, onEditCrisis, onEditSession, onDeleteSession, onDeleteAllSessions, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onOuvrirMenu }) {
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   const journees = React.useMemo(
     () => journeesSuivi(releves, students, axesSuivi, null),
@@ -9604,6 +9704,12 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
         </button>
         <button onClick={() => onEditSession(s)} className="shrink-0" style={{ color: INK_SOFT }} title="Corriger cette séance">
           <Pencil size={15} />
+        </button>
+        <button
+          onClick={() => { if (window.confirm('Supprimer définitivement cette séance ?')) onDeleteSession(s.id); }}
+          className="shrink-0" style={{ color: INK_SOFT }} title="Supprimer cette séance"
+        >
+          <Trash2 size={15} />
         </button>
         {pilule(!!s.sentAt, () => onMarkSent([s.id], !s.sentAt))}
         {!byStudent && caseACocher(on, basculer)}
@@ -9880,6 +9986,16 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
           </button>
           {archiveOuverte && <div className="mt-3">{troisListes(archive, 'archive')}</div>}
         </div>
+      )}
+
+      {sessions && sessions.length > 1 && (
+        <button
+          onClick={() => { if (window.confirm('Supprimer définitivement toutes les séances enregistrées ?')) onDeleteAllSessions(); }}
+          className="w-full mt-6 rounded-xl border px-3 py-2 text-xs flex items-center justify-center gap-1.5"
+          style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
+        >
+          <Trash2 size={13} /> Supprimer toutes les séances enregistrées
+        </button>
       )}
     </div>
   );
