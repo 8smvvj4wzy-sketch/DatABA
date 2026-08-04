@@ -53,17 +53,19 @@ const NOMS = [
   'migrerReleves', 'migrerStudentsSuivi', 'migrerAxesSuivi',
   'grouperParJour', 'libelleJour', 'segmentAppareil', 'nomFichier', 'timeShort',
 ];
-const code = `const CRISIS = '#B3261E';\nconst MAX_SUIVIS = ${extraireLigne('MAX_SUIVIS')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, MAX_SUIVIS };`;
+const code = `const CRISIS = '#B3261E';\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
 // eslint-disable-next-line no-new-func
 const {
   DEFAULT_CRITERES_SUIVI, CRITERE_INCONNU, DEFAULT_SUIVIS,
   metaCritere, axeDe, memeJour, relevesDuJour, critereCourant,
   suiviDormant, segmentsJournee, lignesSuiviExport,
   migrerReleves, migrerStudentsSuivi, migrerAxesSuivi,
-  grouperParJour, libelleJour, segmentAppareil, nomFichier, timeShort, MAX_SUIVIS,
+  grouperParJour, libelleJour, segmentAppareil, nomFichier, timeShort, PASTILLE_PAVES_MAX,
 } = new Function(code)();
 
-t('la limite d\'axes vaut deux', MAX_SUIVIS, 2);
+/* Le nombre d'axes n'est plus borné : seule la pastille de la barre du bas
+   l'est, et c'est un plafond d'affichage. */
+t('la pastille montre au plus trois pavés', PASTILLE_PAVES_MAX, 3);
 t('migrerAxesSuivi replie sur les axes par défaut si rien n\'est stocké', migrerAxesSuivi(undefined), DEFAULT_SUIVIS);
 t('migrerAxesSuivi replie sur les axes par défaut si la liste est vide', migrerAxesSuivi([]), DEFAULT_SUIVIS);
 t('migrerAxesSuivi complète un axe sans critères', migrerAxesSuivi([{ id: 'x', nom: 'Test' }]), [{ id: 'x', nom: 'Test', criteres: [] }]);
