@@ -73,7 +73,7 @@ grammaire — seuls les tokens de surface (fond, carte, bordure, texte) basculen
 par variables CSS, jamais la structure.
 
 **Key Characteristics :**
-- Bleu accent unique, utilisé pour l'action primaire et l'état sélectionné — jamais en décoration.
+- Accent unique par thème (charbon neutre en clair, bleu en sombre), utilisé pour l'action primaire et l'état sélectionné — jamais en décoration.
 - Palette catégorielle froide (indigo, cyan, violet, teal, ambre, corail, lilas, ardoise) fixe entre les deux thèmes, pour que les courbes et pastilles de suivi restent lisibles sur les deux.
 - Structure plate par défaut : bordure 1px, pas d'ombre au repos.
 - Une seule famille par rôle : Space Grotesk (titres/boutons), IBM Plex Sans (texte), IBM Plex Mono (libellés courts, données).
@@ -83,7 +83,7 @@ par variables CSS, jamais la structure.
 Stratégie *Restrained* (mode Operate) : neutraux dominants, un seul accent qui porte l'action et la sélection.
 
 ### Primary
-- **Accent** (`#4566DE` clair / `#5B8CFF` sombre) : boutons primaires, sélection courante, focus. Texte associé : `accent-ink` (`#FFFFFF` clair / `#071021` sombre — toujours le sens qui garde le contraste). Le clair a été désaturé (~-30%) début 2026 : le bleu pur d'origine (`#2453FF`) lisait trop électrique sur le fond `paper`.
+- **Accent** (`#3A3A3A` clair / `#5B8CFF` sombre) : boutons primaires, sélection courante, focus. Texte associé : `accent-ink` (`#FFFFFF` clair / `#071021` sombre — toujours le sens qui garde le contraste). Le clair est passé du bleu pur d'origine (`#2453FF`, trop électrique sur `paper`) à un charbon neutre début 2026 — le sombre reste bleu, confirmé qu'il convient tel quel.
 
 ### Neutral
 - **Ink** (`#0E1B33` clair / `#E7ECF7` sombre) : texte principal.
@@ -95,6 +95,7 @@ Stratégie *Restrained* (mode Operate) : neutraux dominants, un seul accent qui 
 
 ### Alerte
 - **Crisis** (`#D7263D` clair / `#FF5470` sombre) : réservée aux boutons CRISE et aux marqueurs de crise. N'entre jamais dans la palette catégorielle.
+- **Color ABC** (`#3A3A3A` clair / `#7C5CFF` sombre) : réservée au bouton et aux marqueurs d'observation ABC. Assortie à l'accent en clair (même charbon), reste le violet catégoriel en sombre — token dédié pour ne pas lier l'identité ABC à un futur réglage de l'accent seul.
 
 ### Palette catégorielle (fixe, hors thème)
 Utilisée pour les guidances, les types de cotation, les fonctions de crise et les courbes de suivi — jamais recalculée par thème, choisie pour rester lisible sur les deux fonds.
@@ -105,7 +106,7 @@ Utilisée pour les guidances, les types de cotation, les fonctions de crise et l
 - **Ardoise** `#64748B` — réponse manquée / catégorie retirée ou inconnue.
 
 ### Named Rules
-**La Règle de l'Accent Seul.** Le bleu d'accent ne sert qu'à l'action primaire et à la sélection courante — jamais à la décoration, jamais dupliqué dans la palette catégorielle.
+**La Règle de l'Accent Seul.** L'accent ne sert qu'à l'action primaire et à la sélection courante — jamais à la décoration, jamais dupliqué dans la palette catégorielle. Sa teinte diffère par thème (charbon en clair, bleu en sombre) ; la règle porte sur son usage, pas sur sa couleur.
 **La Règle du Contraste par Thème.** Un fond coloré (accent, alerte, catégorie) s'accompagne toujours du token de texte prévu pour lui (`accent-ink`), jamais d'un blanc ou noir fixe : c'est ce qui a cassé la lisibilité de la première passe en thème sombre.
 
 ## Typography
@@ -186,7 +187,7 @@ car il ne porte jamais de texte.
 ## Do's and Don'ts
 
 ### Do:
-- **Do** réserver l'accent bleu à l'action primaire et à la sélection courante (Règle de l'Accent Seul).
+- **Do** réserver l'accent à l'action primaire et à la sélection courante (Règle de l'Accent Seul).
 - **Do** faire porter chaque fond coloré par son propre token de texte (`accent-ink`), jamais un blanc ou noir écrit en dur.
 - **Do** garder la palette catégorielle fixe entre les deux thèmes — elle code de l'information, pas une ambiance.
 - **Do** garder une seule famille de police par rôle (mode Operate : pas d'appariement display/corps ornemental).

@@ -31,8 +31,9 @@ const ACCENT_INK = 'var(--accent-ink)';
    opacité, calculé par thème (voir index.css). */
 const ACCENT_WASH = 'var(--accent-wash)';
 /* Couleur du bouton flottant ABC/observation, distincte de CRISIS pour ne
-   jamais se confondre avec l'alerte crise. */
-const COLOR_ABC = '#7C5CFF';
+   jamais se confondre avec l'alerte crise. Théme-réactive (voir index.css) :
+   charbon en clair comme l'accent, violet catégoriel en sombre. */
+const COLOR_ABC = 'var(--color-abc)';
 
 /* ==================== Palette catégorielle ====================
    Sert partout où plusieurs catégories doivent rester visuellement
