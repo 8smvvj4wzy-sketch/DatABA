@@ -15,12 +15,12 @@ disent, ils ne se lissent pas. Pas de reformulation de ce que je viens de dire.
 
 ## Architecture
 
-Tout tient dans `src/App.jsx` (~7 800 lignes). C'est assumé : un seul fichier à
+Tout tient dans `src/App.jsx` (~10 300 lignes). C'est assumé : un seul fichier à
 téléverser, pas d'outillage local. Ne pas proposer de le découper en modules
 sans que je le demande.
 
 - `AbaApp` : état global, persistance, navigation
-- Panneaux du tiroir latéral : `PanneauAteliers`, `PanneauPersonnes`, etc.
+- Panneaux du tiroir latéral : `PanneauEmploiDuTemps`, `PanneauPersonnes`, etc.
 - Écrans d'onglets : `SuiviScreen`, `SessionScreen`, `ExportScreen`
 - Widgets de cotation : un par mode
 

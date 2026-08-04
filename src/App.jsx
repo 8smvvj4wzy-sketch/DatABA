@@ -842,6 +842,21 @@ function fromLocalInput(value) {
   return isNaN(d) ? null : d.toISOString();
 }
 
+/* Champs <input type="time"> de l'éditeur d'une journée de suivi continu : la
+   date est celle de la journée qu'on corrige, seule l'heure se saisit — un
+   relevé déplacé sur un autre jour disparaîtrait de la feuille ouverte. */
+function heureInput(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function isoDepuisJourHeure(jour, hm) {
+  if (!jour || !hm) return null;
+  const d = new Date(`${jour}T${hm}`);
+  return isNaN(d) ? null : d.toISOString();
+}
+
 /* Compteur et chronomètre auxiliaires : une donnée à part de la cotation
    elle-même, dans la même forme sur une entrée de séance et sur une fiche
    crise/ABC. `valideA` distingue « pas encore mesuré » (null) de « mesuré à
@@ -1334,10 +1349,11 @@ function crisisIntervals(session, crises, stepMinutes, studentId) {
    atelier. Un relevé n'a pas de fin — il vaut jusqu'au suivant, comme un
    interrupteur, jusqu'à la fin de sa journée ou une clôture explicite.
 
-   Une personne peut être suivie sur plusieurs axes en parallèle (état
-   émotionnel, engagement…), chacun avec sa propre liste de critères
-   paramétrables — deux au plus, cf. MAX_SUIVIS, une limite d'affichage, pas de
-   modèle : la barre du bas ne tiendrait pas plus.
+   Les axes forment une bibliothèque : on en crée autant qu'il en faut (état
+   émotionnel, engagement, douleur…), chacun avec sa propre liste de critères
+   paramétrables, et chaque personne active ceux qui la concernent. Le nombre
+   n'est plus plafonné ; c'est l'affichage qui s'adapte, la pastille de la barre
+   du bas se bornant à PASTILLE_PAVES_MAX pavés suivis d'un compteur.
 
    Le suivi est dormant tant qu'aucun relevé n'a été noté aujourd'hui : le
    dernier relevé d'un autre jour ne compte pas, contrairement à la version
@@ -1360,9 +1376,10 @@ const DEFAULT_SUIVIS = [
   { id: 'principal', nom: 'Suivi continu', criteres: DEFAULT_CRITERES_SUIVI },
 ];
 
-/* Limite d'affichage, pas de modèle : la barre du bas ne tient pas plus de
-   deux axes lisiblement. */
-const MAX_SUIVIS = 2;
+/* Le nombre d'axes n'est pas borné ; la pastille de la barre du bas, si : au
+   delà, les pavés deviennent illisibles et la barre mange l'écran. Le reste se
+   lit dans la feuille de choix, ouverte au tap. */
+const PASTILLE_PAVES_MAX = 3;
 
 /* Repli pour un critère renommé ou supprimé de la configuration : les relevés
    passés qui le portaient restent affichés, sans jamais ressusciter la clé
@@ -1433,6 +1450,92 @@ function segmentsJournee(releves, studentId, suiviId, ref, maintenant) {
     segments.push({ debut, fin, critere: r.critere, ms: fin != null ? fin - debut : null });
   }
   return segments;
+}
+
+/* Jour local d'un horodatage, en « AAAA-MM-JJ » : la clé de regroupement des
+   journées de suivi continu, et l'ancre du champ heure de leur éditeur. Pas
+   `toISOString().slice(0, 10)`, qui bascule de jour en fin de soirée. */
+function jourLocal(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/* Durée d'un relevé, en ms, jusqu'au relevé suivant du même couple
+   personne/axe — une clôture borne le segment comme n'importe quel successeur.
+   `null` tant qu'aucun successeur n'existe : on ne devine pas une durée qui n'a
+   pas encore été bornée, même principe que segmentsJournee.
+
+   C'est ce calcul qu'emprunte la fiche crise ouverte par un relevé « crise » :
+   sa durée est l'écart entre l'appui et le passage à l'état suivant. */
+function dureeReleve(releves, releveId) {
+  const source = (releves || []).find((r) => r && r.id === releveId);
+  if (!source || source.fin) return null;
+  const debut = new Date(source.timestamp).getTime();
+  if (Number.isNaN(debut)) return null;
+  let fin = null;
+  (releves || []).forEach((r) => {
+    if (!r || r.id === releveId) return;
+    if (r.studentId !== source.studentId || r.suiviId !== source.suiviId) return;
+    const t = new Date(r.timestamp).getTime();
+    if (Number.isNaN(t) || t <= debut) return;
+    if (fin == null || t < fin) fin = t;
+  });
+  return fin == null ? null : fin - debut;
+}
+
+/* Journées de suivi continu, une entrée par personne × axe × jour : la maille
+   à laquelle l'écran Export les liste, les coche et les archive. Une journée
+   est envoyée quand tous ses relevés le sont — un relevé ajouté après coup la
+   fait ressortir du lot déjà transmis, ce qui est le comportement voulu. */
+function journeesSuivi(releves, students, suivis, studentFilter) {
+  const keep = (sid) => !studentFilter || studentFilter.includes(sid);
+  const index = {};
+  const ordre = [];
+  (releves || []).forEach((r) => {
+    if (!r || !keep(r.studentId)) return;
+    const d = new Date(r.timestamp);
+    if (Number.isNaN(d.getTime())) return;
+    const jour = jourLocal(d);
+    const cle = `${r.studentId}|${r.suiviId}|${jour}`;
+    if (!index[cle]) {
+      index[cle] = {
+        cle,
+        studentId: r.studentId,
+        suiviId: r.suiviId,
+        jour,
+        date: new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString(),
+        initials: ((students || []).find((s) => s.id === r.studentId) || {}).initials || '?',
+        nomAxe: (axeDe(suivis, r.suiviId) || {}).nom || 'Suivi retiré',
+        releves: [],
+      };
+      ordre.push(index[cle]);
+    }
+    index[cle].releves.push(r);
+  });
+  ordre.forEach((j) => {
+    j.releves.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    j.envoye = j.releves.every((r) => !!r.sentAt);
+  });
+  return ordre.sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
+/* Les crises n'ont porté un statut d'envoi qu'à partir de l'archive de l'écran
+   Export. Sans reprise, toutes les fiches antérieures se présenteraient comme
+   restant à transmettre. Une seule reprise est certaine : une crise rattachée à
+   une séance déjà envoyée est partie avec son rapport — l'export l'y incluait
+   systématiquement. Les fiches hors séance restent à transmettre : leur sort
+   n'est pas déductible, et l'affirmer serait inventer une transmission.
+   Idempotente : un `sentAt` déjà posé n'est jamais réécrit. */
+function migrerEnvoisCrises(crises, sessions) {
+  const envoyees = new Map();
+  (sessions || []).forEach((s) => { if (s && s.sentAt) envoyees.set(s.id, s.sentAt); });
+  return (crises || []).map((c) => {
+    if (!c || c.sentAt !== undefined) return c;
+    const quand = c.sessionId ? envoyees.get(c.sessionId) : null;
+    return { ...c, sentAt: quand || null };
+  });
 }
 
 /* Lignes de la feuille d'export « Suivi continu », sans en-tête. Une ligne par
@@ -1572,13 +1675,54 @@ function planifierJour(emploiDuTemps, ateliers, sessions, maintenant) {
   return { jour, total: duJour.length, restants };
 }
 
+/* ==================== Personnes prévues, par jour ====================
+   Un même atelier — le sport, typiquement — n'accueille pas le même groupe
+   selon le jour. Plutôt qu'une liste par case de l'emploi du temps, qu'il
+   faudrait ressaisir même quand rien ne change, l'atelier garde sa liste
+   commune (`usualStudentIds`) et ne porte une variante que pour les jours qui
+   s'en écartent :
+
+       atelier.personnesParJour = { "2": ["sid1", "sid2"] }   // clé = getDay()
+
+   Clé absente ⇒ repli sur la liste commune. Le champ n'existe pas tant que
+   personne ne s'en sert : rien n'alourdit le paramétrage de ceux qui n'en ont
+   pas besoin. Les objectifs, eux, restent communs à l'atelier — les faire
+   varier par jour doublerait le réglage sans besoin exprimé. */
+function personnesPrevues(atelier, jour) {
+  if (!atelier) return [];
+  const variante = jour != null && atelier.personnesParJour ? atelier.personnesParJour[String(jour)] : null;
+  return Array.isArray(variante) ? variante : (atelier.usualStudentIds || []);
+}
+
+/* Toutes les personnes qu'un atelier accueille, un jour ou l'autre. C'est
+   l'ensemble dont il faut régler les objectifs : quelqu'un qui ne vient que le
+   mardi ne figure pas dans la liste commune. */
+function personnesToutesPrevues(atelier) {
+  if (!atelier) return [];
+  const vues = new Set(atelier.usualStudentIds || []);
+  Object.values(atelier.personnesParJour || {}).forEach((liste) => {
+    (Array.isArray(liste) ? liste : []).forEach((sid) => vues.add(sid));
+  });
+  return Array.from(vues);
+}
+
+/* Jours pour lesquels l'atelier porte une liste propre, parmi ceux où il a
+   lieu. Une variante posée sur un jour déprogrammé depuis ne compte pas : elle
+   dort dans les données sans rien décrire. */
+function joursAjustes(atelier, jours) {
+  const variantes = (atelier && atelier.personnesParJour) || {};
+  return (jours || []).filter((k) => Array.isArray(variantes[String(k)]));
+}
+
 /* Résumé d'un atelier pour sa ligne repliée dans PanneauEmploiDuTemps : les
-   jours où il a lieu, et l'effectif de sa classe habituelle. */
+   jours où il a lieu, l'effectif de sa classe habituelle, et les jours qui
+   s'en écartent. */
 function resumeAtelier(atelier, emploiDuTemps, students) {
   const jours = JOURS.filter((j) => ((emploiDuTemps && emploiDuTemps[String(j.k)]) || []).includes(atelier.id)).map((j) => j.k);
   const studentIds = (atelier.usualStudentIds || []).filter((sid) => (students || []).some((s) => s.id === sid));
-  const nbObjectifs = studentIds.reduce((n, sid) => n + (((atelier.usualObjectives || {})[sid] || []).length), 0);
-  return { jours, nbPersonnes: studentIds.length, nbObjectifs };
+  const tous = personnesToutesPrevues(atelier).filter((sid) => (students || []).some((s) => s.id === sid));
+  const nbObjectifs = tous.reduce((n, sid) => n + (((atelier.usualObjectives || {})[sid] || []).length), 0);
+  return { jours, nbPersonnes: studentIds.length, nbObjectifs, joursAjustes: joursAjustes(atelier, jours) };
 }
 
 /* ==================== Regroupement par jour ====================
@@ -3020,8 +3164,8 @@ function AbaApp() {
   const [guidances, setGuidances] = useState(DEFAULT_GUIDANCE);
   const [objectiveTemplates, setObjectiveTemplates] = useState([]);
   const [abcOptions, setAbcOptions] = useState(DEFAULT_ABC);
-  /* Axes de suivi continu et leurs critères, paramétrables — deux axes au
-     plus (MAX_SUIVIS), sur le modèle des réponses ABC. */
+  /* Bibliothèque des axes de suivi continu et de leurs critères, sans limite
+     de nombre : chaque personne active ceux qui la concernent. */
   const [axesSuivi, setAxesSuivi] = useState(DEFAULT_SUIVIS);
   /* Nom de cet appareil. Il voyage dans chaque fichier produit et se retrouve
      dans son nom : sans lui, un dossier de sauvegardes ne dit pas de quelle
@@ -3034,6 +3178,9 @@ function AbaApp() {
      `suiviId` sur chaque relevé. */
   const [releves, setReleves] = useState([]);
   const [choixSuivi, setChoixSuivi] = useState(null); // personne dont on choisit le critère
+  /* Journée de suivi continu ouverte en correction : { studentId, suiviId, jour }.
+     Atteignable depuis la feuille de choix comme depuis l'écran Export. */
+  const [journeeSuivi, setJourneeSuivi] = useState(null);
 
   const [activeSession, setActiveSession] = useState(null);
   /* Plusieurs crises ou observations peuvent être ouvertes en même temps :
@@ -3282,7 +3429,7 @@ function AbaApp() {
       }
     }
     setSessions(loadedSessions);
-    setCrises(loadedCrises);
+    setCrises(migrerEnvoisCrises(loadedCrises, loadedSessions));
     setReleves(loadedReleves);
 
     const act = await store.get('aba:active');
@@ -3530,15 +3677,23 @@ function AbaApp() {
      jour de la mémorisation perd sa liste — et l'ajouter en pleine séance
      obligerait à repasser par l'écran de configuration. */
   const setAtelierGroup = (id, config) =>
-    setAteliers((a) => a.map((x) => (x.id === id
-      ? {
-          ...x,
-          usualStudentIds: config.studentIds,
-          usualObjectives: { ...(x.usualObjectives || {}), ...config.objectives },
-          favoriteObjectiveIds: config.favorites,
-          knownObjectiveIds: Array.from(new Set([...(x.knownObjectiveIds || []), ...(config.known || [])])),
-        }
-      : x)));
+    setAteliers((a) => a.map((x) => {
+      if (x.id !== id) return x;
+      /* Si ce jour-là porte déjà une liste propre, c'est elle que la
+         mémorisation met à jour : mémoriser un mardi ne doit pas écraser le
+         réglage commun aux autres jours. */
+      const jour = String(new Date().getDay());
+      const ajuste = x.personnesParJour && Array.isArray(x.personnesParJour[jour]);
+      return {
+        ...x,
+        ...(ajuste
+          ? { personnesParJour: { ...x.personnesParJour, [jour]: config.studentIds } }
+          : { usualStudentIds: config.studentIds }),
+        usualObjectives: { ...(x.usualObjectives || {}), ...config.objectives },
+        favoriteObjectiveIds: config.favorites,
+        knownObjectiveIds: Array.from(new Set([...(x.knownObjectiveIds || []), ...(config.known || [])])),
+      };
+    }));
 
   /* Réglage à froid d'un atelier, depuis son propre panneau — distinct de
      setAtelierGroup (mémorisation cumulative depuis une séance réelle). Ici
@@ -3552,6 +3707,21 @@ function AbaApp() {
     });
   const setAtelierPersonnes = (atelierId, studentIds) =>
     setAteliers((a) => a.map((x) => (x.id === atelierId ? { ...x, usualStudentIds: studentIds } : x)));
+  /* Liste propre à un jour. `studentIds === null` supprime la variante : le
+     jour repasse sous le réglage commun, et le champ disparaît des données
+     quand plus aucun jour ne s'en écarte. */
+  const setAtelierPersonnesJour = (atelierId, jour, studentIds) =>
+    setAteliers((a) => a.map((x) => {
+      if (x.id !== atelierId) return x;
+      const variantes = { ...(x.personnesParJour || {}) };
+      if (studentIds === null) delete variantes[String(jour)];
+      else variantes[String(jour)] = studentIds;
+      if (!Object.keys(variantes).length) {
+        const { personnesParJour, ...reste } = x;
+        return reste;
+      }
+      return { ...x, personnesParJour: variantes };
+    }));
   const setAtelierObjectifs = (atelierId, studentId, objectiveIds) =>
     setAteliers((a) => a.map((x) => (x.id === atelierId
       ? {
@@ -3605,7 +3775,7 @@ function AbaApp() {
       format: 'aba-config',
       version: 1,
       exportedAt: new Date().toISOString(),
-      ateliers: ateliers.map(({ usualStudentIds, usualObjectives, favoriteObjectiveIds, knownObjectiveIds, ...a }) => a),
+      ateliers: ateliers.map(({ usualStudentIds, usualObjectives, favoriteObjectiveIds, knownObjectiveIds, personnesParJour, ...a }) => a),
       emploiDuTemps,
       intervenants,
       guidances,
@@ -3661,7 +3831,7 @@ function AbaApp() {
       }));
     }
     if (Array.isArray(d.axesSuivi) && d.axesSuivi.length) {
-      setAxesSuivi((cur) => [...cur, ...d.axesSuivi.filter((a) => !cur.some((x) => x.nom === a.nom))].slice(0, MAX_SUIVIS));
+      setAxesSuivi((cur) => [...cur, ...d.axesSuivi.filter((a) => !cur.some((x) => x.nom === a.nom))]);
     }
     if (d.appareil && !appareil.trim()) setAppareil(d.appareil);
     notify('Configuration importée');
@@ -3830,8 +4000,17 @@ function AbaApp() {
   /* --- reprise d'une séance enregistrée pour correction --- */
   const editSession = (s) => setActiveSession({ ...s, isEdit: true });
 
+  /* Statut d'envoi sur les trois collections, pas seulement les séances : sans
+     lui, crises et journées de suivi ne pourraient pas se ranger dans
+     l'archive de l'écran Export. */
   const markSent = (ids, sent = true) =>
     setSessions((list) => list.map((s) => (ids.includes(s.id) ? { ...s, sentAt: sent ? new Date().toISOString() : null } : s)));
+
+  const markCrisesSent = (ids, sent = true) =>
+    setCrises((list) => list.map((c) => (ids.includes(c.id) ? { ...c, sentAt: sent ? new Date().toISOString() : null } : c)));
+
+  const markRelevesSent = (ids, sent = true) =>
+    setReleves((list) => list.map((r) => (ids.includes(r.id) ? { ...r, sentAt: sent ? new Date().toISOString() : null } : r)));
 
   const deleteAllSessions = () => {
     setSessions([]);
@@ -3947,6 +4126,29 @@ function AbaApp() {
   };
 
   /* --- suivi continu --- */
+  /* Un axe supprimé de la bibliothèque doit disparaître des personnes qui
+     l'avaient activé : avec deux axes figés le résidu ne se voyait pas, avec
+     une bibliothèque il laisserait des activations fantômes. */
+  const majAxesSuivi = (axes) => {
+    setAxesSuivi(axes);
+    const vivants = new Set(axes.map((a) => a.id));
+    setStudents((l) => l.map((s) => {
+      const actifs = s.suivisActifs || [];
+      const restants = actifs.filter((id) => vivants.has(id));
+      return restants.length === actifs.length ? s : { ...s, suivisActifs: restants };
+    }));
+  };
+
+  /* Nouveau suivi créé depuis la fiche d'une personne : il entre dans la
+     bibliothèque, il est activé pour elle, et son panneau s'ouvre dessus pour
+     qu'on en définisse les critères dans la foulée. */
+  const creerSuiviPour = (studentId) => {
+    const axe = { id: uid(), nom: 'Nouveau suivi', criteres: [] };
+    setAxesSuivi((l) => [...l, axe]);
+    setStudents((l) => l.map((s) => (s.id === studentId ? { ...s, suivisActifs: [...(s.suivisActifs || []), axe.id] } : s)));
+    ouvrirEcran('suivicontinu', { axe: axe.id });
+  };
+
   const toggleAxeSuivi = (studentId, suiviId) =>
     setStudents((l) => l.map((x) => {
       if (x.id !== studentId) return x;
@@ -3966,15 +4168,15 @@ function AbaApp() {
      la journée en cours — voir l'état dormant. Le critère de clé `crise` crée
      en plus une fiche crise minimale dans le tableau habituel, quel que soit
      l'axe — la même fiche que celle du bouton CRISE, pas une seconde série.
-     Elle est enregistrée directement, sans chronomètre : la durée reste à
-     renseigner à la main depuis l'écran Export.
 
-     Le repère visuel signalant qu'une telle fiche reste à compléter n'est pas
-     tranché : l'indicateur `aCompleter` est posé sur la fiche, rien ne
-     l'affiche encore. */
+     Elle est enregistrée sans chronomètre, mais plus sans durée : elle garde
+     le lien vers son relevé (`releveId`) et emprunte au suivi continu l'écart
+     jusqu'au relevé suivant, recalé par l'effet plus bas. `dureeAuto` tombe dès
+     qu'on saisit la durée à la main depuis l'écran Export. */
   const noterSuivi = (studentId, suiviId, critere) => {
     const maintenant = new Date().toISOString();
-    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp: maintenant, critere, source: 'pastille' }]);
+    const releveId = uid();
+    setReleves((l) => [...l, { id: releveId, studentId, suiviId, timestamp: maintenant, critere, source: 'pastille' }]);
     const st = students.find((s) => s.id === studentId);
     const nom = st ? st.initials : '';
     if (critere === 'crise') {
@@ -3995,6 +4197,8 @@ function AbaApp() {
           comportementTags: [],
           consequenceTags: [],
           durationMs: 0,
+          releveId,
+          dureeAuto: true,
           origine: 'suivi',
           aCompleter: true,
         },
@@ -4014,10 +4218,50 @@ function AbaApp() {
     setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp: new Date().toISOString(), critere: null, fin: true, source: 'cloture' }]);
   };
 
+  /* Correction après coup — une cotation oubliée, une heure fausse. Aucune
+     durée n'étant stockée, tout ce qui en dérive (frise, feuille d'export,
+     fiches crise) se recale de lui-même : il n'y a qu'à toucher aux relevés.
+     `sentAt` est effacé à la modification : une journée corrigée ressort du lot
+     déjà transmis, ce qui est bien le but. */
+  const ajouterReleve = (studentId, suiviId, timestamp, critere, fin = false) =>
+    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp, critere, fin, source: 'manuel' }]);
+
+  const modifierReleve = (id, maj) =>
+    setReleves((l) => l.map((r) => (r.id === id ? { ...r, ...maj, sentAt: null } : r)));
+
+  /* Un relevé supprimé qui portait une fiche crise : la fiche reste, mais elle
+     se détache du calcul automatique. Sa dernière durée connue est une donnée
+     relevée — la remettre à zéro serait en perdre une, la laisser suivre un
+     relevé disparu serait en inventer une. */
+  const supprimerReleve = (id) => {
+    setCrises((list) => list.map((c) => (c.releveId === id ? { ...c, releveId: null, dureeAuto: false } : c)));
+    setReleves((l) => l.filter((r) => r.id !== id));
+  };
+
+  /* Recalage des fiches crise nées d'un relevé : leur durée est l'écart
+     jusqu'au relevé suivant du même axe, leur horodatage celui du relevé.
+     Tant que `dureeAuto` tient, corriger le suivi corrige la fiche. */
+  useEffect(() => {
+    setCrises((list) => {
+      let change = false;
+      const next = list.map((c) => {
+        if (!c.dureeAuto || !c.releveId) return c;
+        const source = releves.find((r) => r.id === c.releveId);
+        if (!source) return c;
+        const ms = dureeReleve(releves, c.releveId);
+        const duree = ms == null ? 0 : ms;
+        if (duree === c.durationMs && source.timestamp === c.date) return c;
+        change = true;
+        return { ...c, durationMs: duree, date: source.timestamp };
+      });
+      return change ? next : list;
+    });
+  }, [releves]);
+
   /* Une pastille par personne suivie sur au moins un axe. Les autres n'en ont
      aucune : rien n'apparaît, rien n'encombre. Chaque pastille porte un pavé
-     par axe actif — avec deux axes, seule la couleur reste lisible, le
-     libellé se lit dans la feuille de choix. */
+     par axe actif — dès qu'il y en a plus d'un, seule la couleur reste lisible,
+     le libellé se lit dans la feuille de choix. */
   const pastillesSuivi = students
     .filter((s) => (s.suivisActifs || []).length > 0)
     .map((st) => {
@@ -4041,8 +4285,9 @@ function AbaApp() {
         return (
           <PanneauEmploiDuTemps
             ateliers={ateliers} students={students} onAdd={addAtelier} onRename={renameAtelier} onRemove={removeAtelier}
-            emploiDuTemps={emploiDuTemps} onSetEmploiDuTemps={setEmploiDuTemps}
+            emploiDuTemps={emploiDuTemps}
             onBasculerJour={basculerAtelierJour} onSetPersonnes={setAtelierPersonnes}
+            onSetPersonnesJour={setAtelierPersonnesJour}
             onSetObjectifs={setAtelierObjectifs} onToggleFavori={toggleAtelierFavori}
             onOuvrirPersonnes={() => ouvrirEcran('personnes')}
             onOuvrirPersonne={(sid) => ouvrirEcran('personnes', { personne: sid })}
@@ -4055,6 +4300,7 @@ function AbaApp() {
             premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
             axesSuivi={axesSuivi} onToggleAxeSuivi={toggleAxeSuivi} onToggleRenforcement={toggleSuiviRenforcement}
+            onCreerSuivi={creerSuiviPour} onOuvrirSuivis={() => ouvrirEcran('suivicontinu')}
             addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective}
             duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase}
             onSaveTemplate={saveTemplate}
@@ -4092,7 +4338,7 @@ function AbaApp() {
       case 'abc':
         return <PanneauAbc abcOptions={abcOptions} onSetAbc={setAbcOptions} />;
       case 'suivicontinu':
-        return <PanneauSuiviContinu axes={axesSuivi} onSetAxes={setAxesSuivi} />;
+        return <PanneauSuiviContinu axes={axesSuivi} students={students} onSetAxes={majAxesSuivi} focus={focusEcran} />;
       case 'suivi':
         return (
           <SuiviScreen
@@ -4139,11 +4385,17 @@ function AbaApp() {
           />
         );
       case 'export':
+        /* Corriger une séance la rouvre en cotation : sans le changement
+           d'onglet, l'appui depuis Export n'aurait aucun effet visible. */
         return (
           <ExportScreen
             sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants}
             guidances={guidances} releves={releves} axesSuivi={axesSuivi} appareil={appareil} notify={notify}
-            onEditCrisis={editCrisis} onMarkSent={markSent} onExportManager={exportManager}
+            onEditCrisis={editCrisis} onMarkSent={markSent}
+            onMarkCrisesSent={markCrisesSent} onMarkRelevesSent={markRelevesSent}
+            onEditSession={(s) => { editSession(s); allerA('session'); }}
+            onOuvrirJournee={(j) => setJourneeSuivi({ studentId: j.studentId, suiviId: j.suiviId, jour: j.jour })}
+            onExportManager={exportManager}
             onOuvrirMenu={ouvrirMenu}
           />
         );
@@ -4254,6 +4506,11 @@ function AbaApp() {
           <div className="flex flex-wrap gap-1.5 mb-2 justify-center">
             {pastillesSuivi.map((p) => {
               const unAxe = p.blocs.length === 1;
+              /* Au delà de PASTILLE_PAVES_MAX pavés, un compteur remplace le
+                 reste : la barre garde sa hauteur, et la feuille de choix
+                 montre de toute façon les axes au complet. */
+              const visibles = p.blocs.slice(0, PASTILLE_PAVES_MAX);
+              const caches = p.blocs.length - visibles.length;
               return (
                 <button
                   key={p.st.id}
@@ -4265,7 +4522,7 @@ function AbaApp() {
                     <Activity size={12} />
                     {p.st.initials}
                   </span>
-                  {p.blocs.map((b) => (
+                  {visibles.map((b) => (
                     <span
                       key={b.axe.id}
                       title={`${b.axe.nom} — ${b.meta ? b.meta.l : 'non démarré'}`}
@@ -4278,6 +4535,12 @@ function AbaApp() {
                       {unAxe ? (b.meta ? b.meta.l : 'à noter') : ''}
                     </span>
                   ))}
+                  {caches > 0 && (
+                    <span className="px-1.5 py-1.5 flex items-center" style={{ color: INK_SOFT, fontFamily: F_MONO }}
+                      title={`${caches} autre${caches > 1 ? 's' : ''} suivi${caches > 1 ? 's' : ''}`}>
+                      +{caches}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -4458,26 +4721,44 @@ function AbaApp() {
                         </button>
                       ))}
                     </div>
-                    {courant && (
+                    <div className="flex items-center gap-2 mt-2">
+                      {courant && (
+                        <button
+                          onClick={() => cloturerSuivi(st.id, axe.id)}
+                          className="flex-1 rounded-2xl py-2.5 text-sm border"
+                          style={{ borderColor: BORDER, color: INK_SOFT, fontFamily: F_DISPLAY }}
+                        >
+                          Clôturer la journée
+                        </button>
+                      )}
                       <button
-                        onClick={() => cloturerSuivi(st.id, axe.id)}
-                        className="w-full mt-2 rounded-2xl py-2.5 text-sm border"
+                        onClick={() => { setChoixSuivi(null); setJourneeSuivi({ studentId: st.id, suiviId: axe.id, jour: jourLocal(Date.now()) }); }}
+                        className="flex-1 rounded-2xl py-2.5 text-sm border flex items-center justify-center gap-1.5"
                         style={{ borderColor: BORDER, color: INK_SOFT, fontFamily: F_DISPLAY }}
                       >
-                        Clôturer la journée
+                        <Pencil size={13} /> Corriger la journée
                       </button>
-                    )}
+                    </div>
                   </div>
                 );
               })}
               <p className="text-xs mt-1" style={{ color: INK_SOFT }}>
                 Un critère vaut jusqu'au suivant ou jusqu'à la clôture.
-                « Crise » crée en plus une fiche crise à compléter depuis l'écran Export.
+                « Crise » crée en plus une fiche crise, dont la durée court jusqu'au critère suivant.
               </p>
             </div>
           </div>
         );
       })()}
+
+      {journeeSuivi && (
+        <FeuilleJourneeSuivi
+          cible={journeeSuivi}
+          releves={releves} students={students} axesSuivi={axesSuivi}
+          onAjouter={ajouterReleve} onModifier={modifierReleve} onSupprimer={supprimerReleve}
+          onClose={() => setJourneeSuivi(null)}
+        />
+      )}
 
       {crisis && (
         <CrisisOverlay
@@ -4652,40 +4933,42 @@ function ChangePinModal({ security, onSave, onClose }) {
 
 /* Ateliers et semaine type dans un seul écran : deux vues qui se
    consultaient déjà côte à côte à la création d'une séance (l'atelier, puis
-   qui doit s'y trouver) n'avaient pas de raison d'être séparées ici. */
+   qui doit s'y trouver) n'avaient pas de raison d'être séparées ici.
+
+   Un seul endroit règle désormais la semaine : les puces Jours de la fiche
+   atelier. Le bloc « Semaine type », qui doublait ce réglage jour par jour,
+   n'apportait plus que l'ordre des ateliers dans la journée ; cet ordre suit à
+   présent celui dans lequel les puces ont été cochées. */
 function PanneauEmploiDuTemps({
-  ateliers, students, onAdd, onRename, onRemove, emploiDuTemps, onSetEmploiDuTemps,
-  onBasculerJour, onSetPersonnes, onSetObjectifs, onToggleFavori, onOuvrirPersonnes, onOuvrirPersonne,
+  ateliers, students, onAdd, onRename, onRemove, emploiDuTemps,
+  onBasculerJour, onSetPersonnes, onSetPersonnesJour, onSetObjectifs, onToggleFavori,
+  onOuvrirPersonnes, onOuvrirPersonne,
 }) {
   const [nom, setNom] = useState('');
   const [openId, setOpenId] = useState(null);
-  const [jourActif, setJourActif] = useState(new Date().getDay());
-  const [duplicationOuverte, setDuplicationOuverte] = useState(false);
+  /* Jour dont on règle les personnes dans la fiche dépliée : `null` = le
+     réglage commun à tous les jours. Remis à `null` en changeant d'atelier —
+     un jour sélectionné n'a de sens que pour l'atelier qu'on regarde. */
+  const [jourPersonnes, setJourPersonnes] = useState(null);
   const ajouter = () => { if (nom.trim()) { onAdd(nom.trim()); setNom(''); } };
 
-  const idsDuJour = emploiDuTemps[String(jourActif)] || [];
-  const ateliersDuJourActif = idsDuJour.map((id) => ateliers.find((a) => a.id === id)).filter(Boolean);
-  const absents = ateliers.filter((a) => !idsDuJour.includes(a.id));
-
-  const majJour = (ids) => onSetEmploiDuTemps({ ...emploiDuTemps, [String(jourActif)]: ids });
-  const reordonner = (liste) => majJour(liste.map((a) => a.id));
-  const ajouterAuJour = (id) => majJour([...idsDuJour, id]);
-  const retirerDuJour = (id) => majJour(idsDuJour.filter((x) => x !== id));
-  const dupliquerVers = (versJour) => {
-    onSetEmploiDuTemps({ ...emploiDuTemps, [String(versJour)]: idsDuJour });
-    setDuplicationOuverte(false);
+  const deplier = (id) => {
+    setOpenId((prec) => (prec === id ? null : id));
+    setJourPersonnes(null);
   };
 
   const togglePersonne = (atelier, student) => {
-    const actuels = atelier.usualStudentIds || [];
-    if (actuels.includes(student.id)) {
-      onSetPersonnes(atelier.id, actuels.filter((id) => id !== student.id));
-      return;
-    }
-    onSetPersonnes(atelier.id, [...actuels, student.id]);
+    const actuels = personnesPrevues(atelier, jourPersonnes);
+    const suivants = actuels.includes(student.id)
+      ? actuels.filter((id) => id !== student.id)
+      : [...actuels, student.id];
+    if (jourPersonnes == null) onSetPersonnes(atelier.id, suivants);
+    else onSetPersonnesJour(atelier.id, jourPersonnes, suivants);
     // Une personne nouvellement cochée arrive avec ses objectifs par défaut —
-    // mémorisés pour cet atelier, à défaut prioritaires, à défaut tous.
-    if (!(atelier.usualObjectives && atelier.usualObjectives[student.id])) {
+    // mémorisés pour cet atelier, à défaut prioritaires, à défaut tous. Les
+    // objectifs restent communs à l'atelier : les faire varier par jour
+    // doublerait le paramétrage pour un besoin qui ne s'est pas présenté.
+    if (!actuels.includes(student.id) && !(atelier.usualObjectives && atelier.usualObjectives[student.id])) {
       onSetObjectifs(atelier.id, student.id, objectifsParDefaut(student, atelier, 'atelier'));
     }
   };
@@ -4699,7 +4982,7 @@ function PanneauEmploiDuTemps({
 
   return (
     <div>
-      <SectionTitle sub="Les groupes dans lesquels se déroulent les séances, et la semaine type.">
+      <SectionTitle sub="Les groupes dans lesquels se déroulent les séances, les jours où ils ont lieu et les personnes qu'ils accueillent.">
         Ateliers
       </SectionTitle>
       <Card className="mb-4">
@@ -4717,11 +5000,12 @@ function PanneauEmploiDuTemps({
               const open = openId === a.id;
               return (
                 <div key={a.id} className="rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
-                  <button className="w-full flex items-center justify-between" onClick={() => setOpenId(open ? null : a.id)}>
+                  <button className="w-full flex items-center justify-between" onClick={() => deplier(a.id)}>
                     <span className="text-left min-w-0">
                       <span className="block font-semibold text-sm truncate" style={{ fontFamily: F_DISPLAY }}>{a.name}</span>
                       <span className="block text-xs" style={{ color: INK_SOFT }}>
                         {libellesJours || 'Aucun jour programmé'} · {resume.nbPersonnes} personne{resume.nbPersonnes !== 1 ? 's' : ''} · {resume.nbObjectifs} objectif{resume.nbObjectifs !== 1 ? 's' : ''}
+                        {resume.joursAjustes.length > 0 && ` · ${resume.joursAjustes.length} jour${resume.joursAjustes.length > 1 ? 's' : ''} ajusté${resume.joursAjustes.length > 1 ? 's' : ''}`}
                       </span>
                     </span>
                     <ChevronRight size={18} style={{ color: INK_SOFT, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} className="shrink-0" />
@@ -4750,15 +5034,57 @@ function PanneauEmploiDuTemps({
                             </Btn>
                           </div>
                         ) : (
-                          <div className="flex flex-wrap gap-1.5">
-                            {students.map((s) => (
-                              <Chip key={s.id} label={s.initials} on={(a.usualStudentIds || []).includes(s.id)} onClick={() => togglePersonne(a, s)} />
-                            ))}
-                          </div>
+                          <>
+                            {/* Un même atelier n'accueille pas toujours les mêmes personnes
+                                selon le jour. Tant qu'aucun jour n'est ajusté, il n'y a
+                                qu'une liste et rien de plus à régler ; un jour ajusté part
+                                d'une copie de la liste commune et s'en détache. */}
+                            {/* Libellés en toutes lettres, là où la rangée
+                                « Jours » juste au-dessus est en deux lettres :
+                                deux rangées de puces identiques à quelques
+                                pixels l'une de l'autre se confondent. */}
+                            {resume.jours.length > 1 && (
+                              <div className="flex flex-wrap gap-1.5 mb-2">
+                                <Chip label="Tous les jours" on={jourPersonnes == null} onClick={() => setJourPersonnes(null)} />
+                                {JOURS.filter((j) => resume.jours.includes(j.k)).map((j) => (
+                                  <Chip
+                                    key={j.k}
+                                    label={`${j.label}${resume.joursAjustes.includes(j.k) ? ' •' : ''}`}
+                                    on={jourPersonnes === j.k}
+                                    onClick={() => setJourPersonnes(jourPersonnes === j.k ? null : j.k)}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                            <div className="flex flex-wrap gap-1.5">
+                              {students.map((s) => (
+                                <Chip
+                                  key={s.id}
+                                  label={s.initials}
+                                  on={personnesPrevues(a, jourPersonnes).includes(s.id)}
+                                  onClick={() => togglePersonne(a, s)}
+                                />
+                              ))}
+                            </div>
+                            {jourPersonnes != null && (
+                              <div className="text-xs mt-2 flex items-center gap-2 flex-wrap" style={{ color: INK_SOFT }}>
+                                <span>
+                                  {resume.joursAjustes.includes(jourPersonnes)
+                                    ? `Liste propre au ${((JOURS.find((j) => j.k === jourPersonnes) || {}).label || 'jour').toLowerCase()}.`
+                                    : 'Ce jour suit encore la liste commune. La modifier ici le détachera.'}
+                                </span>
+                                {resume.joursAjustes.includes(jourPersonnes) && (
+                                  <button onClick={() => onSetPersonnesJour(a.id, jourPersonnes, null)} style={{ color: INK_SOFT }} className="underline">
+                                    Revenir au réglage commun
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
 
-                      {(a.usualStudentIds || []).map((sid) => {
+                      {personnesToutesPrevues(a).map((sid) => {
                         const st = students.find((s) => s.id === sid);
                         if (!st) return null;
                         const choisis = (a.usualObjectives && a.usualObjectives[sid]) || [];
@@ -4810,82 +5136,6 @@ function PanneauEmploiDuTemps({
           </div>
         )}
       </Card>
-
-      {ateliers.length > 0 && (
-        <>
-          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
-            Semaine type — appui long sur une ligne pour la déplacer.
-          </div>
-          <div className="flex gap-1.5 mb-3">
-            {JOURS.map((j) => (
-              <Chip key={j.k} label={j.label.slice(0, 2)} on={jourActif === j.k} onClick={() => setJourActif(j.k)} />
-            ))}
-          </div>
-
-          <Card className="mb-3">
-            {ateliersDuJourActif.length === 0 ? (
-              <Empty>Aucun atelier ce jour-là.</Empty>
-            ) : (
-              <ReorderList
-                items={ateliersDuJourActif}
-                keyOf={(a) => a.id}
-                onReorder={reordonner}
-                className="space-y-1.5"
-                renderItem={(a) => (
-                  <div className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
-                    <GripVertical size={14} style={{ color: INK_SOFT }} className="shrink-0" />
-                    <span className="text-sm flex-1 min-w-0 truncate">{a.name}</span>
-                    <button onClick={() => retirerDuJour(a.id)} style={{ color: INK_SOFT }} title="Retirer de ce jour">
-                      <X size={15} />
-                    </button>
-                  </div>
-                )}
-              />
-            )}
-          </Card>
-
-          {absents.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-3">
-              {absents.map((a) => (
-                <button
-                  key={a.id}
-                  onClick={() => ajouterAuJour(a.id)}
-                  className="rounded-xl px-3 py-2 border text-sm flex items-center gap-1.5"
-                  style={{ borderColor: BORDER, color: INK_SOFT }}
-                >
-                  <Plus size={13} /> {a.name}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {idsDuJour.length > 0 && (
-            <div>
-              <button
-                onClick={() => setDuplicationOuverte((v) => !v)}
-                className="text-xs flex items-center gap-1"
-                style={{ color: INK_SOFT }}
-              >
-                <Copy size={12} /> Dupliquer ce jour vers…
-              </button>
-              {duplicationOuverte && (
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {JOURS.filter((j) => j.k !== jourActif).map((j) => (
-                    <button
-                      key={j.k}
-                      onClick={() => dupliquerVers(j.k)}
-                      className="rounded-xl px-3 py-1.5 border text-xs"
-                      style={{ borderColor: BORDER, color: INK_SOFT }}
-                    >
-                      {j.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </>
-      )}
     </div>
   );
 }
@@ -5133,46 +5383,62 @@ function PanneauAbc({ abcOptions, onSetAbc }) {
   );
 }
 
-/* Axes de suivi continu et leurs critères — deux axes au plus, la barre du
-   bas ne tiendrait pas plus lisiblement. Chaque critère garde sa clé interne
-   au renommage ou au recoloriage : les relevés déjà notés restent rattachés. */
-function PanneauSuiviContinu({ axes, onSetAxes }) {
-  const ajouterAxe = () => {
-    if (axes.length >= MAX_SUIVIS) return;
-    onSetAxes([...axes, { id: uid(), nom: 'Nouveau suivi', criteres: [] }]);
-  };
+/* Bibliothèque des suivis disponibles : on en crée autant qu'il en faut, et
+   chaque personne active les siens depuis sa fiche. Chaque critère garde sa clé
+   interne au renommage ou au recoloriage : les relevés déjà notés restent
+   rattachés. Chaque carte rappelle qui
+   l'utilise — sans ça, un suivi créé pour une personne et jamais activé se
+   confondrait avec un suivi en service. */
+function PanneauSuiviContinu({ axes, students, onSetAxes, focus }) {
+  const cartes = useRef({});
+  useEffect(() => {
+    if (!focus || !focus.axe) return;
+    const node = cartes.current[focus.axe];
+    if (node) node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [focus]);
+
+  const ajouterAxe = () => onSetAxes([...axes, { id: uid(), nom: 'Nouveau suivi', criteres: [] }]);
   const supprimerAxe = (axe) => {
-    if (!window.confirm(`Supprimer le suivi « ${axe.nom} » ?\n\nLes relevés déjà notés restent dans l'historique et l'export, marqués comme un suivi retiré.`)) return;
+    const utilise = (students || []).filter((s) => (s.suivisActifs || []).includes(axe.id));
+    const avertissement = utilise.length
+      ? `\n\nIl est actif pour ${utilise.map((s) => s.initials).join(', ')} : il y sera désactivé.`
+      : '';
+    if (!window.confirm(`Supprimer le suivi « ${axe.nom} » ?${avertissement}\n\nLes relevés déjà notés restent dans l'historique et l'export, marqués comme un suivi retiré.`)) return;
     onSetAxes(axes.filter((a) => a.id !== axe.id));
   };
   return (
     <div>
-      <SectionTitle sub="Les critères notés au fil de la journée, indépendamment des ateliers. Deux suivis au plus peuvent tourner en parallèle sur une même personne.">Suivi continu</SectionTitle>
-      {axes.map((axe) => (
+      <SectionTitle sub="Les critères notés au fil de la journée, indépendamment des ateliers. Créez-en autant qu'il en faut : chaque personne active les siens depuis sa fiche.">Suivi continu</SectionTitle>
+      {axes.length === 0 && <Empty>Aucun suivi dans la bibliothèque.</Empty>}
+      {axes.map((axe) => {
+        const utilise = (students || []).filter((s) => (s.suivisActifs || []).includes(axe.id));
+        return (
         <Card key={axe.id} className="mb-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Field
-              value={axe.nom}
-              onChange={(nom) => onSetAxes(axes.map((a) => (a.id === axe.id ? { ...a, nom } : a)))}
-              placeholder="Nom du suivi"
-            />
-            {axes.length > 1 && (
+          <div ref={(n) => { cartes.current[axe.id] = n; }}>
+            <div className="flex items-center gap-2 mb-1">
+              <Field
+                value={axe.nom}
+                onChange={(nom) => onSetAxes(axes.map((a) => (a.id === axe.id ? { ...a, nom } : a)))}
+                placeholder="Nom du suivi"
+              />
               <button onClick={() => supprimerAxe(axe)} style={{ color: INK_SOFT }} title="Supprimer ce suivi">
                 <Trash2 size={16} />
               </button>
-            )}
+            </div>
+            <div className="text-xs mb-3" style={{ color: INK_SOFT }}>
+              {utilise.length ? `Actif pour ${utilise.map((s) => s.initials).join(', ')}` : 'Activé pour personne pour l’instant'}
+            </div>
+            <CritereListEditor
+              criteres={axe.criteres}
+              onChange={(criteres) => onSetAxes(axes.map((a) => (a.id === axe.id ? { ...a, criteres } : a)))}
+            />
           </div>
-          <CritereListEditor
-            criteres={axe.criteres}
-            onChange={(criteres) => onSetAxes(axes.map((a) => (a.id === axe.id ? { ...a, criteres } : a)))}
-          />
         </Card>
-      ))}
-      {axes.length < MAX_SUIVIS && (
-        <Btn variant="ghost" onClick={ajouterAxe} className="w-full text-sm">
-          <Plus size={16} /> Ajouter un suivi
-        </Btn>
-      )}
+        );
+      })}
+      <Btn variant="ghost" onClick={ajouterAxe} className="w-full text-sm">
+        <Plus size={16} /> Ajouter un suivi
+      </Btn>
     </div>
   );
 }
@@ -5397,7 +5663,7 @@ function BoutonPhase({ obj, onChange }) {
    distance, une carte dans Gestion et une carte dans Personnes. */
 function PanneauPersonnes({
   students, guidances, templates, premiereConfiguration, focus,
-  addStudent, removeStudent, renameStudent, axesSuivi, onToggleAxeSuivi, onToggleRenforcement,
+  addStudent, removeStudent, renameStudent, axesSuivi, onToggleAxeSuivi, onCreerSuivi, onOuvrirSuivis, onToggleRenforcement,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
   onOuvrirGuidances, onOuvrirModeles, onOuvrirAteliers, onOuvrirIntervenants,
 }) {
@@ -5503,6 +5769,11 @@ function PanneauPersonnes({
                       if (window.confirm(`Supprimer ${s.initials} et ses ${s.objectives.length} objectif(s) ?`)) removeStudent(s.id);
                     }}
                   />
+                  {/* La bibliothèque de suivis se choisit ici : cocher ceux qui
+                      concernent cette personne, ou en créer un pour elle. */}
+                  {axesSuivi.length === 0 && (
+                    <p className="text-xs mt-2.5" style={{ color: INK_SOFT }}>Aucun suivi continu dans la bibliothèque.</p>
+                  )}
                   {axesSuivi.map((axe) => {
                     const actif = (s.suivisActifs || []).includes(axe.id);
                     return (
@@ -5514,12 +5785,20 @@ function PanneauPersonnes({
                           <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{axe.nom}</span>
                           <span className="block text-xs" style={{ color: INK_SOFT }}>
                             Ajoute une pastille en bas d'écran pour noter à tout moment son critère —
-                            {' '}{axe.criteres.map((c) => c.l).join(', ')}. Sans activation, aucune pastille n'apparaît.
+                            {' '}{axe.criteres.map((c) => c.l).join(', ') || 'aucun critère défini'}. Sans activation, aucune pastille n'apparaît.
                           </span>
                         </span>
                       </button>
                     );
                   })}
+                  <div className="flex items-center gap-3 flex-wrap mt-2.5">
+                    <button onClick={() => onCreerSuivi(s.id)} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
+                      <Plus size={13} /> Nouveau suivi continu
+                    </button>
+                    <button onClick={onOuvrirSuivis} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
+                      <Activity size={13} /> Gérer les suivis
+                    </button>
+                  </div>
                   <button onClick={() => onToggleRenforcement(s.id)} className="flex items-start gap-2.5 text-left w-full mt-2.5">
                     <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: s.suiviRenforcement ? INK : BORDER }}>
                       <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: s.suiviRenforcement ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
@@ -6459,7 +6738,9 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
     setAtelierId(next);
     if (!next) { setAtelierFavorites([]); setDepuisMemoire(false); return; }
     const a = ateliers.find((x) => x.id === next);
-    const usual = a && a.usualStudentIds ? a.usualStudentIds.filter((sid) => students.some((s) => s.id === sid)) : [];
+    // La classe rechargée est celle prévue pour aujourd'hui : un atelier qui
+    // n'accueille pas le même groupe selon le jour arrive avec le bon.
+    const usual = personnesPrevues(a, new Date().getDay()).filter((sid) => students.some((s) => s.id === sid));
     setAtelierFavorites((a && a.favoriteObjectiveIds) || []);
     // Change d'atelier recharge toujours sa classe et ses objectifs habituels :
     // aucune séance n'est encore lancée à ce stade, rien à perdre.
@@ -6494,7 +6775,7 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
      diffère de celle déjà enregistrée pour cet atelier. */
   const sameAsUsual = (() => {
     if (!currentAtelier) return false;
-    const savedIds = currentAtelier.usualStudentIds || [];
+    const savedIds = personnesPrevues(currentAtelier, new Date().getDay());
     if (savedIds.length !== studentIds.length || !savedIds.every((id) => studentIds.includes(id))) return false;
     const savedFav = currentAtelier.favoriteObjectiveIds || [];
     if (savedFav.length !== atelierFavorites.length || !savedFav.every((id) => atelierFavorites.includes(id))) return false;
@@ -6603,14 +6884,16 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
       <Card className="mb-4">
         <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Atelier <span style={{ opacity: 0.7 }}>— facultatif, appuyez à nouveau pour retirer</span></div>
         <div className="space-y-1.5">
-          {ateliers.map((a) => (
+          {ateliers.map((a) => {
+            const prevusAujourdhui = personnesPrevues(a, new Date().getDay());
+            return (
             <button key={a.id} onClick={() => pickAtelier(a.id)} className="w-full rounded-xl px-3 py-3 text-left flex items-center justify-between border"
               style={{ borderColor: atelierId === a.id ? INK : BORDER, backgroundColor: atelierId === a.id ? INK : 'transparent', color: atelierId === a.id ? '#fff' : INK }}>
               <span>
                 {a.name}
-                {a.usualStudentIds && a.usualStudentIds.length > 0 && (
+                {prevusAujourdhui.length > 0 && (
                   <span className="block text-xs mt-0.5" style={{ opacity: 0.7 }}>
-                    Mémorisé : {a.usualStudentIds.length} personne{a.usualStudentIds.length !== 1 ? 's' : ''}
+                    Prévu aujourd'hui : {prevusAujourdhui.length} personne{prevusAujourdhui.length !== 1 ? 's' : ''}
                     {a.favoriteObjectiveIds && a.favoriteObjectiveIds.length > 0 &&
                       ` · ${a.favoriteObjectiveIds.length} prioritaire${a.favoriteObjectiveIds.length !== 1 ? 's' : ''}`}
                   </span>
@@ -6618,7 +6901,8 @@ function SessionSetup({ students, ateliers, intervenants, sessions, onEditSessio
               </span>
               {atelierId === a.id && <Check size={16} className="shrink-0" />}
             </button>
-          ))}
+            );
+          })}
         </div>
       </Card>
       )}
@@ -7582,11 +7866,17 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
   const [checked, setChecked] = useState(() => new Set(aCoter));
   const atelier = ateliers.find((a) => a.id === atelierId);
 
+  /* Les personnes prévues pour l'atelier suivant ce jour-là s'ajoutent d'office
+     à celles déjà présentes, plutôt que de les remplacer : on décoche celles
+     qui partent, on n'a plus à cocher celles qui arrivent. Un précochage par
+     intersection faisait disparaître un arrivant du jour sous le doigt. */
+  const prevusPour = (id) =>
+    personnesPrevues(ateliers.find((a) => a.id === id), new Date().getDay())
+      .filter((sid) => students.some((s) => s.id === sid));
+
   function choisir(id) {
     setAtelierId(id);
-    const cible = ateliers.find((a) => a.id === id);
-    const usual = (cible && cible.usualStudentIds) || [];
-    setChecked(new Set(usual.length ? aCoter.filter((sid) => usual.includes(sid)) : aCoter));
+    setChecked(new Set([...aCoter, ...prevusPour(id)]));
   }
 
   /* Les ateliers restants de la semaine type passent en tête, dans leur
@@ -7600,8 +7890,9 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
     if (ordonnes[0]) choisir(ordonnes[0].id);
   }, []);
 
+  const prevus = atelier ? prevusPour(atelier.id) : [];
   const candidats = atelier
-    ? students.filter((s) => aCoter.includes(s.id) || (atelier.usualStudentIds || []).includes(s.id))
+    ? students.filter((s) => aCoter.includes(s.id) || prevus.includes(s.id))
     : [];
 
   return (
@@ -7633,7 +7924,9 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
         )}
         {atelier && (
           <>
-            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Personnes à reporter</div>
+            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
+              Personnes à reporter — celles prévues pour cet atelier aujourd'hui sont déjà cochées.
+            </div>
             <div className="flex flex-wrap gap-2 mb-4">
               {candidats.map((s) => {
                 const on = checked.has(s.id);
@@ -8656,8 +8949,150 @@ function FriseJournee({ students, axesSuivi, releves, onOuvrirSuivi }) {
   );
 }
 
+/* ==================== Correction d'une journée de suivi continu ====================
+   Une cotation oubliée, une heure fausse : la journée se reprend ici, relevé
+   par relevé. Rien n'est recalculé à la main — aucune durée n'est stockée, tout
+   ce qui en dérive (la frise, la feuille d'export, la durée des fiches crise
+   nées d'un relevé « crise ») se recale sur la liste corrigée. */
+function FeuilleJourneeSuivi({ cible, releves, students, axesSuivi, onAjouter, onModifier, onSupprimer, onClose }) {
+  const [heure, setHeure] = useState('');
+  const [critere, setCritere] = useState('');
+
+  const st = students.find((s) => s.id === cible.studentId);
+  const axe = axeDe(axesSuivi, cible.suiviId);
+  const criteres = (axe && axe.criteres) || [];
+  /* Midi local : n'importe quelle heure de la journée visée conviendrait pour
+     la comparaison de jour, celle-ci ne bascule jamais d'un fuseau à l'autre. */
+  const duJour = relevesDuJour(releves, cible.studentId, cible.suiviId, new Date(`${cible.jour}T12:00:00`));
+
+  const ajouter = () => {
+    const iso = isoDepuisJourHeure(cible.jour, heure);
+    if (!iso || !critere) return;
+    onAjouter(cible.studentId, cible.suiviId, iso, critere === '__fin' ? null : critere, critere === '__fin');
+    setHeure('');
+    setCritere('');
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={onClose}>
+      <div className="rounded-2xl p-5 max-w-md w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>
+            {st ? st.initials : '?'} — {axe ? axe.nom : 'Suivi retiré'}
+          </span>
+          <button onClick={onClose} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
+        </div>
+        <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
+          {dateKey(`${cible.jour}T12:00:00`)} — corrigez une heure, ajoutez une cotation oubliée,
+          retirez un relevé de trop. Les durées se recalculent seules.
+        </p>
+
+        {duJour.length === 0 ? (
+          <Empty>Aucun relevé ce jour-là.</Empty>
+        ) : (
+          <div className="space-y-1.5 mb-4">
+            {duJour.map((r) => {
+              const ms = dureeReleve(releves, r.id);
+              const meta = r.fin ? null : metaCritere(criteres, r.critere);
+              return (
+                <div key={r.id} className="rounded-xl p-2.5" style={{ backgroundColor: PAPER }}>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="time"
+                      value={heureInput(r.timestamp)}
+                      onChange={(ev) => {
+                        const iso = isoDepuisJourHeure(cible.jour, ev.target.value);
+                        if (iso) onModifier(r.id, { timestamp: iso });
+                      }}
+                      className="rounded-lg px-2 py-1.5 text-sm border shrink-0"
+                      style={{ borderColor: BORDER, backgroundColor: CARD, fontFamily: F_MONO }}
+                    />
+                    <select
+                      value={r.fin ? '__fin' : r.critere || ''}
+                      onChange={(ev) => {
+                        const v = ev.target.value;
+                        onModifier(r.id, v === '__fin' ? { critere: null, fin: true } : { critere: v, fin: false });
+                      }}
+                      className="flex-1 min-w-0 rounded-lg px-2 py-1.5 text-sm border"
+                      style={{ borderColor: BORDER, backgroundColor: CARD }}
+                    >
+                      {/* Un critère retiré de la configuration reste proposé sur
+                          le relevé qui le porte : sans ça, l'ouvrir le
+                          réécrirait silencieusement. */}
+                      {meta === CRITERE_INCONNU && <option value={r.critere}>{`${meta.l} (${r.critere})`}</option>}
+                      {criteres.map((c) => <option key={c.k} value={c.k}>{c.l}</option>)}
+                      <option value="__fin">— fin de journée —</option>
+                    </select>
+                    <button onClick={() => onSupprimer(r.id)} style={{ color: INK_SOFT }} className="shrink-0" title="Supprimer ce relevé">
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                  <div className="text-xs mt-1 flex items-center gap-2" style={{ color: INK_SOFT }}>
+                    {!r.fin && (
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: meta ? meta.color : BORDER }} />
+                    )}
+                    <span style={{ fontFamily: F_MONO }}>
+                      {r.fin ? 'clôture' : ms == null ? 'en cours' : fmtDuration(ms)}
+                    </span>
+                    {r.source === 'manuel' && <span>· ajouté à la main</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Ajouter un relevé</div>
+        <div className="flex items-center gap-2">
+          <input
+            type="time"
+            value={heure}
+            onChange={(ev) => setHeure(ev.target.value)}
+            className="rounded-lg px-2 py-1.5 text-sm border shrink-0"
+            style={{ borderColor: BORDER, backgroundColor: PAPER, fontFamily: F_MONO }}
+          />
+          <select
+            value={critere}
+            onChange={(ev) => setCritere(ev.target.value)}
+            className="flex-1 min-w-0 rounded-lg px-2 py-1.5 text-sm border"
+            style={{ borderColor: BORDER, backgroundColor: PAPER }}
+          >
+            <option value="">Critère…</option>
+            {criteres.map((c) => <option key={c.k} value={c.k}>{c.l}</option>)}
+            <option value="__fin">— fin de journée —</option>
+          </select>
+          <Btn onClick={ajouter} disabled={!heure || !critere} className="px-3 shrink-0"><Plus size={16} /></Btn>
+        </div>
+        <p className="text-xs mt-3" style={{ color: INK_SOFT }}>
+          Une fiche crise ouverte depuis un relevé « Crise » suit ces
+          corrections, tant que sa durée n'a pas été saisie à la main.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onOuvrirSuivi, onChangePhase }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
+  /* Une ligne du résumé mène à la courbe de l'objectif, dans ce même écran :
+     c'est là qu'on voit où il en est. L'édition reste derrière « Modifier
+     l'objectif », sous la courbe — auparavant le résumé y sautait directement,
+     et consulter obligeait à passer par le formulaire. */
+  const graphRefs = useRef({});
+  const [cible, setCible] = useState(null);
+  const voirGraphique = (sid, oid) => {
+    setOpenId(sid);
+    setCible({ personne: sid, objectif: oid });
+  };
+  /* Après commit : la carte de la personne est dépliée, la courbe est montée,
+     sa ref est renseignée — même recette que le lien croisé de
+     PanneauPersonnes. */
+  useEffect(() => {
+    if (!cible) return;
+    const node = graphRefs.current[`${cible.personne}:${cible.objectif}`];
+    if (node) node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setCible(null);
+  }, [cible]);
 
   if (students.length === 0) {
     return (
@@ -8681,7 +9116,7 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
       </div>
 
       <FriseJournee students={students} axesSuivi={axesSuivi} releves={releves} onOuvrirSuivi={onOuvrirSuivi} />
-      <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} onOuvrirObjectif={onOuvrirObjectif} />
+      <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} onVoirGraphique={voirGraphique} />
       <>
       <div className="space-y-3">
         {students.map((s) => {
@@ -8702,12 +9137,14 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
                 <div className="mt-4 space-y-5">
                   {s.objectives.length === 0 && <Empty>Aucun objectif défini.</Empty>}
                   {s.objectives.map((o) => (
-                    <ObjectiveChart
-                      key={o.id} obj={o} studentId={s.id} sessions={ordered} guidances={guidances}
-                      onReset={() => onResetTracking(s.id, o.id)}
-                      onChangePhase={(nom) => onChangePhase(s.id, o.id, nom)}
-                      onOuvrirObjectif={() => onOuvrirObjectif(s.id, o.id)}
-                    />
+                    <div key={o.id} ref={(n) => { graphRefs.current[`${s.id}:${o.id}`] = n; }}>
+                      <ObjectiveChart
+                        obj={o} studentId={s.id} sessions={ordered} guidances={guidances}
+                        onReset={() => onResetTracking(s.id, o.id)}
+                        onChangePhase={(nom) => onChangePhase(s.id, o.id, nom)}
+                        onOuvrirObjectif={() => onOuvrirObjectif(s.id, o.id)}
+                      />
+                    </div>
                   ))}
                 </div>
               )}
@@ -8777,7 +9214,7 @@ function resumerObjectifs(students, sessions, guidances) {
   return groupes;
 }
 
-function ResumeObjectifs({ students, sessions, guidances, onOuvrirObjectif }) {
+function ResumeObjectifs({ students, sessions, guidances, onVoirGraphique }) {
   const [ouvert, setOuvert] = useState(null);
   const g = resumerObjectifs(students, sessions, guidances);
 
@@ -8813,7 +9250,8 @@ function ResumeObjectifs({ students, sessions, guidances, onOuvrirObjectif }) {
           <p className="text-xs mb-2" style={{ color: INK_SOFT }}>{blocs.find((b) => b.k === ouvert).aide}</p>
           <div className="space-y-1.5">
             {g[ouvert].map((l, i) => (
-              <button key={i} onClick={() => onOuvrirObjectif(l.studentId, l.objectifId)}
+              <button key={i} onClick={() => onVoirGraphique(l.studentId, l.objectifId)}
+                title="Voir la courbe de cet objectif"
                 className="w-full rounded-xl px-3 py-2.5 flex items-start justify-between gap-2 text-left" style={{ backgroundColor: PAPER }}>
                 <div className="min-w-0">
                   <div className="text-sm break-words">
@@ -8975,13 +9413,27 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
   );
 }
 
-/* ==================== Écran 4 : export ==================== */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, releves, axesSuivi, appareil, notify, onEditCrisis, onMarkSent, onExportManager, onOuvrirMenu }) {
+/* ==================== Écran 4 : export ====================
+   Trois collections partent aux cadres pédagogiques : les séances, les crises
+   et observations, et les journées de suivi continu. Elles se présentent dans
+   cet ordre — ce qui reste à transmettre d'abord, les options d'export juste
+   dessous, puis une archive dépliante pour ce qui est déjà parti. Tout y est
+   corrigeable, avant comme après l'envoi : c'est le seul endroit où l'on relit
+   avant de transmettre. */
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, releves, axesSuivi, appareil, notify, onEditCrisis, onEditSession, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onOuvrirMenu }) {
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
-  // Valeur d'état initiale seulement : React l'ignore aux rendus suivants,
+  const journees = React.useMemo(
+    () => journeesSuivi(releves, students, axesSuivi, null),
+    [releves, students, axesSuivi]
+  );
+
+  // Valeurs d'état initiales seulement : React les ignore aux rendus suivants,
   // donc une sélection ajustée à la main n'est jamais écrasée par un
   // changement ultérieur (nouvelle séance, statut modifié...).
   const [picked, setPicked] = useState(unsentIds);
+  const [pickedCrises, setPickedCrises] = useState(() => crises.filter((c) => !c.sentAt).map((c) => c.id));
+  const [pickedJournees, setPickedJournees] = useState(() => journees.filter((j) => !j.envoye).map((j) => j.cle));
+  const [archiveOuverte, setArchiveOuverte] = useState(false);
 
   /* Deux façons de composer un rapport : en choisissant des séances, ou en
      choisissant des personnes — auquel cas toutes leurs cotations sont reprises,
@@ -8989,28 +9441,38 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
   const [mode, setMode] = useState('sessions');
   const [pickedStudents, setPickedStudents] = useState([]);
 
-  const ordered = sessions.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
   const byStudent = mode === 'students';
+  const studentFilter = byStudent ? pickedStudents : null;
 
+  /* Les trois collections se cochent séparément. Auparavant les crises
+     suivaient mécaniquement les séances retenues et les relevés étaient bornés
+     à leurs journées ; ça ne tenait plus dès lors qu'il faut distinguer, dans
+     chacune, ce qui est parti de ce qui reste à envoyer. */
   const chosen = byStudent
     ? sessions.filter((s) => (s.studentIds || []).some((sid) => pickedStudents.includes(sid)))
     : sessions.filter((s) => picked.includes(s.id));
-  const studentFilter = byStudent ? pickedStudents : null;
-  const chosenCrises = crises.filter((c) => {
-    if (byStudent) return c.studentId && pickedStudents.includes(c.studentId);
-    return !c.sessionId || chosen.some((s) => s.id === c.sessionId);
-  });
+  const chosenCrises = byStudent
+    ? crises.filter((c) => c.studentId && pickedStudents.includes(c.studentId))
+    : crises.filter((c) => pickedCrises.includes(c.id));
+  const chosenJournees = byStudent
+    ? journees.filter((j) => pickedStudents.includes(j.studentId))
+    : journees.filter((j) => pickedJournees.includes(j.cle));
+  const chosenReleves = chosenJournees.reduce((l, j) => l.concat(j.releves), []);
   const chosenSentCount = byStudent ? 0 : chosen.filter((s) => s.sentAt).length;
-  /* Les relevés de suivi continu ne portent pas de sessionId : en mode « par
-     séance », on les borne aux jours des séances retenues plutôt qu'à leur
-     seule liste de personnes, sinon cocher une seule séance d'hier exporterait
-     tout l'historique de ces personnes. */
-  const chosenReleves = byStudent
-    ? releves.filter((r) => pickedStudents.includes(r.studentId))
-    : releves.filter((r) => {
-        const jour = new Date(r.timestamp);
-        return chosen.some((s) => (s.studentIds || []).includes(r.studentId) && memeJour(new Date(s.date), jour));
-      });
+
+  const seancesTriees = sessions.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  const aTransmettre = {
+    seances: seancesTriees.filter((s) => !s.sentAt),
+    crises: crises.filter((c) => !c.sentAt),
+    journees: journees.filter((j) => !j.envoye),
+  };
+  const archive = {
+    seances: seancesTriees.filter((s) => s.sentAt),
+    crises: crises.filter((c) => c.sentAt),
+    journees: journees.filter((j) => j.envoye),
+  };
+  const nbArchive = archive.seances.length + archive.crises.length + archive.journees.length;
+  const rienATransmettre = !aTransmettre.seances.length && !aTransmettre.crises.length && !aTransmettre.journees.length;
 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || 'Séance libre';
   const sessionLabel = (sess) => (sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Balance Program' : 'Séance libre');
@@ -9034,11 +9496,21 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     );
   }
 
+  /* En mode « par personne », rien n'est marqué : ce rapport recoupe des
+     éléments déjà transmis, et les marquer fausserait le suivi des non-envoyés.
+     C'était déjà la règle pour les séances, elle vaut pour les trois. */
+  function marquerEnvoye() {
+    if (byStudent) return;
+    onMarkSent(picked);
+    onMarkCrisesSent(chosenCrises.map((c) => c.id));
+    onMarkRelevesSent(chosenReleves.map((r) => r.id));
+  }
+
   function download() {
     if (!confirmIfNeeded()) return;
     const { blob, name } = makeFile();
     downloadBlob(blob, name);
-    if (!byStudent) onMarkSent(picked);
+    marquerEnvoye();
     notify('Fichier Excel téléchargé');
   }
 
@@ -9046,121 +9518,270 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     if (!confirmIfNeeded()) return;
     const { blob, name } = makeFile();
     await shareReport({ blob, name, title: name, notify });
-    if (!byStudent) onMarkSent(picked);
+    marquerEnvoye();
   }
 
-  const canExport = byStudent ? pickedStudents.length > 0 && chosen.length > 0 : picked.length > 0;
+  const canExport = byStudent
+    ? pickedStudents.length > 0 && (chosen.length > 0 || chosenCrises.length > 0 || chosenJournees.length > 0)
+    : picked.length + pickedCrises.length + pickedJournees.length > 0;
+
+  /* Pastille de statut, identique sur les trois collections : un appui corrige
+     le statut à la main et fait passer l'élément d'une liste à l'autre. */
+  const pilule = (sent, onToggle) => (
+    <button
+      onClick={onToggle}
+      className="shrink-0 rounded-lg px-2 py-1 text-xs flex items-center gap-1 border"
+      style={{
+        borderColor: sent ? '#0F8B6C' : BORDER,
+        backgroundColor: sent ? '#0F8B6C' : 'transparent',
+        color: sent ? '#fff' : INK_SOFT,
+      }}
+      title="Appuyer pour changer le statut manuellement"
+    >
+      {sent ? <Check size={12} /> : null} {sent ? 'Envoyé' : 'Non envoyé'}
+    </button>
+  );
+
+  const caseACocher = (on, onToggle) => (
+    <button onClick={onToggle}
+      className="w-6 h-6 rounded-md border flex items-center justify-center shrink-0"
+      style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent' }}>
+      {on && <Check size={14} color="#fff" />}
+    </button>
+  );
+
+  const ligneSeance = (s) => {
+    const on = picked.includes(s.id);
+    const basculer = () => setPicked((p) => (on ? p.filter((x) => x !== s.id) : [...p, s.id]));
+    return (
+      <div key={s.id} className="w-full rounded-xl px-3.5 py-3 flex items-center gap-2.5 border"
+        style={{ borderColor: on && !byStudent ? INK : BORDER, backgroundColor: on && !byStudent ? INK + '0d' : CARD }}>
+        <button className="flex-1 text-left min-w-0" onClick={byStudent ? () => onEditSession(s) : basculer}>
+          <div className="text-sm font-medium truncate">{sessionLabel(s)}</div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
+          </div>
+        </button>
+        <button onClick={() => onEditSession(s)} className="shrink-0" style={{ color: INK_SOFT }} title="Corriger cette séance">
+          <Pencil size={15} />
+        </button>
+        {pilule(!!s.sentAt, () => onMarkSent([s.id], !s.sentAt))}
+        {!byStudent && caseACocher(on, basculer)}
+      </div>
+    );
+  };
+
+  const ligneCrise = (c) => {
+    const st = students.find((s) => s.id === c.studentId);
+    const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
+    const names = ids.map((id) => (intervenants.find((i) => i.id === id) || {}).name).filter(Boolean);
+    const on = pickedCrises.includes(c.id);
+    const basculer = () => setPickedCrises((p) => (on ? p.filter((x) => x !== c.id) : [...p, c.id]));
+    return (
+      <div key={c.id} className="w-full rounded-2xl border p-3.5 flex items-center gap-2.5"
+        style={{ borderColor: on && !byStudent ? INK : BORDER, backgroundColor: on && !byStudent ? INK + '0d' : PAPER }}>
+        <button onClick={() => onEditCrisis(c)} className="flex-1 text-left min-w-0">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="text-sm font-semibold min-w-0 truncate" style={{ fontFamily: F_DISPLAY }}>{st ? st.initials : 'Personne non renseignée'}</span>
+            <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5"
+              style={{ backgroundColor: c.kind === 'abc' ? '#B07A2E' : CRISIS, color: '#fff' }}>
+              {c.kind === 'abc' ? 'Observation' : 'Crise'}
+            </span>
+            {/* Fiche ouverte depuis un relevé de suivi continu : elle attend une
+                relecture — ABC, intensité, commentaire. L'indicateur existait
+                depuis toujours sans que rien ne l'affiche. */}
+            {c.aCompleter && (
+              <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5" style={{ backgroundColor: '#D69A2D', color: '#fff' }}>
+                à compléter
+              </span>
+            )}
+            {c.chainId && (
+              <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5 flex items-center gap-1"
+                style={{ backgroundColor: PAPER, color: INK_SOFT }}>
+                <Link2 size={11} /> {c.chainIndex || 1}
+                {(() => {
+                  const n = crises.filter((x) => x.chainId === c.chainId).length;
+                  return n > 1 ? `/${n}` : '';
+                })()}
+              </span>
+            )}
+            {c.intensite && (
+              <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5"
+                style={{ backgroundColor: (CRISIS_INTENSITES.find((x) => x.n === c.intensite) || {}).color, color: '#fff' }}>
+                {c.intensite}
+              </span>
+            )}
+            {c.kind !== 'abc' && (
+              <span className="text-xs shrink-0" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{fmtDuration(c.durationMs)}</span>
+            )}
+          </div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            {timeShort(c.date)}
+            {c.atelierId && <> · {atelierName(c.atelierId)}</>}
+            {names.length > 0 && <> · {names.join(', ')}</>}
+          </div>
+          <div className="text-xs mt-1" style={{ color: INK_SOFT }}>
+            {(c.comportementTags || []).join(', ') || c.comportement || 'comportement non renseigné'}
+          </div>
+        </button>
+        {pilule(!!c.sentAt, () => onMarkCrisesSent([c.id], !c.sentAt))}
+        {!byStudent && caseACocher(on, basculer)}
+      </div>
+    );
+  };
+
+  const ligneJournee = (j) => {
+    const on = pickedJournees.includes(j.cle);
+    const basculer = () => setPickedJournees((p) => (on ? p.filter((x) => x !== j.cle) : [...p, j.cle]));
+    const notes = j.releves.filter((r) => !r.fin).length;
+    return (
+      <div key={j.cle} className="w-full rounded-xl px-3.5 py-3 flex items-center gap-2.5 border"
+        style={{ borderColor: on && !byStudent ? INK : BORDER, backgroundColor: on && !byStudent ? INK + '0d' : CARD }}>
+        <button className="flex-1 text-left min-w-0" onClick={() => onOuvrirJournee(j)}>
+          <div className="text-sm font-medium truncate">
+            <span style={{ fontFamily: F_DISPLAY }}>{j.initials}</span> · {j.nomAxe}
+          </div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            {notes} relevé{notes !== 1 ? 's' : ''}
+            {j.releves.length > notes && ' · clôturée'}
+            {' · '}{timeShort(j.releves[0].timestamp)}
+          </div>
+        </button>
+        <button onClick={() => onOuvrirJournee(j)} className="shrink-0" style={{ color: INK_SOFT }} title="Corriger cette journée">
+          <Pencil size={15} />
+        </button>
+        {pilule(j.envoye, () => onMarkRelevesSent(j.releves.map((r) => r.id), !j.envoye))}
+        {!byStudent && caseACocher(on, basculer)}
+      </div>
+    );
+  };
+
+  /* Les trois listes, dans le même ordre à transmettre et en archive : les
+     répliquer côte à côte les ferait diverger. */
+  const troisListes = (lot, cle) => (
+    <>
+      {lot.seances.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
+            Rapports de séance — <span style={{ fontFamily: F_MONO }}>{lot.seances.length}</span>
+          </div>
+          <ListeParJour key={`s-${cle}`} items={lot.seances} dateDe={(s) => s.date} renderItem={ligneSeance} />
+        </div>
+      )}
+      {lot.crises.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
+            Crises et observations — <span style={{ fontFamily: F_MONO }}>{lot.crises.length}</span>
+          </div>
+          <ListeParJour key={`c-${cle}`} items={lot.crises} dateDe={(c) => c.date} renderItem={ligneCrise} />
+        </div>
+      )}
+      {lot.journees.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
+            Suivi continu — <span style={{ fontFamily: F_MONO }}>{lot.journees.length}</span> journée{lot.journees.length !== 1 ? 's' : ''}
+          </div>
+          <ListeParJour key={`j-${cle}`} items={lot.journees} dateDe={(j) => j.date} renderItem={ligneJournee} />
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div>
       <div className="flex items-start justify-between gap-3">
-        <SectionTitle sub="Sélectionnez les rapports à transmettre aux cadres pédagogiques.">Export</SectionTitle>
+        <SectionTitle sub="Relisez, corrigez, puis transmettez aux cadres pédagogiques.">Export</SectionTitle>
         <BoutonMenu onClick={onOuvrirMenu} />
       </div>
 
-      {sessions.length === 0 ? (
-        <Empty>Aucune séance enregistrée pour le moment.</Empty>
-      ) : (
-        <>
-          <div className="flex gap-1.5 mb-4">
-            {[
-              { k: 'sessions', label: 'Par séance', icon: Layers },
-              { k: 'students', label: 'Par personne', icon: Users },
-            ].map((m) => {
-              const Icon = m.icon;
-              const on = mode === m.k;
+      <div className="flex gap-1.5 mb-4">
+        {[
+          { k: 'sessions', label: 'Par séance', icon: Layers },
+          { k: 'students', label: 'Par personne', icon: Users },
+        ].map((m) => {
+          const Icon = m.icon;
+          const on = mode === m.k;
+          return (
+            <button key={m.k} onClick={() => setMode(m.k)}
+              className="flex-1 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-1.5 border"
+              style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+              <Icon size={15} /> {m.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {byStudent && (
+        <div className="mb-4">
+          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
+            Personnes à inclure — tout ce qui les concerne est repris, quelles que soient les séances
+          </div>
+          <div className="flex flex-wrap gap-2 mb-2">
+            {students.map((st) => {
+              const on = pickedStudents.includes(st.id);
               return (
-                <button key={m.k} onClick={() => setMode(m.k)}
-                  className="flex-1 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-1.5 border"
+                <button key={st.id}
+                  onClick={() => setPickedStudents((cur) => (on ? cur.filter((x) => x !== st.id) : [...cur, st.id]))}
+                  className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
                   style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
-                  <Icon size={15} /> {m.label}
+                  {st.initials}
                 </button>
               );
             })}
           </div>
-
-          {byStudent ? (
-            <div className="mb-4">
-              <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
-                Personnes à inclure — toutes leurs cotations sont reprises, quelles que soient les séances
-              </div>
-              <div className="flex flex-wrap gap-2 mb-2">
-                {students.map((st) => {
-                  const on = pickedStudents.includes(st.id);
-                  return (
-                    <button key={st.id}
-                      onClick={() => setPickedStudents((cur) => (on ? cur.filter((x) => x !== st.id) : [...cur, st.id]))}
-                      className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
-                      style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
-                      {st.initials}
-                    </button>
-                  );
-                })}
-              </div>
-              {pickedStudents.length > 0 && (
-                <div className="text-xs" style={{ color: INK_SOFT }}>
-                  <span style={{ fontFamily: F_MONO }}>{chosen.length}</span> séance{chosen.length !== 1 ? 's' : ''} concernée{chosen.length !== 1 ? 's' : ''}
-                  {chosenCrises.length > 0 && <> · <span style={{ fontFamily: F_MONO }}>{chosenCrises.length}</span> crise{chosenCrises.length !== 1 ? 's' : ''}</>}
-                </div>
-              )}
+          {pickedStudents.length > 0 && (
+            <div className="text-xs" style={{ color: INK_SOFT }}>
+              <span style={{ fontFamily: F_MONO }}>{chosen.length}</span> séance{chosen.length !== 1 ? 's' : ''}
+              {' · '}<span style={{ fontFamily: F_MONO }}>{chosenCrises.length}</span> crise{chosenCrises.length !== 1 ? 's' : ''}
+              {' · '}<span style={{ fontFamily: F_MONO }}>{chosenJournees.length}</span> journée{chosenJournees.length !== 1 ? 's' : ''} de suivi
             </div>
-          ) : (
-          <>
-          <div className="flex gap-1.5 mb-3">
-            <button onClick={() => setPicked(unsentIds)} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
-              Non-envoyés ({unsentIds.length})
-            </button>
-            <button onClick={() => setPicked(sessions.map((s) => s.id))} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
-              Tout sélectionner
-            </button>
-            <button onClick={() => setPicked([])} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
-              Aucun
-            </button>
-          </div>
-
-          <div className="mb-4">
-            <ListeParJour
-            items={ordered}
-            dateDe={(s) => s.date}
-            renderItem={(s) => {
-              const on = picked.includes(s.id);
-              const sent = !!s.sentAt;
-              return (
-                <div key={s.id} className="w-full rounded-xl px-3.5 py-3 flex items-center gap-3 border"
-                  style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK + '0d' : sent ? PAPER : CARD }}>
-                  <button className="flex-1 text-left min-w-0" onClick={() => setPicked((p) => (on ? p.filter((x) => x !== s.id) : [...p, s.id]))}>
-                    <div className="text-sm font-medium truncate">{sessionLabel(s)}</div>
-                    <div className="text-xs" style={{ color: INK_SOFT }}>
-                      {timeShort(s.date)} · {s.studentIds.length} personne{s.studentIds.length !== 1 ? 's' : ''}
-                    </div>
-                  </button>
-                  <button
-                    onClick={() => onMarkSent([s.id], !sent)}
-                    className="shrink-0 rounded-lg px-2 py-1 text-xs flex items-center gap-1 border"
-                    style={{
-                      borderColor: sent ? '#0F8B6C' : BORDER,
-                      backgroundColor: sent ? '#0F8B6C' : 'transparent',
-                      color: sent ? '#fff' : INK_SOFT,
-                    }}
-                    title="Appuyer pour changer le statut manuellement"
-                  >
-                    {sent ? <Check size={12} /> : null} {sent ? 'Envoyé' : 'Non envoyé'}
-                  </button>
-                  <button onClick={() => setPicked((p) => (on ? p.filter((x) => x !== s.id) : [...p, s.id]))}
-                    className="w-6 h-6 rounded-md border flex items-center justify-center shrink-0" style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent' }}>
-                    {on && <Check size={14} color="#fff" />}
-                  </button>
-                </div>
-              );
-            }}
-            />
-          </div>
-          </>
           )}
+        </div>
+      )}
+
+      {!byStudent && aTransmettre.seances.length > 0 && (
+        <div className="flex gap-1.5 mb-3">
+          <button onClick={() => setPicked(unsentIds)} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+            Non-envoyés ({unsentIds.length})
+          </button>
+          <button onClick={() => setPicked(sessions.map((s) => s.id))} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+            Tout sélectionner
+          </button>
+          <button onClick={() => setPicked([])} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+            Aucun
+          </button>
+        </div>
+      )}
+
+      {rienATransmettre ? (
+        <Empty>
+          {sessions.length + crises.length + journees.length === 0
+            ? 'Rien d’enregistré pour le moment.'
+            : 'Tout a été transmis. Ce qui est parti se retrouve dans l’archive, plus bas.'}
+        </Empty>
+      ) : (
+        <>
+          {troisListes(aTransmettre, 'envoi')}
+          {/* Reprise du passé : les crises hors séance et les journées de suivi
+              n'ont jamais porté de statut d'envoi, elles arrivent donc toutes
+              ici à la première ouverture. Un geste pour solder l'arriéré. */}
+          <button
+            onClick={() => {
+              const n = aTransmettre.seances.length + aTransmettre.crises.length + aTransmettre.journees.length;
+              if (!window.confirm(`Marquer ces ${n} élément(s) comme déjà transmis ?\n\nRien n'est envoyé : ils passent simplement dans l'archive.`)) return;
+              onMarkSent(aTransmettre.seances.map((s) => s.id));
+              onMarkCrisesSent(aTransmettre.crises.map((c) => c.id));
+              onMarkRelevesSent(aTransmettre.journees.reduce((l, j) => l.concat(j.releves.map((r) => r.id)), []));
+            }}
+            className="text-xs mb-4 flex items-center gap-1"
+            style={{ color: INK_SOFT }}
+          >
+            <Check size={12} /> Tout marquer comme déjà transmis
+          </button>
         </>
       )}
 
-      {/* Une seule sélection, trois destinations possibles */}
+      {/* Les options viennent juste après ce qu'elles emportent */}
       <Card className="mb-3">
         <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
           Rapport Excel — à lire, imprimer ou déposer sur le dossier partagé
@@ -9175,7 +9796,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
         </div>
       </Card>
 
-      <Card>
+      <Card className="mb-3">
         <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
           Fichier pour DatABA Manager
         </div>
@@ -9202,59 +9823,22 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
         </div>
       </Card>
 
-
-      {crises.length > 0 && (
+      {nbArchive > 0 && (
         <div className="mt-6">
-          <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
-            Crises et observations — <span style={{ fontFamily: F_MONO }}>{crises.length}</span> au total
-          </div>
-          <ListeParJour
-            items={crises}
-            dateDe={(c) => c.date}
-            renderItem={(c) => {
-              const st = students.find((s) => s.id === c.studentId);
-              const ids = c.intervenantIds || (c.intervenantId ? [c.intervenantId] : []);
-              const names = ids.map((id) => (intervenants.find((i) => i.id === id) || {}).name).filter(Boolean);
-              return (
-                <button key={c.id} onClick={() => onEditCrisis(c)} className="w-full text-left rounded-2xl border p-4" style={{ borderColor: BORDER, backgroundColor: PAPER }}>
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <span className="text-sm font-semibold min-w-0 truncate" style={{ fontFamily: F_DISPLAY }}>{st ? st.initials : 'Personne non renseignée'}</span>
-                    <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5"
-                      style={{ backgroundColor: c.kind === 'abc' ? '#B07A2E' : CRISIS, color: '#fff' }}>
-                      {c.kind === 'abc' ? 'Observation' : 'Crise'}
-                    </span>
-                    {c.chainId && (
-                      <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5 flex items-center gap-1"
-                        style={{ backgroundColor: PAPER, color: INK_SOFT }}>
-                        <Link2 size={11} /> {c.chainIndex || 1}
-                        {(() => {
-                          const n = crises.filter((x) => x.chainId === c.chainId).length;
-                          return n > 1 ? `/${n}` : '';
-                        })()}
-                      </span>
-                    )}
-                    {c.intensite && (
-                      <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5"
-                        style={{ backgroundColor: (CRISIS_INTENSITES.find((x) => x.n === c.intensite) || {}).color, color: '#fff' }}>
-                        {c.intensite}
-                      </span>
-                    )}
-                    {c.kind !== 'abc' && (
-                      <span className="text-xs shrink-0" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{fmtDuration(c.durationMs)}</span>
-                    )}
-                  </div>
-                  <div className="text-xs" style={{ color: INK_SOFT }}>
-                    {timeShort(c.date)}
-                    {c.atelierId && <> · {atelierName(c.atelierId)}</>}
-                    {names.length > 0 && <> · {names.join(', ')}</>}
-                  </div>
-                  <div className="text-xs mt-1" style={{ color: INK_SOFT }}>
-                    {(c.comportementTags || []).join(', ') || c.comportement || 'comportement non renseigné'}
-                  </div>
-                </button>
-              );
-            }}
-          />
+          <button
+            onClick={() => setArchiveOuverte((v) => !v)}
+            className="w-full flex items-center justify-between rounded-xl px-3.5 py-3 border"
+            style={{ borderColor: BORDER, backgroundColor: PAPER }}
+          >
+            <span className="text-left">
+              <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Archive</span>
+              <span className="block text-xs" style={{ color: INK_SOFT }}>
+                <span style={{ fontFamily: F_MONO }}>{nbArchive}</span> élément{nbArchive !== 1 ? 's' : ''} déjà transmis — modifiables eux aussi
+              </span>
+            </span>
+            <ChevronDown size={18} style={{ color: INK_SOFT, transform: archiveOuverte ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+          </button>
+          {archiveOuverte && <div className="mt-3">{troisListes(archive, 'archive')}</div>}
         </div>
       )}
     </div>
@@ -9357,13 +9941,16 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
                 style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
               />
               <div className="flex items-center gap-1.5">
+                {/* Saisir la durée à la main détache la fiche du suivi continu :
+                    une valeur relevée par un professionnel ne doit pas être
+                    réécrite au relevé suivant. */}
                 <input
                   type="number" min="0" max="999"
                   value={Math.floor((crisis.durationMs || 0) / 60000)}
                   onChange={(e) => {
                     const min = Math.max(0, Number(e.target.value) || 0);
                     const sec = Math.floor(((crisis.durationMs || 0) % 60000) / 1000);
-                    set({ durationMs: (min * 60 + sec) * 1000 });
+                    set({ durationMs: (min * 60 + sec) * 1000, dureeAuto: false });
                   }}
                   className="w-16 rounded-xl border px-2 py-2.5 text-sm bg-transparent text-center"
                   style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
@@ -9375,7 +9962,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
                   onChange={(e) => {
                     const sec = Math.min(59, Math.max(0, Number(e.target.value) || 0));
                     const min = Math.floor((crisis.durationMs || 0) / 60000);
-                    set({ durationMs: (min * 60 + sec) * 1000 });
+                    set({ durationMs: (min * 60 + sec) * 1000, dureeAuto: false });
                   }}
                   className="w-16 rounded-xl border px-2 py-2.5 text-sm bg-transparent text-center"
                   style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
@@ -9383,6 +9970,20 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
                 <span className="text-xs" style={{ color: INK_SOFT }}>s</span>
               </div>
             </div>
+            {crisis.releveId && (
+              <div className="text-xs mt-2 flex items-center gap-2 flex-wrap" style={{ color: INK_SOFT }}>
+                {crisis.dureeAuto ? (
+                  <span>Durée reprise du suivi continu : de l'appui au critère suivant. La saisir ici la fige.</span>
+                ) : (
+                  <>
+                    <span>Durée saisie à la main.</span>
+                    <button onClick={() => set({ dureeAuto: true })} className="underline" style={{ color: INK_SOFT }}>
+                      Reprendre le calcul automatique
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
 

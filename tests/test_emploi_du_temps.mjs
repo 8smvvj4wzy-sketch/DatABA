@@ -32,7 +32,10 @@ function extraire(nom) {
   throw new Error(`Fin de déclaration introuvable : ${nom}`);
 }
 
-const NOMS = ['memeJour', 'JOURS', 'migrerEmploiDuTemps', 'ateliersDuJour', 'planifierJour'];
+const NOMS = [
+  'memeJour', 'JOURS', 'migrerEmploiDuTemps', 'ateliersDuJour', 'planifierJour',
+  'personnesPrevues', 'personnesToutesPrevues', 'joursAjustes', 'resumeAtelier',
+];
 
 const code = `
   ${NOMS.map(extraire).join('\n')}
@@ -40,7 +43,10 @@ const code = `
 `;
 // eslint-disable-next-line no-new-func
 const F = new Function(code)();
-const { migrerEmploiDuTemps, ateliersDuJour, planifierJour } = F;
+const {
+  migrerEmploiDuTemps, ateliersDuJour, planifierJour,
+  personnesPrevues, personnesToutesPrevues, joursAjustes, resumeAtelier,
+} = F;
 
 /* ==================== Fixtures ==================== */
 
@@ -146,6 +152,67 @@ t(
   'une séance en mode balance (atelierId nul) n\'écarte rien',
   planifierJour({ 1: ['at1'] }, ateliers, [{ atelierId: null, date: new Date(LUNDI).toISOString() }], LUNDI).restants.map((a) => a.id),
   ['at1']
+);
+
+/* ==================== personnesPrevues ====================
+   Un même atelier n'accueille pas le même groupe selon le jour : la liste
+   commune vaut partout, sauf les jours qui portent la leur. */
+
+const sport = {
+  id: 'at1',
+  name: 'Sport',
+  usualStudentIds: ['s1', 's2'],
+  personnesParJour: { 2: ['s3'], 4: [] },
+};
+
+t('sans jour, la liste commune', personnesPrevues(sport, null), ['s1', 's2']);
+t('un jour sans variante suit la liste commune', personnesPrevues(sport, 1), ['s1', 's2']);
+t('un jour ajusté a sa propre liste', personnesPrevues(sport, 2), ['s3']);
+t('une variante vide est une vraie liste vide, pas une absence', personnesPrevues(sport, 4), []);
+t('atelier sans aucune liste', personnesPrevues({ id: 'at2', name: 'X' }, 3), []);
+t('atelier absent', personnesPrevues(undefined, 1), []);
+t('le jour 0 (dimanche) n\'est pas confondu avec l\'absence de jour',
+  personnesPrevues({ id: 'at3', usualStudentIds: ['s1'], personnesParJour: { 0: ['s9'] } }, 0), ['s9']);
+
+/* ==================== personnesToutesPrevues ==================== */
+
+t('union de la liste commune et de toutes les variantes',
+  personnesToutesPrevues(sport).sort(), ['s1', 's2', 's3']);
+t('aucun doublon quand une variante reprend la liste commune',
+  personnesToutesPrevues({ usualStudentIds: ['s1'], personnesParJour: { 2: ['s1', 's4'] } }).sort(), ['s1', 's4']);
+t('atelier sans variante', personnesToutesPrevues({ usualStudentIds: ['s1'] }), ['s1']);
+t('atelier absent', personnesToutesPrevues(null), []);
+
+/* ==================== joursAjustes ==================== */
+
+t('seuls les jours programmés comptent', joursAjustes(sport, [1, 2, 4]), [2, 4]);
+t('une variante posée sur un jour déprogrammé ne compte pas', joursAjustes(sport, [1, 4]), [4]);
+t('atelier sans variante', joursAjustes({ usualStudentIds: ['s1'] }, [1, 2]), []);
+
+/* ==================== resumeAtelier ==================== */
+
+const eleves = [{ id: 's1' }, { id: 's2' }, { id: 's3' }];
+
+t(
+  'le résumé compte la classe commune et signale les jours ajustés',
+  resumeAtelier(sport, { 1: ['at1'], 2: ['at1'] }, eleves),
+  { jours: [1, 2], nbPersonnes: 2, nbObjectifs: 0, joursAjustes: [2] }
+);
+
+t(
+  'les objectifs comptés couvrent aussi une personne qui ne vient qu\'un jour',
+  resumeAtelier(
+    { ...sport, usualObjectives: { s1: ['o1'], s3: ['o2', 'o3'] } },
+    { 1: ['at1'], 2: ['at1'] },
+    eleves
+  ).nbObjectifs,
+  3
+);
+
+t(
+  'une personne supprimée ne compte plus',
+  resumeAtelier(sport, { 1: ['at1'] }, [{ id: 's1' }]).nbPersonnes,
+  1
 );
 
 console.log(`\n${ok} OK, ${ko} en échec`);
