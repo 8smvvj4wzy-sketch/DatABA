@@ -109,7 +109,22 @@ de la personne partent avec).
 ### Ateliers
 
 Les groupes récurrents : « Habiletés sociales », « Repas », « Atelier cuisine »…
-Un atelier peut mémoriser sa configuration habituelle (section 7).
+Créez-le par son nom, puis dépliez-le (appui sur la ligne) pour régler dans le
+même écran :
+
+- **les jours** de la semaine type où il a lieu ;
+- **les personnes habituelles** — cocher une personne présélectionne ses
+  objectifs (mémorisés pour cet atelier, sinon ses objectifs prioritaires,
+  sinon tous) ;
+- **les objectifs de chacune**, avec l'étoile qui les rend prioritaires pour
+  cet atelier seulement.
+
+Aucune personne accompagnée ? Un bouton dans le panneau ouvre directement leur
+écran de création. Depuis une personne cochée, le chevron renvoie à sa fiche.
+
+Un atelier peut aussi mémoriser sa configuration au fil d'une séance réelle
+(section 7) — les deux réglages écrivent au même endroit et restent
+cohérents entre eux.
 
 ### Intervenants
 
@@ -168,8 +183,15 @@ jour reste en cours jusqu'au lendemain.
 ### Modèles d'objectifs
 
 Objectifs types réutilisables, avec leur mode de cotation, leurs cibles et leur
-critère. On les enregistre depuis l'écran Personnes (icône signet), et on les
-applique à la création d'un objectif.
+critère. Deux façons de les constituer : le bouton **Nouveau modèle** de cet
+écran, ou l'icône signet posée sur un objectif existant depuis la fiche d'une
+personne (section 5).
+
+Chaque modèle se modifie et se supprime depuis cet écran. L'icône de copie
+ouvre **« Appliquer à… »** : cochez une ou plusieurs personnes, donnez
+éventuellement un intitulé différent du modèle, et chacune reçoit une copie
+indépendante — la modifier ensuite n'affecte ni le modèle ni les autres
+copies.
 
 ### Sécurité
 
@@ -210,6 +232,11 @@ Appuyez sur une personne pour dérouler ses objectifs.
    ou de jours consécutifs. En jours, plusieurs séances d'une même journée sont
    moyennées.
 7. **Cibles successives** (facultatif) — voir ci-dessous.
+
+À côté du bouton **Ajouter un objectif**, l'icône signet ouvre **« Partir d'un
+modèle »** si la bibliothèque en contient déjà (section 4) : le formulaire
+s'ouvre préempli, il ne reste qu'à ajuster et valider. Si elle est vide, la
+même icône ouvre directement l'écran des modèles pour en créer un.
 
 ### Les cibles successives
 
@@ -507,7 +534,9 @@ une bande par personne et par axe suivi, du premier relevé du jour à
 maintenant, découpée en segments colorés proportionnels à leur durée réelle.
 Sans mention d'atelier — le relevé n'en porte pas, c'est DatABA Manager qui
 recoupe après coup avec les horaires des séances. Un axe non encore noté ce
-jour-là s'affiche « Non démarré aujourd'hui ».
+jour-là s'affiche « Non démarré aujourd'hui ». **Appuyez sur une bande** pour
+noter directement le critère du jour de cette personne, sans chercher sa
+pastille en bas d'écran.
 
 Ensuite, **où en sont les objectifs** : quatre compteurs qui se déplient.
 
@@ -518,6 +547,9 @@ Ensuite, **où en sont les objectifs** : quatre compteurs qui se déplient.
 | **En plateau** | Proche du seuil depuis plusieurs séances, sans l'atteindre. |
 | **Manque de données** | Pas encore de quoi se prononcer : trop peu de séances, ou plus rien depuis trois semaines. |
 
+**Une ligne de cette liste s'ouvre au tap** : elle mène directement à la fiche
+de la personne, sur l'objectif concerné.
+
 En dessous, une courbe par objectif, avec :
 
 - le **seuil d'acquisition** en pointillé ;
@@ -525,6 +557,10 @@ En dessous, une courbe par objectif, avec :
 - pour les objectifs à cibles, la liste des cibles avec celles déjà acquises,
   la courbe ne portant que sur la **cible en cours** ;
 - des **repères verticaux datés** à chaque changement de phase, avec son nom.
+
+Sous la courbe, deux actions rapides : **changer de phase** (même bouton et
+même effet que sur la fiche personne, section 5) et **modifier l'objectif**,
+qui ouvre directement son formulaire d'édition.
 
 **Réinitialiser le suivi** (sous la courbe) fait repartir la courbe et le
 critère de zéro, par exemple après un changement de protocole. Les séances

@@ -1064,6 +1064,65 @@ function objectifsParDefaut(student, atelier, mode) {
   return prioritaires.length ? prioritaires : ids;
 }
 
+/* Résumé en une ligne du réglage d'un objectif — ou d'un modèle, qui a la
+   même forme amputée des seules clés d'instance. Partagé par la fiche
+   personne et la bibliothèque de modèles pour ne pas en garder deux versions
+   qui divergeraient. */
+function descriptionObjectif(obj) {
+  const meta = typeMeta(obj.type);
+  let s = meta.short;
+  if (obj.type === 'trials') s += obj.config.trialCount ? ` · ${obj.config.trialCount} essais prévus` : ' · essais sans limite';
+  if (obj.type === 'interval') s += ` · toutes les ${fmtDuration(intervalStepSec(obj) * 1000)} · ${INTERVAL_MODE_SHORT[obj.config.intervalMode] || 'momentané'} · ${(obj.config.levels || []).length} niveaux`;
+  if (obj.type === 'chaining' || obj.type === 'balance') s += ` · ${(obj.config.steps || []).length} étapes`;
+  if (obj.config.mastery) s += ` · acquis à ${obj.config.mastery.threshold} % sur ${obj.config.mastery.sessions} ${obj.config.mastery.unit === 'days' ? 'jours' : 'séances'}`;
+  if (obj.config.avecCompteur) s += ' · compteur';
+  if (obj.config.avecChrono) {
+    s += (obj.config.chronoMode === 'countdown' && obj.config.chronoSeconds)
+      ? ` · chrono limite ${fmtDuration(obj.config.chronoSeconds * 1000)}`
+      : ' · chrono';
+  }
+  return s;
+}
+
+/* Un modèle est un objectif amputé de tout ce qui appartient à une instance
+   suivie : id, priorité, cible en cours, cibles acquises, historique de
+   phase, date de réinitialisation du suivi. Seul endroit qui sait ce qu'est
+   un modèle — utilisé au signet comme à la création directe. */
+function modeleDepuisObjectif(obj) {
+  const { id, favorite, currentTargetId, masteredTargetIds, phaseHistory, trackingResetAt, ...reste } = obj;
+  return { ...reste, id: uid() };
+}
+
+/* Un nom de modèle déjà pris est suffixé plutôt que rejeté : importConfig
+   dédoublonne les modèles par `name` (voir plus bas), deux homonymes locaux
+   deviendraient donc indiscernables dans la liste puis silencieusement
+   fusionnés au premier import. */
+function nomModeleDisponible(nom, templates, exceptId) {
+  const pris = new Set(templates.filter((t) => t.id !== exceptId).map((t) => t.name));
+  if (!pris.has(nom)) return nom;
+  let i = 2;
+  while (pris.has(`${nom} (${i})`)) i++;
+  return `${nom} (${i})`;
+}
+
+/* L'inverse : instancie un objectif réel et indépendant à partir d'un
+   modèle. Mêmes valeurs par défaut que la création via ObjectiveForm.submit
+   quand `initial` est un modèle — utilisé ici sans passer par le formulaire,
+   pour appliquer un modèle à plusieurs personnes d'un coup. */
+function instancierModele(modele, nom) {
+  const cibles = (modele.config && modele.config.targets) || [];
+  return {
+    id: uid(),
+    name: (nom && nom.trim()) || modele.name,
+    type: modele.type,
+    config: modele.config,
+    favorite: false,
+    currentTargetId: cibles.length ? cibles[0].id : null,
+    masteredTargetIds: [],
+    phaseHistory: [{ id: uid(), name: DEFAULT_PHASES[0], date: null }],
+  };
+}
+
 /* Monte l'instantané des objectifs et les cotations vides. Un seul endroit
    sait le faire : le lancement, l'arrivée d'une personne en cours de route et
    le passage à l'atelier suivant s'appuient tous dessus. */
@@ -1511,6 +1570,15 @@ function planifierJour(emploiDuTemps, ateliers, sessions, maintenant) {
   );
   const restants = duJour.filter((a) => !joues.has(a.id));
   return { jour, total: duJour.length, restants };
+}
+
+/* Résumé d'un atelier pour sa ligne repliée dans PanneauEmploiDuTemps : les
+   jours où il a lieu, et l'effectif de sa classe habituelle. */
+function resumeAtelier(atelier, emploiDuTemps, students) {
+  const jours = JOURS.filter((j) => ((emploiDuTemps && emploiDuTemps[String(j.k)]) || []).includes(atelier.id)).map((j) => j.k);
+  const studentIds = (atelier.usualStudentIds || []).filter((sid) => (students || []).some((s) => s.id === sid));
+  const nbObjectifs = studentIds.reduce((n, sid) => n + (((atelier.usualObjectives || {})[sid] || []).length), 0);
+  return { jours, nbPersonnes: studentIds.length, nbObjectifs };
 }
 
 /* ==================== Regroupement par jour ====================
@@ -2490,6 +2558,24 @@ function Empty({ children }) {
   );
 }
 
+/* Modale générique centrée : recouvrement + carte + croix de fermeture. Les
+   nouveaux blocs de ce lot l'utilisent ; les modales déjà en place ailleurs
+   dans le fichier ne sont pas migrées, pour ne pas risquer une régression sur
+   des écrans de cotation en production. */
+function Modale({ titre, onClose, children, className }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className={`rounded-2xl p-4 max-w-sm w-full max-h-[80vh] overflow-y-auto ${className || ''}`} style={{ backgroundColor: CARD }}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{titre}</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 /* Une ligne de critère de suivi continu : pastille de couleur (ouvre une
    palette au tap), libellé renommable, suppression. Distincte d'EditableRow
    parce qu'elle porte une donnée de plus — la couleur — sans en faire un cas
@@ -2633,6 +2719,21 @@ const ZOOM_LEVELS = [
    à délimiter une bande de bord qui entrerait en conflit avec le balayage
    document déjà en place. */
 const TAB_ORDER = ['suivi', 'session', 'export'];
+
+/* Les neuf panneaux du tiroir latéral. Source unique : autrefois écrits en
+   dur dans le JSX du tiroir en plus du `switch` de rendu, ce qui obligeait à
+   maintenir deux listes en parallèle à chaque ajout ou retrait de panneau. */
+const PANNEAUX = [
+  { k: 'ateliers', label: 'Ateliers et emploi du temps', icon: CalendarDays },
+  { k: 'personnes', label: 'Personnes accompagnées', icon: Users },
+  { k: 'intervenants', label: 'Intervenants', icon: UserCog },
+  { k: 'modeles', label: "Modèles d'objectifs", icon: BookmarkPlus },
+  { k: 'guidances', label: 'Guidances', icon: SlidersHorizontal },
+  { k: 'abc', label: 'Réponses ABC', icon: AlertTriangle },
+  { k: 'suivicontinu', label: 'Suivi continu', icon: Activity },
+  { k: 'motsdepasse', label: 'Mots de passe', icon: Lock },
+  { k: 'donnees', label: 'Données', icon: Database },
+];
 
 /* Un balayage ne doit pas voler le geste à une zone qui défile déjà
    horizontalement (grille d'essais, grille d'intervalles), à un champ de
@@ -2897,6 +2998,11 @@ function AbaApp() {
   /* Écran ouvert depuis le tiroir latéral. Il prend la place du contenu
      d'onglet ; la barre du bas reste visible, avec les boutons Crise et ABC. */
   const [ecran, setEcran] = useState(null);
+  /* Contexte porté par un lien croisé : ouvrir un panneau déjà positionné sur
+     une personne ou un objectif précis, plutôt que sur sa liste vide. Remis à
+     null à chaque ouverture depuis le tiroir ou chaque retour à un onglet —
+     il ne doit jamais survivre à un changement d'écran non lié. */
+  const [focusEcran, setFocusEcran] = useState(null);
   const [tiroir, setTiroir] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [security, setSecurity] = useState({ pinHash: null, pinSalt: null });
@@ -2975,10 +3081,19 @@ function AbaApp() {
       const j = TAB_ORDER.indexOf(k);
       setDir(ecran ? 0 : Math.sign(j - i));
       setEcran(null);
+      setFocusEcran(null);
       setTab(k);
     },
     [tab, ecran]
   );
+
+  /* Lien croisé : ouvre un panneau du tiroir déjà positionné sur une personne
+     ou un objectif précis (`focus`), au lieu de sa liste. */
+  const ouvrirEcran = React.useCallback((k, focus = null) => {
+    setFocusEcran(focus);
+    setEcran(k);
+    setTiroir(false);
+  }, []);
 
   /* La barre est figée une fois les cotations lancées, pas avant : l'écran de
      configuration n'a rien à protéger d'un balayage accidentel. Seule la
@@ -2989,14 +3104,14 @@ function AbaApp() {
   /* Bouton « Menu » de tous les onglets (Suivi, Session hors cotation, Export)
      et bouton « ‹ Menu » des écrans ouverts depuis le tiroir : une seule
      action, ouvrir le tiroir, quel que soit l'endroit d'où elle part. */
-  const ouvrirMenu = React.useCallback(() => { setEcran(null); setTiroir(true); }, []);
+  const ouvrirMenu = React.useCallback(() => { setEcran(null); setFocusEcran(null); setTiroir(true); }, []);
 
   const onLeft = React.useCallback(() => {
     if (tiroir) { if (TIROIR_FERME_AU_BALAYAGE) setTiroir(false); return; }
     // Depuis un écran ouvert par le tiroir : retour direct à l'onglet
     // d'origine (celui d'où le bouton Menu ou le balayage a été déclenché),
     // sans repasser par le tiroir — `tab` n'a jamais changé entre-temps.
-    if (ecran) { setEcran(null); return; }
+    if (ecran) { setEcran(null); setFocusEcran(null); return; }
     goTab(1);
   }, [tiroir, ecran, goTab]);
 
@@ -3424,6 +3539,34 @@ function AbaApp() {
           knownObjectiveIds: Array.from(new Set([...(x.knownObjectiveIds || []), ...(config.known || [])])),
         }
       : x)));
+
+  /* Réglage à froid d'un atelier, depuis son propre panneau — distinct de
+     setAtelierGroup (mémorisation cumulative depuis une séance réelle). Ici
+     un décochage doit retirer, pas être protégé : setAtelierPersonnes et
+     setAtelierObjectifs remplacent plutôt que de fusionner. */
+  const basculerAtelierJour = (atelierId, jour) =>
+    setEmploiDuTemps((e) => {
+      const cle = String(jour);
+      const ids = e[cle] || [];
+      return { ...e, [cle]: ids.includes(atelierId) ? ids.filter((id) => id !== atelierId) : [...ids, atelierId] };
+    });
+  const setAtelierPersonnes = (atelierId, studentIds) =>
+    setAteliers((a) => a.map((x) => (x.id === atelierId ? { ...x, usualStudentIds: studentIds } : x)));
+  const setAtelierObjectifs = (atelierId, studentId, objectiveIds) =>
+    setAteliers((a) => a.map((x) => (x.id === atelierId
+      ? {
+          ...x,
+          usualObjectives: { ...(x.usualObjectives || {}), [studentId]: objectiveIds },
+          knownObjectiveIds: Array.from(new Set([...(x.knownObjectiveIds || []), ...objectiveIds])),
+        }
+      : x)));
+  const toggleAtelierFavori = (atelierId, objectiveId) =>
+    setAteliers((a) => a.map((x) => {
+      if (x.id !== atelierId) return x;
+      const favs = x.favoriteObjectiveIds || [];
+      return { ...x, favoriteObjectiveIds: favs.includes(objectiveId) ? favs.filter((id) => id !== objectiveId) : [...favs, objectiveId] };
+    }));
+
   const addIntervenant = (name) => setIntervenants((l) => [...l, { id: uid(), name }]);
   const removeIntervenant = (id) => setIntervenants((l) => l.filter((x) => x.id !== id));
   const renameIntervenant = (id, name) => setIntervenants((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
@@ -3432,11 +3575,27 @@ function AbaApp() {
   const toggleIndependent = (code) => setGuidances((l) => l.map((x) => (x.code === code ? { ...x, independent: !x.independent } : x)));
 
   const saveTemplate = (obj) => {
-    const { id, favorite, currentTargetId, masteredTargetIds, phaseHistory: ph, trackingResetAt, ...reste } = obj;
-    setObjectiveTemplates((l) => [...l, { ...reste, id: uid() }]);
+    const modele = modeleDepuisObjectif(obj);
+    setObjectiveTemplates((l) => [...l, { ...modele, name: nomModeleDisponible(modele.name, l) }]);
     notify('Modèle enregistré');
   };
+  const addTemplate = (obj) =>
+    setObjectiveTemplates((l) => {
+      const modele = modeleDepuisObjectif(obj);
+      return [...l, { ...modele, name: nomModeleDisponible(modele.name, l) }];
+    });
+  const updateTemplate = (id, obj) =>
+    setObjectiveTemplates((l) => {
+      const modele = modeleDepuisObjectif(obj);
+      return l.map((t) => (t.id === id ? { ...modele, id, name: nomModeleDisponible(modele.name, l, id) } : t));
+    });
   const removeTemplate = (id) => setObjectiveTemplates((l) => l.filter((t) => t.id !== id));
+  const appliquerTemplate = (templateId, studentIds, nom) => {
+    const t = objectiveTemplates.find((x) => x.id === templateId);
+    if (!t || !studentIds.length) return;
+    studentIds.forEach((sid) => addObjective(sid, instancierModele(t, nom)));
+    notify(`Modèle appliqué à ${studentIds.length} personne${studentIds.length !== 1 ? 's' : ''}`);
+  };
 
   /* Export de configuration : ateliers, intervenants, guidances et modèles.
      Aucune personne, aucune séance, aucune crise — le fichier ne contient donc
@@ -3881,26 +4040,38 @@ function AbaApp() {
       case 'ateliers':
         return (
           <PanneauEmploiDuTemps
-            ateliers={ateliers} onAdd={addAtelier} onRename={renameAtelier} onRemove={removeAtelier}
+            ateliers={ateliers} students={students} onAdd={addAtelier} onRename={renameAtelier} onRemove={removeAtelier}
             emploiDuTemps={emploiDuTemps} onSetEmploiDuTemps={setEmploiDuTemps}
+            onBasculerJour={basculerAtelierJour} onSetPersonnes={setAtelierPersonnes}
+            onSetObjectifs={setAtelierObjectifs} onToggleFavori={toggleAtelierFavori}
+            onOuvrirPersonnes={() => ouvrirEcran('personnes')}
+            onOuvrirPersonne={(sid) => ouvrirEcran('personnes', { personne: sid })}
           />
         );
       case 'personnes':
         return (
           <PanneauPersonnes
-            students={students} guidances={guidances} templates={objectiveTemplates}
+            students={students} guidances={guidances} templates={objectiveTemplates} focus={focusEcran}
             premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
             axesSuivi={axesSuivi} onToggleAxeSuivi={toggleAxeSuivi} onToggleRenforcement={toggleSuiviRenforcement}
             addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective}
             duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase}
             onSaveTemplate={saveTemplate}
+            onOuvrirGuidances={() => ouvrirEcran('guidances')} onOuvrirModeles={() => ouvrirEcran('modeles')}
+            onOuvrirAteliers={() => ouvrirEcran('ateliers')} onOuvrirIntervenants={() => ouvrirEcran('intervenants')}
           />
         );
       case 'intervenants':
         return <PanneauIntervenants intervenants={intervenants} onAdd={addIntervenant} onRename={renameIntervenant} onRemove={removeIntervenant} />;
       case 'modeles':
-        return <PanneauModeles templates={objectiveTemplates} onRemove={removeTemplate} />;
+        return (
+          <PanneauModeles
+            templates={objectiveTemplates} students={students} guidances={guidances}
+            onAdd={addTemplate} onUpdate={updateTemplate} onRemove={removeTemplate} onAppliquer={appliquerTemplate}
+            onOuvrirGuidances={() => ouvrirEcran('guidances')}
+          />
+        );
       case 'motsdepasse':
         return <PanneauMotsDePasse security={security} onChangePin={changePin} onDisableProtection={disableProtection} />;
       case 'donnees':
@@ -3928,6 +4099,9 @@ function AbaApp() {
             students={students} sessions={sessions} guidances={guidances}
             releves={releves} axesSuivi={axesSuivi}
             onResetTracking={resetTracking} onOuvrirMenu={ouvrirMenu}
+            onChangePhase={changePhase}
+            onOuvrirObjectif={(sid, oid) => ouvrirEcran('personnes', { personne: sid, objectif: oid })}
+            onOuvrirSuivi={(sid) => setChoixSuivi(sid)}
           />
         );
       case 'session':
@@ -4221,22 +4395,12 @@ function AbaApp() {
             </div>
 
             <div className="px-2 space-y-0.5">
-              {[
-                { k: 'ateliers', label: 'Ateliers et emploi du temps', icon: CalendarDays },
-                { k: 'personnes', label: 'Personnes accompagnées', icon: Users },
-                { k: 'intervenants', label: 'Intervenants', icon: UserCog },
-                { k: 'modeles', label: "Modèles d'objectifs", icon: BookmarkPlus },
-                { k: 'guidances', label: 'Guidances', icon: SlidersHorizontal },
-                { k: 'abc', label: 'Réponses ABC', icon: AlertTriangle },
-                { k: 'suivicontinu', label: 'Suivi continu', icon: Activity },
-                { k: 'motsdepasse', label: 'Mots de passe', icon: Lock },
-                { k: 'donnees', label: 'Données', icon: Database },
-              ].map((it) => {
+              {PANNEAUX.map((it) => {
                 const Icon = it.icon;
                 return (
                   <button
                     key={it.k}
-                    onClick={() => { setEcran(it.k); setTiroir(false); }}
+                    onClick={() => ouvrirEcran(it.k)}
                     className="w-full flex items-center gap-3 rounded-xl px-3 py-3.5 text-left"
                     style={{ backgroundColor: ecran === it.k ? PAPER : 'transparent' }}
                   >
@@ -4489,8 +4653,12 @@ function ChangePinModal({ security, onSave, onClose }) {
 /* Ateliers et semaine type dans un seul écran : deux vues qui se
    consultaient déjà côte à côte à la création d'une séance (l'atelier, puis
    qui doit s'y trouver) n'avaient pas de raison d'être séparées ici. */
-function PanneauEmploiDuTemps({ ateliers, onAdd, onRename, onRemove, emploiDuTemps, onSetEmploiDuTemps }) {
+function PanneauEmploiDuTemps({
+  ateliers, students, onAdd, onRename, onRemove, emploiDuTemps, onSetEmploiDuTemps,
+  onBasculerJour, onSetPersonnes, onSetObjectifs, onToggleFavori, onOuvrirPersonnes, onOuvrirPersonne,
+}) {
   const [nom, setNom] = useState('');
+  const [openId, setOpenId] = useState(null);
   const [jourActif, setJourActif] = useState(new Date().getDay());
   const [duplicationOuverte, setDuplicationOuverte] = useState(false);
   const ajouter = () => { if (nom.trim()) { onAdd(nom.trim()); setNom(''); } };
@@ -4508,6 +4676,27 @@ function PanneauEmploiDuTemps({ ateliers, onAdd, onRename, onRemove, emploiDuTem
     setDuplicationOuverte(false);
   };
 
+  const togglePersonne = (atelier, student) => {
+    const actuels = atelier.usualStudentIds || [];
+    if (actuels.includes(student.id)) {
+      onSetPersonnes(atelier.id, actuels.filter((id) => id !== student.id));
+      return;
+    }
+    onSetPersonnes(atelier.id, [...actuels, student.id]);
+    // Une personne nouvellement cochée arrive avec ses objectifs par défaut —
+    // mémorisés pour cet atelier, à défaut prioritaires, à défaut tous.
+    if (!(atelier.usualObjectives && atelier.usualObjectives[student.id])) {
+      onSetObjectifs(atelier.id, student.id, objectifsParDefaut(student, atelier, 'atelier'));
+    }
+  };
+  const toggleObjectif = (atelier, studentId, objectif) => {
+    const choisis = (atelier.usualObjectives && atelier.usualObjectives[studentId]) || [];
+    onSetObjectifs(
+      atelier.id, studentId,
+      choisis.includes(objectif.id) ? choisis.filter((id) => id !== objectif.id) : [...choisis, objectif.id]
+    );
+  };
+
   return (
     <div>
       <SectionTitle sub="Les groupes dans lesquels se déroulent les séances, et la semaine type.">
@@ -4521,10 +4710,103 @@ function PanneauEmploiDuTemps({ ateliers, onAdd, onRename, onRemove, emploiDuTem
         {ateliers.length === 0 ? (
           <Empty>Aucun atelier créé.</Empty>
         ) : (
-          <div className="space-y-1.5">
-            {ateliers.map((a) => (
-              <EditableRow key={a.id} label={a.name} onRename={(v) => onRename(a.id, v)} onRemove={() => onRemove(a.id)} />
-            ))}
+          <div className="space-y-3">
+            {ateliers.map((a) => {
+              const resume = resumeAtelier(a, emploiDuTemps, students);
+              const libellesJours = JOURS.filter((j) => resume.jours.includes(j.k)).map((j) => j.label.slice(0, 2)).join(', ');
+              const open = openId === a.id;
+              return (
+                <div key={a.id} className="rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+                  <button className="w-full flex items-center justify-between" onClick={() => setOpenId(open ? null : a.id)}>
+                    <span className="text-left min-w-0">
+                      <span className="block font-semibold text-sm truncate" style={{ fontFamily: F_DISPLAY }}>{a.name}</span>
+                      <span className="block text-xs" style={{ color: INK_SOFT }}>
+                        {libellesJours || 'Aucun jour programmé'} · {resume.nbPersonnes} personne{resume.nbPersonnes !== 1 ? 's' : ''} · {resume.nbObjectifs} objectif{resume.nbObjectifs !== 1 ? 's' : ''}
+                      </span>
+                    </span>
+                    <ChevronRight size={18} style={{ color: INK_SOFT, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} className="shrink-0" />
+                  </button>
+
+                  {open && (
+                    <div className="mt-3 space-y-3">
+                      <EditableRow label={a.name} onRename={(v) => onRename(a.id, v)} onRemove={() => onRemove(a.id)} />
+
+                      <div>
+                        <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Jours</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {JOURS.map((j) => (
+                            <Chip key={j.k} label={j.label.slice(0, 2)} on={resume.jours.includes(j.k)} onClick={() => onBasculerJour(a.id, j.k)} />
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Personnes habituelles</div>
+                        {students.length === 0 ? (
+                          <div>
+                            <p className="text-xs mb-2" style={{ color: INK_SOFT }}>Aucune personne accompagnée pour l'instant.</p>
+                            <Btn variant="ghost" onClick={onOuvrirPersonnes} className="text-sm">
+                              <Plus size={14} /> Créer une personne accompagnée
+                            </Btn>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap gap-1.5">
+                            {students.map((s) => (
+                              <Chip key={s.id} label={s.initials} on={(a.usualStudentIds || []).includes(s.id)} onClick={() => togglePersonne(a, s)} />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {(a.usualStudentIds || []).map((sid) => {
+                        const st = students.find((s) => s.id === sid);
+                        if (!st) return null;
+                        const choisis = (a.usualObjectives && a.usualObjectives[sid]) || [];
+                        const favs = a.favoriteObjectiveIds || [];
+                        return (
+                          <div key={sid} className="rounded-xl p-2.5" style={{ backgroundColor: CARD }}>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="font-semibold text-sm" style={{ fontFamily: F_DISPLAY }}>{st.initials}</span>
+                              <button onClick={() => onOuvrirPersonne(sid)} style={{ color: INK_SOFT }} title="Voir la fiche de cette personne">
+                                <ChevronRight size={16} />
+                              </button>
+                            </div>
+                            {st.objectives.length === 0 ? (
+                              <div className="text-sm" style={{ color: INK_SOFT }}>Aucun objectif défini pour cette personne.</div>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {st.objectives.map((o) => {
+                                  const on = choisis.includes(o.id);
+                                  const meta = typeMeta(o.type);
+                                  const Icon = meta.icon;
+                                  const favAtelier = favs.includes(o.id);
+                                  return (
+                                    <div key={o.id} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm"
+                                      style={{ borderColor: on ? meta.color : BORDER, backgroundColor: on ? meta.color + '14' : 'transparent' }}>
+                                      <button onClick={() => toggleObjectif(a, sid, o)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                                        <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
+                                        <span className="flex-1 min-w-0 truncate">{o.name}</span>
+                                        {on && <Check size={15} style={{ color: meta.color }} className="shrink-0" />}
+                                      </button>
+                                      {on && (
+                                        <button onClick={() => onToggleFavori(a.id, o.id)} className="shrink-0"
+                                          style={{ color: favAtelier ? '#D69A2D' : INK_SOFT }} title="Prioritaire pour cet atelier">
+                                          <Star size={15} fill={favAtelier ? '#D69A2D' : 'none'} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>
@@ -4633,35 +4915,114 @@ function PanneauIntervenants({ intervenants, onAdd, onRename, onRemove }) {
   );
 }
 
-function PanneauModeles({ templates, onRemove }) {
+function PanneauModeles({ templates, students, guidances, onAdd, onUpdate, onRemove, onAppliquer, onOuvrirGuidances }) {
+  const [creation, setCreation] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [appliquant, setAppliquant] = useState(null);
+  const [cibles, setCibles] = useState([]);
+  const [nomInstance, setNomInstance] = useState('');
+
+  const ouvrirApplication = (t) => { setAppliquant(t.id); setCibles([]); setNomInstance(''); };
+  const toggleCible = (sid) => setCibles((c) => (c.includes(sid) ? c.filter((x) => x !== sid) : [...c, sid]));
+  const confirmerApplication = () => { onAppliquer(appliquant, cibles, nomInstance); setAppliquant(null); };
+
   return (
     <div>
       <SectionTitle sub="Objectifs types réutilisables, avec leur mode de cotation, leurs cibles et leur critère.">
         Modèles d'objectifs
       </SectionTitle>
-      <Card>
-        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          On les enregistre depuis l'écran Personnes accompagnées, et on les applique à la création
-          d'un objectif.
-        </p>
-        {templates.length === 0 ? (
-          <Empty>Aucun modèle enregistré.</Empty>
+
+      <Card className="mb-4">
+        {creation ? (
+          <ObjectiveForm
+            guidances={guidances}
+            masquerPhase
+            libelleValidation="Créer le modèle"
+            onOuvrirGuidances={onOuvrirGuidances}
+            onSubmit={(o) => { onAdd(o); setCreation(false); }}
+            onCancel={() => setCreation(false)}
+          />
         ) : (
-          <div className="space-y-1.5">
-            {templates.map((t) => {
-              const meta = typeMeta(t.type);
-              const Icon = meta.icon;
-              return (
-                <div key={t.id} className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
-                  <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
-                  <span className="text-sm flex-1 min-w-0 break-words">{t.name}</span>
-                  <button onClick={() => onRemove(t.id)} style={{ color: INK_SOFT }}><X size={15} /></button>
-                </div>
-              );
-            })}
-          </div>
+          <Btn variant="ghost" onClick={() => setCreation(true)} className="w-full text-sm">
+            <Plus size={16} /> Nouveau modèle
+          </Btn>
         )}
       </Card>
+
+      {templates.length === 0 ? (
+        <Empty>
+          Aucun modèle enregistré. Créez-en un ci-dessus, ou enregistrez-en un depuis un objectif
+          existant — l'icône signet, sur la fiche d'une personne.
+        </Empty>
+      ) : (
+        <div className="space-y-1.5">
+          {templates.map((t) => {
+            const meta = typeMeta(t.type);
+            const Icon = meta.icon;
+            if (editingId === t.id) {
+              return (
+                <ObjectiveForm
+                  key={t.id}
+                  initial={t}
+                  guidances={guidances}
+                  masquerPhase
+                  libelleValidation="Enregistrer les modifications"
+                  onOuvrirGuidances={onOuvrirGuidances}
+                  onSubmit={(o) => { onUpdate(t.id, o); setEditingId(null); }}
+                  onCancel={() => setEditingId(null)}
+                />
+              );
+            }
+            const nbCibles = (t.config.targets || []).length;
+            return (
+              <div key={t.id} className="rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+                <div className="flex items-start gap-2">
+                  <Icon size={15} style={{ color: meta.color, marginTop: 2 }} className="shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium break-words">{t.name}</div>
+                    <div className="text-xs" style={{ color: INK_SOFT }}>
+                      {descriptionObjectif(t)}{nbCibles > 0 && ` · ${nbCibles} cible${nbCibles !== 1 ? 's' : ''}`}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => ouvrirApplication(t)} style={{ color: INK_SOFT }} title="Appliquer à…"><Copy size={15} /></button>
+                    <button onClick={() => setEditingId(t.id)} style={{ color: INK_SOFT }} title="Modifier"><Pencil size={15} /></button>
+                    <button onClick={() => onRemove(t.id)} style={{ color: INK_SOFT }} title="Supprimer"><X size={15} /></button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {appliquant && (() => {
+        const t = templates.find((x) => x.id === appliquant);
+        if (!t) return null;
+        return (
+          <Modale titre={`Appliquer « ${t.name} » à…`} onClose={() => setAppliquant(null)}>
+            {students.length === 0 ? (
+              <Empty>Aucune personne accompagnée.</Empty>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {students.map((s) => (
+                    <Chip key={s.id} label={s.initials} on={cibles.includes(s.id)} onClick={() => toggleCible(s.id)} />
+                  ))}
+                </div>
+                <Field value={nomInstance} onChange={setNomInstance} placeholder={`Intitulé (${t.name})`} onEnter={confirmerApplication} />
+                <p className="text-xs mt-1.5 mb-3" style={{ color: INK_SOFT }}>
+                  Facultatif — laissez vide pour reprendre l'intitulé du modèle. Chaque personne
+                  cochée reçoit une copie indépendante.
+                </p>
+                <Btn onClick={confirmerApplication} disabled={cibles.length === 0} className="w-full text-sm">
+                  Appliquer {cibles.length > 0 ? `à ${cibles.length} personne${cibles.length !== 1 ? 's' : ''}` : ''}
+                </Btn>
+              </>
+            )}
+          </Modale>
+        );
+      })()}
     </div>
   );
 }
@@ -5007,20 +5368,45 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
   );
 }
 
+/* Bouton de phase d'un objectif : fait tourner sur DEFAULT_PHASES, avec
+   confirmation puisque le changement trace un repère daté sur la courbe de
+   suivi. Partagé par la fiche personne et le graphe de suivi, plutôt que
+   deux versions qui divergeraient. */
+function BoutonPhase({ obj, onChange }) {
+  const actuelle = currentPhase(obj).name;
+  const suivante = DEFAULT_PHASES[(DEFAULT_PHASES.indexOf(actuelle) + 1) % DEFAULT_PHASES.length];
+  return (
+    <button
+      onClick={() => {
+        if (window.confirm(`Passer « ${obj.name} » en phase « ${suivante} » ?\n\nUn repère daté sera tracé sur la courbe de suivi.`)) {
+          onChange(suivante);
+        }
+      }}
+      className="text-xs inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border"
+      style={{ borderColor: BORDER, color: INK }}
+      title="Changer de phase"
+    >
+      <Flag size={11} /> {actuelle}
+    </button>
+  );
+}
+
 /* ==================== Écran 2 : personnes accompagnées et objectifs ==================== */
 /* Création des personnes, objectifs et activation du suivi continu au même
    endroit : la fiche d'une personne se tenait jusqu'ici à deux écrans de
    distance, une carte dans Gestion et une carte dans Personnes. */
 function PanneauPersonnes({
-  students, guidances, templates, premiereConfiguration,
+  students, guidances, templates, premiereConfiguration, focus,
   addStudent, removeStudent, renameStudent, axesSuivi, onToggleAxeSuivi, onToggleRenforcement,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
+  onOuvrirGuidances, onOuvrirModeles, onOuvrirAteliers, onOuvrirIntervenants,
 }) {
   const [openId, setOpenId] = useState(null);
   const [editingObj, setEditingObj] = useState(null);
   const [copyingObj, setCopyingObj] = useState(null);
   const [copyTargets, setCopyTargets] = useState([]);
   const [initials, setInitials] = useState('');
+  const studentRefs = useRef({});
 
   const ajouter = () => {
     const v = initials.trim();
@@ -5028,6 +5414,17 @@ function PanneauPersonnes({
     addStudent(v);
     setInitials('');
   };
+
+  /* Lien croisé : ouvrir ce panneau déjà déplié sur une personne, et son
+     objectif en édition le cas échéant — depuis le Suivi ou depuis un
+     atelier, plutôt que de retomber sur la liste entière. */
+  useEffect(() => {
+    if (!focus || !focus.personne) return;
+    setOpenId(focus.personne);
+    if (focus.objectif) setEditingObj(focus.objectif);
+    const node = studentRefs.current[focus.personne];
+    if (node) node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [focus]);
 
   return (
     <div>
@@ -5041,12 +5438,21 @@ function PanneauPersonnes({
             <Sun size={16} style={{ color: INK_SOFT }} />
             <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Première configuration</span>
           </div>
-          <p className="text-xs" style={{ color: INK_SOFT }}>
+          <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
             Cette tablette est vierge. Commencez par créer les personnes accompagnées, puis leurs
-            objectifs. Les ateliers et les intervenants se règlent ensuite depuis le menu — le bouton
-            <strong> Menu</strong> en haut de cet écran. Aux ouvertures suivantes, l'application
-            démarrera directement sur Session.
+            objectifs. Aux ouvertures suivantes, l'application démarrera directement sur Session.
           </p>
+          <div className="flex flex-wrap gap-2">
+            {onOuvrirAteliers && (
+              <Btn variant="ghost" onClick={onOuvrirAteliers} className="text-xs px-3 py-2">Ateliers</Btn>
+            )}
+            {onOuvrirIntervenants && (
+              <Btn variant="ghost" onClick={onOuvrirIntervenants} className="text-xs px-3 py-2">Intervenants</Btn>
+            )}
+            {onOuvrirGuidances && (
+              <Btn variant="ghost" onClick={onOuvrirGuidances} className="text-xs px-3 py-2">Guidances</Btn>
+            )}
+          </div>
         </Card>
       )}
 
@@ -5067,7 +5473,8 @@ function PanneauPersonnes({
       ) : (
       <div className="space-y-3">
         {students.map((s) => (
-          <Card key={s.id}>
+          <div key={s.id} ref={(el) => { studentRefs.current[s.id] = el; }}>
+          <Card>
             <button className="w-full flex items-center justify-between" onClick={() => setOpenId(openId === s.id ? null : s.id)}>
               <span className="flex items-center gap-3">
                 <span className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white" style={{ backgroundColor: INK, fontFamily: F_DISPLAY }}>
@@ -5137,6 +5544,7 @@ function PanneauPersonnes({
                           key={o.id}
                           initial={o}
                           guidances={guidances}
+                          onOuvrirGuidances={onOuvrirGuidances}
                           onSubmit={(next) => { updateObjective(s.id, o.id, next); setEditingObj(null); }}
                           onCancel={() => setEditingObj(null)}
                         />
@@ -5150,20 +5558,7 @@ function PanneauPersonnes({
                             <div>
                               <div className="text-sm">{o.name}</div>
                             <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                              <button
-                                onClick={() => {
-                                  const actuelle = currentPhase(o).name;
-                                  const suivante = DEFAULT_PHASES[(DEFAULT_PHASES.indexOf(actuelle) + 1) % DEFAULT_PHASES.length];
-                                  if (window.confirm(`Passer « ${o.name} » en phase « ${suivante} » ?\n\nUn repère daté sera tracé sur la courbe de suivi.`)) {
-                                    changePhase(s.id, o.id, suivante);
-                                  }
-                                }}
-                                className="text-xs inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border"
-                                style={{ borderColor: BORDER, color: INK }}
-                                title="Changer de phase"
-                              >
-                                <Flag size={11} /> {currentPhase(o).name}
-                              </button>
+                              <BoutonPhase obj={o} onChange={(nom) => changePhase(s.id, o.id, nom)} />
                               {currentTarget(o) && (
                                 <span className="text-xs inline-flex items-center gap-1 rounded-md px-1.5 py-0.5" style={{ backgroundColor: CARD, color: INK }}>
                                   <Target size={11} /> cible en cours : {currentTarget(o).name}
@@ -5171,15 +5566,7 @@ function PanneauPersonnes({
                               )}
                             </div>
                               <div className="text-xs" style={{ color: INK_SOFT }}>
-                                {meta.short}
-                                {o.type === 'trials' && (o.config.trialCount ? ` · ${o.config.trialCount} essais prévus` : ' · essais sans limite')}
-                                {o.type === 'interval' && ` · toutes les ${fmtDuration(intervalStepSec(o) * 1000)} · ${INTERVAL_MODE_SHORT[o.config.intervalMode] || 'momentané'} · ${(o.config.levels || []).length} niveaux`}
-                                {(o.type === 'chaining' || o.type === 'balance') && ` · ${(o.config.steps || []).length} étapes`}
-                                {o.config.mastery && ` · acquis à ${o.config.mastery.threshold} % sur ${o.config.mastery.sessions} ${o.config.mastery.unit === 'days' ? 'jours' : 'séances'}`}
-                                {o.config.avecCompteur && ' · compteur'}
-                                {o.config.avecChrono && (o.config.chronoMode === 'countdown' && o.config.chronoSeconds
-                                  ? ` · chrono limite ${fmtDuration(o.config.chronoSeconds * 1000)}`
-                                  : ' · chrono')}
+                                {descriptionObjectif(o)}
                                 {objectiveTargets(o).length > 0 && ` · ${(o.masteredTargetIds || []).length}/${objectiveTargets(o).length} cibles acquises`}
                               </div>
                             </div>
@@ -5234,10 +5621,14 @@ function PanneauPersonnes({
                     );
                   })}
                 </div>
-                <ObjectiveEditor guidances={guidances} templates={templates} onAdd={(o) => addObjective(s.id, o)} />
+                <ObjectiveEditor
+                  guidances={guidances} templates={templates} onAdd={(o) => addObjective(s.id, o)}
+                  onOuvrirGuidances={onOuvrirGuidances} onOuvrirModeles={onOuvrirModeles}
+                />
               </div>
             )}
           </Card>
+          </div>
         ))}
       </div>
       )}
@@ -5245,7 +5636,7 @@ function PanneauPersonnes({
   );
 }
 
-function ObjectiveEditor({ guidances, templates, onAdd }) {
+function ObjectiveEditor({ guidances, templates, onAdd, onOuvrirGuidances, onOuvrirModeles }) {
   const [open, setOpen] = useState(false);
   const [depuisModele, setDepuisModele] = useState(false);
   const [base, setBase] = useState(null);
@@ -5256,35 +5647,33 @@ function ObjectiveEditor({ guidances, templates, onAdd }) {
         <Btn variant="ghost" onClick={() => { setBase(null); setOpen(true); }} className="flex-1 text-sm">
           <Plus size={16} /> Ajouter un objectif
         </Btn>
-        {templates && templates.length > 0 && (
+        {templates && templates.length > 0 ? (
           <Btn variant="ghost" onClick={() => setDepuisModele(true)} className="text-sm px-4" title="Depuis un modèle">
+            <BookmarkPlus size={16} />
+          </Btn>
+        ) : onOuvrirModeles && (
+          <Btn variant="ghost" onClick={onOuvrirModeles} className="text-sm px-4" title="Aucun modèle enregistré : en créer un">
             <BookmarkPlus size={16} />
           </Btn>
         )}
         {depuisModele && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-            <div className="rounded-2xl p-4 max-w-sm w-full max-h-[80vh] overflow-y-auto" style={{ backgroundColor: CARD }}>
-              <div className="flex items-center justify-between mb-3">
-                <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Partir d'un modèle</span>
-                <button onClick={() => setDepuisModele(false)} style={{ color: INK_SOFT }}><X size={18} /></button>
-              </div>
-              <div className="space-y-1.5">
-                {templates.map((t) => {
-                  const meta = typeMeta(t.type);
-                  const Icon = meta.icon;
-                  return (
-                    <button key={t.id}
-                      onClick={() => { setBase(t); setDepuisModele(false); setOpen(true); }}
-                      className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 text-left border text-sm"
-                      style={{ borderColor: BORDER }}>
-                      <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
-                      <span className="flex-1 min-w-0 break-words">{t.name}</span>
-                    </button>
-                  );
-                })}
-              </div>
+          <Modale titre="Partir d'un modèle" onClose={() => setDepuisModele(false)}>
+            <div className="space-y-1.5">
+              {templates.map((t) => {
+                const meta = typeMeta(t.type);
+                const Icon = meta.icon;
+                return (
+                  <button key={t.id}
+                    onClick={() => { setBase(t); setDepuisModele(false); setOpen(true); }}
+                    className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 text-left border text-sm"
+                    style={{ borderColor: BORDER }}>
+                    <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
+                    <span className="flex-1 min-w-0 break-words">{t.name}</span>
+                  </button>
+                );
+              })}
             </div>
-          </div>
+          </Modale>
         )}
       </div>
     );
@@ -5293,13 +5682,15 @@ function ObjectiveEditor({ guidances, templates, onAdd }) {
     <ObjectiveForm
       guidances={guidances}
       initial={base ? { ...base, id: null } : undefined}
+      libelleValidation="Ajouter l'objectif"
+      onOuvrirGuidances={onOuvrirGuidances}
       onSubmit={(o) => { onAdd({ ...o, id: uid() }); setOpen(false); setBase(null); }}
       onCancel={() => { setOpen(false); setBase(null); }}
     />
   );
 }
 
-function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
+function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidation, onOuvrirGuidances, masquerPhase }) {
   const allGuidances = guidances && guidances.length ? guidances : DEFAULT_GUIDANCE;
   const init = initial || {};
   const initConfig = init.config || {};
@@ -5432,17 +5823,19 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
     <div className="rounded-xl border p-3 space-y-3" style={{ borderColor: BORDER }}>
       <Field autoFocus value={name} onChange={setName} placeholder="Intitulé de l'objectif" />
 
-      <div>
-        <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Phase en cours</div>
-        <div className="flex gap-1.5 flex-wrap">
-          {DEFAULT_PHASES.map((ph) => (
-            <button key={ph} onClick={() => setPhaseName(ph)} className="rounded-lg px-3 py-2 text-xs border"
-              style={{ borderColor: phaseName === ph ? INK : BORDER, backgroundColor: phaseName === ph ? INK : 'transparent', color: phaseName === ph ? '#fff' : INK_SOFT }}>
-              {ph}
-            </button>
-          ))}
+      {!masquerPhase && (
+        <div>
+          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Phase en cours</div>
+          <div className="flex gap-1.5 flex-wrap">
+            {DEFAULT_PHASES.map((ph) => (
+              <button key={ph} onClick={() => setPhaseName(ph)} className="rounded-lg px-3 py-2 text-xs border"
+                style={{ borderColor: phaseName === ph ? INK : BORDER, backgroundColor: phaseName === ph ? INK : 'transparent', color: phaseName === ph ? '#fff' : INK_SOFT }}>
+                {ph}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       <div>
         <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Mode de cotation</div>
@@ -5613,6 +6006,11 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
           <div className="flex items-center gap-1.5 mb-1">
             <SlidersHorizontal size={14} style={{ color: INK_SOFT }} />
             <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Réponses possibles</span>
+            {onOuvrirGuidances && (
+              <button onClick={onOuvrirGuidances} className="text-xs ml-auto underline" style={{ color: INK_SOFT }}>
+                Gérer les guidances
+              </button>
+            )}
           </div>
 
           <>
@@ -5953,7 +6351,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel }) {
 
       <div className="flex gap-2">
         <Btn onClick={submit} disabled={!name.trim() || (type === 'interval' && levels.length === 0) || ((type === 'chaining' || type === 'balance') && steps.length === 0)} className="flex-1 text-sm">
-          {initial ? 'Enregistrer les modifications' : "Ajouter l'objectif"}
+          {libelleValidation || (initial ? 'Enregistrer les modifications' : "Ajouter l'objectif")}
         </Btn>
         <Btn variant="ghost" onClick={onCancel} className="text-sm">Annuler</Btn>
       </div>
@@ -8179,7 +8577,7 @@ function BalanceWidget({ obj, entry, onChange }) {
    maintenant. Sans mention d'atelier — le relevé n'en porte pas, c'est
    Manager qui recoupe après coup. Le rafraîchissement périodique vit ici,
    pas dans SuiviScreen, qui a un retour anticipé avant tout hook. */
-function FriseJournee({ students, axesSuivi, releves }) {
+function FriseJournee({ students, axesSuivi, releves, onOuvrirSuivi }) {
   const [maintenant, setMaintenant] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setMaintenant(Date.now()), 60000);
@@ -8206,12 +8604,12 @@ function FriseJournee({ students, axesSuivi, releves }) {
           const label = `${st.initials} — ${axe.nom}`;
           if (segments.length === 0) {
             return (
-              <div key={`${st.id}-${axe.id}`}>
+              <button key={`${st.id}-${axe.id}`} className="w-full text-left" onClick={() => onOuvrirSuivi(st.id)} title="Noter le critère de ce jour">
                 <div className="text-xs mb-1" style={{ color: INK_SOFT }}>{label}</div>
                 <div className="h-6 rounded-lg border border-dashed flex items-center px-2 text-xs" style={{ borderColor: BORDER, color: INK_SOFT }}>
                   Non démarré aujourd'hui
                 </div>
-              </div>
+              </button>
             );
           }
           const debut = segments[0].debut;
@@ -8223,7 +8621,7 @@ function FriseJournee({ students, axesSuivi, releves }) {
           premiere.setMinutes(0, 0, 0);
           for (let h = premiere.getTime() + 3600000; h < finVisible; h += 3600000) heures.push(h);
           return (
-            <div key={`${st.id}-${axe.id}`}>
+            <button key={`${st.id}-${axe.id}`} className="w-full text-left" onClick={() => onOuvrirSuivi(st.id)} title="Noter le critère de ce jour">
               <div className="text-xs mb-1" style={{ color: INK_SOFT }}>{label}</div>
               <div className="relative h-6 rounded-lg overflow-hidden flex" style={{ backgroundColor: PAPER }}>
                 {segments.map((seg, j) => {
@@ -8250,7 +8648,7 @@ function FriseJournee({ students, axesSuivi, releves }) {
                 <span>{timeShort(new Date(debut).toISOString())}</span>
                 <span>{timeShort(new Date(finVisible).toISOString())}</span>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -8258,7 +8656,7 @@ function FriseJournee({ students, axesSuivi, releves }) {
   );
 }
 
-function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onResetTracking, onOuvrirMenu }) {
+function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onOuvrirSuivi, onChangePhase }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
 
   if (students.length === 0) {
@@ -8282,8 +8680,8 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
         <BoutonMenu onClick={onOuvrirMenu} />
       </div>
 
-      <FriseJournee students={students} axesSuivi={axesSuivi} releves={releves} />
-      <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} />
+      <FriseJournee students={students} axesSuivi={axesSuivi} releves={releves} onOuvrirSuivi={onOuvrirSuivi} />
+      <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} onOuvrirObjectif={onOuvrirObjectif} />
       <>
       <div className="space-y-3">
         {students.map((s) => {
@@ -8304,7 +8702,12 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
                 <div className="mt-4 space-y-5">
                   {s.objectives.length === 0 && <Empty>Aucun objectif défini.</Empty>}
                   {s.objectives.map((o) => (
-                    <ObjectiveChart key={o.id} obj={o} studentId={s.id} sessions={ordered} guidances={guidances} onReset={() => onResetTracking(s.id, o.id)} />
+                    <ObjectiveChart
+                      key={o.id} obj={o} studentId={s.id} sessions={ordered} guidances={guidances}
+                      onReset={() => onResetTracking(s.id, o.id)}
+                      onChangePhase={(nom) => onChangePhase(s.id, o.id, nom)}
+                      onOuvrirObjectif={() => onOuvrirObjectif(s.id, o.id)}
+                    />
                   ))}
                 </div>
               )}
@@ -8334,6 +8737,8 @@ function resumerObjectifs(students, sessions, guidances) {
       const cible = currentTarget(obj);
       const points = objectivePoints(obj, st.id, ordered, guidances, cible ? cible.id : null);
       const base = {
+        studentId: st.id,
+        objectifId: obj.id,
         initials: st.initials,
         objectif: obj.name,
         type: obj.type,
@@ -8372,7 +8777,7 @@ function resumerObjectifs(students, sessions, guidances) {
   return groupes;
 }
 
-function ResumeObjectifs({ students, sessions, guidances }) {
+function ResumeObjectifs({ students, sessions, guidances, onOuvrirObjectif }) {
   const [ouvert, setOuvert] = useState(null);
   const g = resumerObjectifs(students, sessions, guidances);
 
@@ -8408,7 +8813,8 @@ function ResumeObjectifs({ students, sessions, guidances }) {
           <p className="text-xs mb-2" style={{ color: INK_SOFT }}>{blocs.find((b) => b.k === ouvert).aide}</p>
           <div className="space-y-1.5">
             {g[ouvert].map((l, i) => (
-              <div key={i} className="rounded-xl px-3 py-2.5 flex items-start justify-between gap-2" style={{ backgroundColor: PAPER }}>
+              <button key={i} onClick={() => onOuvrirObjectif(l.studentId, l.objectifId)}
+                className="w-full rounded-xl px-3 py-2.5 flex items-start justify-between gap-2 text-left" style={{ backgroundColor: PAPER }}>
                 <div className="min-w-0">
                   <div className="text-sm break-words">
                     <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{l.initials}</span> · {l.objectif}
@@ -8418,7 +8824,7 @@ function ResumeObjectifs({ students, sessions, guidances }) {
                 <span className="text-xs shrink-0" style={{ fontFamily: F_MONO, color: blocs.find((b) => b.k === ouvert).couleur }}>
                   {blocs.find((b) => b.k === ouvert).rendu(l)}
                 </span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -8427,7 +8833,7 @@ function ResumeObjectifs({ students, sessions, guidances }) {
   );
 }
 
-function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
+function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChangePhase, onOuvrirObjectif }) {
   const meta = typeMeta(obj.type);
   const Icon = meta.icon;
 
@@ -8537,6 +8943,14 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset }) {
           </ResponsiveContainer>
         </div>
       )}
+      <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+        {onChangePhase && <BoutonPhase obj={obj} onChange={onChangePhase} />}
+        {onOuvrirObjectif && (
+          <button onClick={onOuvrirObjectif} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
+            <Pencil size={12} /> Modifier l'objectif
+          </button>
+        )}
+      </div>
       {onReset && (points.length > 0 || obj.trackingResetAt) && (
         <div className="flex items-center justify-between mt-1.5">
           {obj.trackingResetAt ? (
