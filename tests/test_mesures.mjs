@@ -47,6 +47,14 @@ function extraireLigne(nom) {
 const code = `
   const ListChecks = 'ListChecks', Hash = 'Hash', LayoutGrid = 'LayoutGrid', ListOrdered = 'ListOrdered', Route = 'Route', HelpCircle = 'HelpCircle';
   const INK_SOFT = '#5B6B5E';
+  const CAT_TEAL = ${extraireLigne('CAT_TEAL')};
+  const CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};
+  const CAT_AMBER = ${extraireLigne('CAT_AMBER')};
+  const CAT_CORAL = ${extraireLigne('CAT_CORAL')};
+  const CAT_VIOLET = ${extraireLigne('CAT_VIOLET')};
+  const CAT_CYAN = ${extraireLigne('CAT_CYAN')};
+  const CAT_LILAC = ${extraireLigne('CAT_LILAC')};
+  const CAT_SLATE = ${extraireLigne('CAT_SLATE')};
   ${extraire('TYPES')}
   const PERCENT_TYPES = ${extraireLigne('PERCENT_TYPES')};
   const USES_GUIDANCE = ${extraireLigne('USES_GUIDANCE')};

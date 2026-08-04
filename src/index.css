@@ -2,6 +2,39 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Tokens de surface : bleu foncé, cadré, sombre ou clair selon
+   [data-theme] sur <html>, posé avant le premier rendu par le script de
+   index.html. La palette catégorielle (guidances, types, courbes) ne fait
+   pas partie de ces variables : elle reste fixe entre les deux thèmes,
+   choisie pour rester lisible sur les deux. */
+:root {
+  --paper: #F3F6FB;
+  --card: #FFFFFF;
+  --border: #D7E0EE;
+  --ink: #0E1B33;
+  --ink-soft: #52627A;
+  --accent: #2453FF;
+  --accent-ink: #FFFFFF;
+  --nav-bg: #E4E9F5;
+  --crisis: #D7263D;
+  /* Fond très pâle d'une ligne sélectionnée : teinte l'accent au lieu du
+     mélange hexadécimal + alpha, invalide maintenant que --accent est une
+     variable et non un littéral. */
+  --accent-wash: rgba(36, 83, 255, 0.08);
+}
+:root[data-theme='dark'] {
+  --paper: #0A1120;
+  --card: #121A2E;
+  --border: #24304A;
+  --ink: #E7ECF7;
+  --ink-soft: #93A2C0;
+  --accent: #5B8CFF;
+  --accent-ink: #071021;
+  --nav-bg: #0F1830;
+  --crisis: #FF5470;
+  --accent-wash: rgba(91, 140, 255, 0.14);
+}
+
 /* Confort tablette : pas de rebond élastique ni de zoom involontaire
    au double-appui pendant une cotation rapide. */
 html,
@@ -14,6 +47,8 @@ body {
   margin: 0;
   overscroll-behavior: none;
   -webkit-tap-highlight-color: transparent;
+  background-color: var(--paper);
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 button {

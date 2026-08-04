@@ -9,6 +9,7 @@
 #   2 bis. ordre des hooks React
 #   2 ter. séance écrite sans être passée par finalizeSession
 #   2 quater. renommages laissés incomplets (vocabulaire résiduel)
+#   2 quinquies. identifiants importés en double
 #   3. suite de tests Node autonome
 
 set -u
@@ -193,6 +194,40 @@ if [ -n "$RESIDUS_STABILITE" ]; then
 fi
 
 [ "$RENOMMAGES" -eq 0 ] && echo "  ✓ aucun résidu détecté" || ECHECS=$((ECHECS + 1))
+
+# ── 2 quinquies. Imports dupliqués ─────────────────────────────────────
+# Un identifiant importé deux fois (copier-coller d'une icône déjà présente
+# plus haut dans la liste, le plus souvent) est une erreur de syntaxe pour
+# le bundler (Babel/esbuild refusent la double déclaration), mais tsc en
+# mode noResolve ne la voit pas : le module non résolu laisse chaque
+# spécificateur passer sans vérifier les doublons. Sans ce contrôle, le
+# projet passait « prêt à livrer » avec un import qui casse `npm run dev`.
+echo
+echo "── 2 quinquies. Imports dupliqués ──"
+TMP_IMPORTS="$(mktemp)"
+awk '
+  /^import / { buf=""; grab=1 }
+  grab { buf = buf " " $0 }
+  grab && /from[ ]+.*;[ ]*$/ { print buf; grab=0 }
+' src/App.jsx > "$TMP_IMPORTS"
+IMPORTS_DOUBLONS=$(sed -E "s/^ *import //; s/from[ ]+'[^']*';?//; s/[{}]//g" "$TMP_IMPORTS" \
+  | tr ',' '\n' \
+  | awk '{
+      line = $0
+      sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line)
+      if (line ~ / as /) { sub(/.* as /, "", line) }
+      gsub(/\*/, "", line)
+      sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line)
+      if (line != "") print line
+    }' \
+  | sort | uniq -d)
+rm -f "$TMP_IMPORTS"
+if [ -n "$IMPORTS_DOUBLONS" ]; then
+  echo "  ✗ identifiant importé plusieurs fois : $(echo "$IMPORTS_DOUBLONS" | tr '\n' ' ')"
+  ECHECS=$((ECHECS + 1))
+else
+  echo "  ✓ aucun import dupliqué"
+fi
 
 # ── 3. Tests ───────────────────────────────────────────────────────────
 echo
