@@ -180,16 +180,16 @@ echo
 echo "── 2 quater. Renommages laissés incomplets ──"
 RENOMMAGES=0
 
-# « suivi de stabilité » → « suivi continu ». Exceptions : la clé de stockage
-# aba:stabilite (conservée le temps que toutes les tablettes migrent), l'alias
-# de compatibilité vers un DatABA Manager pas encore mis à jour (le champ
-# `stabilite` du payload, sa lecture `d.stabilite` à la restauration, et la
-# fonction qui le construit), et le champ `suiviStabilite` tel qu'il apparaît
-# dans la fonction qui le migre.
-RESIDUS_STABILITE=$(grep -niP 'stabilit' src/App.jsx | grep -viE "aba:stabilite|stabilite:|d\.stabilite|releverAliasStabilite|suiviStabilite")
-if [ -n "$RESIDUS_STABILITE" ]; then
-  echo "  ✗ vocabulaire « stabilité » résiduel (suivi continu attendu) :"
-  echo "$RESIDUS_STABILITE" | sed 's/^/      /' | head -10
+# « Balance Program » → « Équilibre ». Le mot « stabilité » redevient du
+# vocabulaire produit légitime avec le renommage de l'axe de suivi par défaut
+# en « Suivi de stabilité » : il n'y a plus de résidu à traquer sur ce terme.
+# Aucune exception à prévoir pour « Balance Program » : le discriminant
+# persisté est la chaîne minuscule « balance » (obj.type, session.mode),
+# jamais cette étiquette anglophone lue par un humain.
+RESIDUS_BALANCE=$(grep -n 'Balance Program' src/App.jsx)
+if [ -n "$RESIDUS_BALANCE" ]; then
+  echo "  ✗ vocabulaire « Balance Program » résiduel (Équilibre attendu) :"
+  echo "$RESIDUS_BALANCE" | sed 's/^/      /' | head -10
   RENOMMAGES=1
 fi
 
