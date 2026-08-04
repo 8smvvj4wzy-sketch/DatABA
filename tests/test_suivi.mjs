@@ -51,6 +51,7 @@ const NOMS = [
   'metaCritere', 'axeDe', 'memeJour', 'relevesDuJour', 'critereCourant',
   'suiviDormant', 'segmentsJournee', 'lignesSuiviExport',
   'migrerReleves', 'migrerStudentsSuivi', 'migrerAxesSuivi',
+  'jourLocal', 'dureeReleve', 'journeesSuivi', 'migrerEnvoisCrises',
   'grouperParJour', 'libelleJour', 'segmentAppareil', 'nomFichier', 'timeShort',
 ];
 const code = `const CRISIS = '#B3261E';\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
@@ -60,6 +61,7 @@ const {
   metaCritere, axeDe, memeJour, relevesDuJour, critereCourant,
   suiviDormant, segmentsJournee, lignesSuiviExport,
   migrerReleves, migrerStudentsSuivi, migrerAxesSuivi,
+  jourLocal, dureeReleve, journeesSuivi, migrerEnvoisCrises,
   grouperParJour, libelleJour, segmentAppareil, nomFichier, timeShort, PASTILLE_PAVES_MAX,
 } = new Function(code)();
 
@@ -212,6 +214,97 @@ t('la veille se dit hier', libelleJour(new Date(2026, 7, 2, 23, 0, 0), ref), 'Hi
 t('un nom d\'appareil devient un segment propre', segmentAppareil('Tablette 2'), 'tablette-2-');
 const jour = new Date().toISOString().slice(0, 10);
 t('appareil puis date dans le nom', nomFichier('pour-manager', 'Tablette 2', 'json'), `pour-manager-tablette-2-${jour}.json`);
+
+/* ==================== jourLocal ==================== */
+
+t('jour local d\'un horodatage', jourLocal(new Date(2026, 7, 3, 9, 30).toISOString()), '2026-08-03');
+t('une fin de soirée reste sur son jour local', jourLocal(new Date(2026, 7, 3, 23, 45).toISOString()), '2026-08-03');
+t('horodatage invalide', jourLocal('pas une date'), null);
+
+/* ==================== dureeReleve ====================
+   C'est ce calcul qu'emprunte la fiche crise ouverte depuis le suivi continu :
+   de l'appui au passage à l'état suivant. */
+
+const H = (h, m = 0) => new Date(2026, 7, 3, h, m).toISOString();
+const suite = [
+  { id: 'r1', studentId: 's1', suiviId: 'principal', timestamp: H(9), critere: 'stable' },
+  { id: 'r2', studentId: 's1', suiviId: 'principal', timestamp: H(9, 30), critere: 'crise' },
+  { id: 'r3', studentId: 's1', suiviId: 'principal', timestamp: H(9, 47), critere: 'post-crise' },
+  { id: 'r4', studentId: 's1', suiviId: 'second', timestamp: H(9, 35), critere: 'a' },
+  { id: 'r5', studentId: 's2', suiviId: 'principal', timestamp: H(9, 32), critere: 'stable' },
+];
+
+t('durée jusqu\'au relevé suivant du même axe', dureeReleve(suite, 'r2'), 17 * 60000);
+t('un relevé d\'un autre axe ne borne rien', dureeReleve(suite, 'r4'), null);
+t('un relevé d\'une autre personne ne borne rien', dureeReleve(suite, 'r5'), null);
+t('le dernier relevé n\'a pas de durée plutôt qu\'une durée nulle', dureeReleve(suite, 'r3'), null);
+t('une clôture borne le segment comme n\'importe quel successeur',
+  dureeReleve([...suite, { id: 'r6', studentId: 's1', suiviId: 'principal', timestamp: H(10), critere: null, fin: true }], 'r3'),
+  13 * 60000);
+t('une clôture n\'a elle-même pas de durée',
+  dureeReleve([...suite, { id: 'r6', studentId: 's1', suiviId: 'principal', timestamp: H(10), critere: null, fin: true }], 'r6'),
+  null);
+t('un relevé inséré après coup raccourcit le segment qui le précède',
+  dureeReleve([...suite, { id: 'r7', studentId: 's1', suiviId: 'principal', timestamp: H(9, 40), critere: 'stable' }], 'r2'),
+  10 * 60000);
+t('relevé inconnu', dureeReleve(suite, 'rX'), null);
+t('liste vide', dureeReleve([], 'r1'), null);
+
+/* ==================== journeesSuivi ==================== */
+
+const axes = [{ id: 'principal', nom: 'État émotionnel', criteres: [] }, { id: 'second', nom: 'Engagement', criteres: [] }];
+const eleves = [{ id: 's1', initials: 'J.D.' }, { id: 's2', initials: 'M.L.' }];
+const veille = (h) => new Date(2026, 7, 2, h).toISOString();
+const journalier = [
+  ...suite,
+  { id: 'r8', studentId: 's1', suiviId: 'principal', timestamp: veille(14), critere: 'stable' },
+];
+
+const js = journeesSuivi(journalier, eleves, axes, null);
+t('une entrée par personne, axe et jour', js.length, 4);
+t('les journées les plus récentes en tête', js[js.length - 1].jour, '2026-08-02');
+t('la journée porte les initiales et le nom de l\'axe',
+  js.filter((j) => j.studentId === 's1' && j.suiviId === 'principal' && j.jour === '2026-08-03')
+    .map((j) => [j.initials, j.nomAxe, j.releves.length])[0],
+  ['J.D.', 'État émotionnel', 3]);
+t('un axe supprimé reste lisible',
+  journeesSuivi([{ id: 'x', studentId: 's1', suiviId: 'disparu', timestamp: H(9) , critere: 'k' }], eleves, axes, null)[0].nomAxe,
+  'Suivi retiré');
+t('le filtre par personne s\'applique',
+  journeesSuivi(journalier, eleves, axes, ['s2']).map((j) => j.studentId), ['s2']);
+t('une journée n\'est envoyée que si tous ses relevés le sont',
+  journeesSuivi(
+    [{ id: 'a', studentId: 's1', suiviId: 'principal', timestamp: H(9), critere: 'stable', sentAt: H(20) },
+     { id: 'b', studentId: 's1', suiviId: 'principal', timestamp: H(10), critere: 'stable' }],
+    eleves, axes, null
+  )[0].envoye,
+  false);
+t('journée entièrement envoyée',
+  journeesSuivi(
+    [{ id: 'a', studentId: 's1', suiviId: 'principal', timestamp: H(9), critere: 'stable', sentAt: H(20) }],
+    eleves, axes, null
+  )[0].envoye,
+  true);
+t('un horodatage invalide n\'ouvre pas de journée fantôme',
+  journeesSuivi([{ id: 'a', studentId: 's1', suiviId: 'principal', timestamp: 'nawak', critere: 'stable' }], eleves, axes, null),
+  []);
+
+/* ==================== migrerEnvoisCrises ====================
+   Une crise partie avec le rapport d'une séance envoyée l'a été aussi. Le
+   reste n'est pas déductible et reste à transmettre. */
+
+const seancesEnvoi = [{ id: 'se1', sentAt: '2026-08-03T18:00:00.000Z' }, { id: 'se2', sentAt: null }];
+
+t('crise d\'une séance envoyée',
+  migrerEnvoisCrises([{ id: 'c1', sessionId: 'se1' }], seancesEnvoi)[0].sentAt,
+  '2026-08-03T18:00:00.000Z');
+t('crise d\'une séance non envoyée', migrerEnvoisCrises([{ id: 'c2', sessionId: 'se2' }], seancesEnvoi)[0].sentAt, null);
+t('crise hors séance', migrerEnvoisCrises([{ id: 'c3', sessionId: null }], seancesEnvoi)[0].sentAt, null);
+t('un statut déjà posé n\'est jamais réécrit',
+  migrerEnvoisCrises([{ id: 'c4', sessionId: 'se1', sentAt: null }], seancesEnvoi)[0].sentAt, null);
+t('idempotente',
+  migrerEnvoisCrises(migrerEnvoisCrises([{ id: 'c1', sessionId: 'se1' }], seancesEnvoi), seancesEnvoi)[0].sentAt,
+  '2026-08-03T18:00:00.000Z');
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko ? 1 : 0);

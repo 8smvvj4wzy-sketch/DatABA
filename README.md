@@ -112,19 +112,34 @@ Les groupes récurrents : « Habiletés sociales », « Repas », « Atelier cui
 Créez-le par son nom, puis dépliez-le (appui sur la ligne) pour régler dans le
 même écran :
 
-- **les jours** de la semaine type où il a lieu ;
+- **les jours** de la semaine où il a lieu ;
 - **les personnes habituelles** — cocher une personne présélectionne ses
   objectifs (mémorisés pour cet atelier, sinon ses objectifs prioritaires,
   sinon tous) ;
 - **les objectifs de chacune**, avec l'étoile qui les rend prioritaires pour
   cet atelier seulement.
 
+**Un groupe différent selon le jour.** Le sport du mardi n'accueille pas
+forcément les mêmes que celui du jeudi. Dès qu'un atelier a lieu sur plusieurs
+jours, une rangée apparaît au-dessus des personnes : **Tous les jours**, puis un
+bouton par jour programmé. Sur *Tous les jours*, vous réglez la liste commune ;
+sur un jour, vous ne réglez que ce jour-là — il part d'une copie de la liste
+commune et s'en détache dès la première modification. Un point signale les
+jours ainsi ajustés, et **Revenir au réglage commun** efface la variante.
+
+> Les objectifs, eux, restent communs à l'atelier quel que soit le jour : les
+> faire varier aussi doublerait le paramétrage sans rien apporter.
+
 Aucune personne accompagnée ? Un bouton dans le panneau ouvre directement leur
 écran de création. Depuis une personne cochée, le chevron renvoie à sa fiche.
 
 Un atelier peut aussi mémoriser sa configuration au fil d'une séance réelle
 (section 7) — les deux réglages écrivent au même endroit et restent
-cohérents entre eux.
+cohérents entre eux. Si le jour en cours porte une liste propre, c'est elle que
+la mémorisation met à jour, pas le réglage commun.
+
+> L'ordre des ateliers dans une journée suit l'ordre dans lequel leurs jours ont
+> été cochés. Il n'est plus réglable depuis un tableau à part.
 
 ### Intervenants
 
@@ -161,15 +176,25 @@ par appui long. Renommer un critère ne perd pas les relevés déjà notés sous
 son ancien nom ; en supprimer un les laisse visibles comme « Critère retiré »,
 sans jamais ressusciter la clé effacée.
 
-**Deux suivis au plus** peuvent tourner en parallèle sur une même personne
-(par exemple un axe « état émotionnel » et un axe « engagement »), chacun avec
-sa propre liste de critères. L'activation par personne se fait depuis l'écran
-Personnes accompagnées (section 5) : une pastille par axe activé apparaît
-alors en bas d'écran, sur tous les onglets.
+Cet écran est la **bibliothèque des suivis disponibles** : créez-en autant qu'il
+en faut — « état émotionnel », « engagement », « douleur »… — chacun avec sa
+propre liste de critères. Il n'y a pas de limite de nombre. Chaque carte
+rappelle pour qui le suivi est actif.
+
+L'activation par personne se fait depuis l'écran Personnes accompagnées
+(section 5) : une pastille par axe activé apparaît alors en bas d'écran, sur
+tous les onglets.
 
 > Le libellé du critère en cours ne s'affiche que si la personne n'a qu'un
-> seul axe actif ; avec deux, seule la couleur reste lisible dans la barre du
-> bas — le libellé se lit dans la feuille de choix, ouverte au tap.
+> seul axe actif ; au-delà, seules les couleurs restent lisibles dans la barre
+> du bas, trois au plus suivies d'un compteur — le détail se lit dans la
+> feuille de choix, ouverte au tap.
+
+**Corriger après coup.** Une cotation oubliée, une heure fausse : depuis la
+feuille de choix, **Corriger la journée** ouvre la liste des relevés du jour.
+On y change une heure, on ajoute la cotation manquante, on retire le relevé de
+trop. Les durées se recalculent seules — aucune n'est stockée. La même feuille
+s'ouvre depuis l'écran Export (section 10).
 
 **Grise, la pastille est dormante** : aucun critère n'a encore été noté ce
 jour-là pour cet axe, quel qu'ait été le dernier relevé les jours précédents.
@@ -214,7 +239,21 @@ Export et restauration (section 13).
 
 ## 5. Écran Personnes accompagnées
 
-Appuyez sur une personne pour dérouler ses objectifs.
+Appuyez sur une personne pour dérouler sa fiche : ses **suivis continus**, son
+**suivi de renforcement**, puis ses **objectifs**.
+
+### Les suivis continus d'une personne
+
+Un interrupteur par suivi de la bibliothèque (section 4) : cochez ceux qui la
+concernent. Deux liens complètent la liste :
+
+- **Nouveau suivi continu** — le crée, l'active pour cette personne, et ouvre
+  son panneau pour en définir les critères dans la foulée ;
+- **Gérer les suivis** — ouvre la bibliothèque.
+
+Supprimer un suivi de la bibliothèque le désactive partout où il l'était ; les
+relevés déjà notés restent dans l'historique et l'export, marqués comme un
+suivi retiré.
 
 ### Créer un objectif
 
@@ -521,9 +560,15 @@ le premier épisode devient le point de départ du suivant.
 Les maillons partagent un identifiant de chaîne, visible dans la liste sous la
 forme `2/3`, et repris dans l'export avec deux colonnes **Chaîne** et **Rang**.
 
-Crises et observations se retrouvent **en bas de l'écran Export**, avec une
-pastille indiquant leur type. Appuyez sur l'une d'elles pour la modifier, y
-compris la date, l'heure et la durée si le bouton a été actionné en retard.
+Crises et observations se retrouvent **dans l'écran Export**, avec une pastille
+indiquant leur type. Appuyez sur l'une d'elles pour la modifier, y compris la
+date, l'heure et la durée si le bouton a été actionné en retard.
+
+**Une fiche ouverte depuis le suivi continu** — en notant le critère « Crise »
+— porte la mention *à compléter* et prend sa durée du suivi : de l'appui
+jusqu'au critère suivant du même axe. Corriger les relevés de la journée
+(section 4) recale cette durée. Dès que vous la saisissez à la main, elle cesse
+de suivre ; **Reprendre le calcul automatique** la rebranche.
 
 ---
 
@@ -547,8 +592,9 @@ Ensuite, **où en sont les objectifs** : quatre compteurs qui se déplient.
 | **En plateau** | Proche du seuil depuis plusieurs séances, sans l'atteindre. |
 | **Manque de données** | Pas encore de quoi se prononcer : trop peu de séances, ou plus rien depuis trois semaines. |
 
-**Une ligne de cette liste s'ouvre au tap** : elle mène directement à la fiche
-de la personne, sur l'objectif concerné.
+**Une ligne de cette liste s'ouvre au tap** : elle déplie la personne concernée
+et fait défiler jusqu'à **la courbe de l'objectif**, plus bas dans le même
+écran. Pour le modifier, c'est **Modifier l'objectif**, sous la courbe.
 
 En dessous, une courbe par objectif, avec :
 
@@ -571,18 +617,38 @@ la date de reprise change.
 
 ## 10. Écran Export
 
+C'est l'endroit où l'on **relit et corrige avant de transmettre**. Trois
+collections y figurent, dans cet ordre :
+
+- **Rapports de séance** — le crayon rouvre la séance en correction ;
+- **Crises et observations** — un appui ouvre la fiche, y compris pour
+  renseigner l'ABC, l'intensité ou la durée ;
+- **Suivi continu** — une entrée par personne, axe et journée ; un appui ouvre
+  la journée relevé par relevé (section 4).
+
+Ce qui reste **à transmettre** vient en premier. Les **options d'export** se
+placent juste dessous. Tout ce qui est déjà parti descend dans le dépliant
+**Archive**, en bas — modifiable et re-sélectionnable lui aussi.
+
 Deux façons de composer un rapport :
 
-- **Par séance** — vous cochez des séances. Trois boutons rapides :
+- **Par séance** — vous cochez ce que vous voulez envoyer, dans les trois
+  listes indépendamment. Trois boutons rapides sur les séances :
   *Non-envoyés*, *Tout sélectionner*, *Aucun*.
-- **Par personne** — vous cochez des personnes, et le rapport reprend toutes
-  leurs cotations sur toutes les séances. Sur une séance partagée, seules leurs
-  lignes sont retenues.
+- **Par personne** — vous cochez des personnes, et le rapport reprend tout ce
+  qui les concerne. Sur une séance partagée, seules leurs lignes sont retenues.
 
-Chaque séance porte une pastille **Envoyé** ou **Non envoyé**, mise à jour
+Chaque élément porte une pastille **Envoyé** ou **Non envoyé**, mise à jour
 automatiquement dès qu'un rapport est produit. Un appui dessus corrige le statut
-à la main. Si la sélection contient une séance déjà envoyée, une confirmation
-le signale.
+à la main et fait passer l'élément d'une liste à l'autre. Si la sélection
+contient une séance déjà envoyée, une confirmation le signale.
+
+> **À la première ouverture après la mise à jour**, les crises et les journées
+> de suivi continu apparaissent toutes comme non envoyées : elles ne portaient
+> pas encore de statut. Seules les crises rattachées à une séance déjà envoyée
+> sont reprises automatiquement — elles sont parties avec son rapport. Pour le
+> reste, **Tout marquer comme déjà transmis** solde l'arriéré en un geste, sans
+> rien envoyer.
 
 Deux actions :
 
@@ -591,9 +657,9 @@ Deux actions :
   **« Enregistrer dans Fichiers »** vers un dossier OneDrive / SharePoint
   synchronisé.
 
-> En mode *Par personne*, les séances ne sont pas marquées comme envoyées : ce
-> rapport recoupe des séances déjà transmises, et le marquer fausserait le suivi
-> des non-envoyés.
+> En mode *Par personne*, rien n'est marqué comme envoyé : ce rapport recoupe
+> des éléments déjà transmis, et les marquer fausserait le suivi des
+> non-envoyés.
 
 ---
 
