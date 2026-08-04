@@ -182,7 +182,7 @@ const TYPES = {
   occurrence: { label: 'Par occurrence', short: 'Occurrence', icon: Hash, color: CAT_TEAL },
   interval: { label: 'Niveau par intervalle', short: 'Intervalle', icon: LayoutGrid, color: CAT_LILAC },
   chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: CAT_CYAN },
-  balance: { label: 'Balance Program', short: 'Balance', icon: Route, color: CAT_INDIGO },
+  balance: { label: 'Équilibre', short: 'Équilibre', icon: Route, color: CAT_INDIGO },
 };
 
 /* Couleur commune à tout ce qui mesure une durée : le chronomètre par essai
@@ -206,7 +206,7 @@ const INTERVAL_MODES = [
 ];
 const INTERVAL_MODE_SHORT = { momentane: 'momentané', partiel: 'partiel', total: 'total' };
 
-/* Balance Program : chaque étape reçoit une issue, et deux marqueurs
+/* Équilibre : chaque étape reçoit une issue, et deux marqueurs
    indépendants — une demande de la personne, et le moment du renforcement,
    qui varie d'une étape à l'autre. */
 const BALANCE_OUTCOMES = [
@@ -216,7 +216,7 @@ const BALANCE_OUTCOMES = [
   { k: 'manque', label: 'Étape manquée', short: 'M', color: CAT_SLATE, reussite: false, exclu: true },
 ];
 
-/* Réponses retenues pour un Balance Program : celles de l'objectif, sinon
+/* Réponses retenues pour un Équilibre : celles de l'objectif, sinon
    celles fournies par défaut. « reussite » désigne ce qui compte comme réussi,
    « exclu » ce qui sort du calcul — une étape non présentée n'est pas un échec. */
 function balanceOutcomes(obj) {
@@ -1136,6 +1136,13 @@ function objectifsParDefaut(student, atelier, mode) {
   return prioritaires.length ? prioritaires : ids;
 }
 
+/* Personnes concernées par Équilibre : celles qui portent au moins un
+   objectif de ce type. La sélection Équilibre de Session ne doit proposer
+   qu'elles — les autres n'ont rien à y coter. */
+function personnesAvecEquilibre(students) {
+  return (students || []).filter((s) => (s.objectives || []).some((o) => o.type === 'balance'));
+}
+
 /* Préremplissage complet d'un atelier au moment où on l'ouvre pour lancer une
    séance : la classe prévue ce jour-là, avec pour chacun ses objectifs
    mémorisés (les nouveaux depuis la mémorisation cochés d'office), à défaut
@@ -1467,7 +1474,7 @@ const DEFAULT_CRITERES_SUIVI = [
 /* Clé volontairement fixe (pas uid()) : c'est l'identifiant de l'axe
    historique, celui que toutes les tablettes déjà en service migrent vers. */
 const DEFAULT_SUIVIS = [
-  { id: 'principal', nom: 'Suivi continu', criteres: DEFAULT_CRITERES_SUIVI },
+  { id: 'principal', nom: 'Suivi de stabilité', criteres: DEFAULT_CRITERES_SUIVI },
 ];
 
 /* Le nombre d'axes n'est pas borné ; la pastille de la barre du bas, si : au
@@ -1509,6 +1516,18 @@ function relevesDuJour(releves, studentId, suiviId, ref) {
     .filter(({ d }) => !Number.isNaN(d.getTime()) && memeJour(d, refDate))
     .sort((a, b) => a.d - b.d)
     .map(({ r }) => r);
+}
+
+/* Nombre d'appuis d'un compteur pour le jour local de `ref` — l'équivalent de
+   relevesDuJour pour un comptage, où seul le total du jour compte, pas la
+   succession. */
+function comptesCompteurJour(releves, studentId, compteurId, ref) {
+  const refDate = ref ? new Date(ref) : new Date();
+  return (releves || []).filter((r) => {
+    if (!r || r.kind !== 'compteur' || r.studentId !== studentId || r.compteurId !== compteurId) return false;
+    const d = new Date(r.timestamp);
+    return !Number.isNaN(d.getTime()) && memeJour(d, refDate);
+  }).length;
 }
 
 /* Relevé en vigueur pour le jour de `ref` : le dernier relevé du jour, ou
@@ -1592,16 +1611,22 @@ function journeesSuivi(releves, students, suivis, studentFilter) {
     const d = new Date(r.timestamp);
     if (Number.isNaN(d.getTime())) return;
     const jour = jourLocal(d);
-    const cle = `${r.studentId}|${r.suiviId}|${jour}`;
+    const estCompteur = r.kind === 'compteur';
+    // Même maille personne × axe × jour, l'axe étant soit un axe de suivi
+    // continu, soit un compteur — préfixé pour ne jamais entrer en collision
+    // avec un id de suivi.
+    const cle = `${r.studentId}|${estCompteur ? `c:${r.compteurId}` : r.suiviId}|${jour}`;
     if (!index[cle]) {
+      const st = (students || []).find((s) => s.id === r.studentId);
       index[cle] = {
         cle,
         studentId: r.studentId,
-        suiviId: r.suiviId,
+        suiviId: estCompteur ? null : r.suiviId,
+        compteurId: estCompteur ? r.compteurId : null,
         jour,
         date: new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString(),
-        initials: ((students || []).find((s) => s.id === r.studentId) || {}).initials || '?',
-        nomAxe: (axeDe(suivis, r.suiviId) || {}).nom || 'Suivi retiré',
+        initials: (st || {}).initials || '?',
+        nomAxe: estCompteur ? compteurDe(st, r.compteurId).nom : (axeDe(suivis, r.suiviId) || {}).nom || 'Suivi retiré',
         releves: [],
       };
       ordre.push(index[cle]);
@@ -1646,9 +1671,23 @@ function lignesSuiviExport(releves, students, suivis, studentFilter) {
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   return tries.map((r, i) => {
     const st = (students || []).find((s) => s.id === r.studentId);
-    const axe = axeDe(suivis, r.suiviId);
     const d = new Date(r.timestamp);
-    const suivant = tries.slice(i + 1).find((x) => x.studentId === r.studentId && x.suiviId === r.suiviId);
+    // Un compteur n'a ni durée (chaque appui est ponctuel) ni critère : une
+    // ligne à part, plutôt que de forcer sa forme dans celle d'un relevé de
+    // suivi continu.
+    if (r.kind === 'compteur') {
+      return [
+        d.toLocaleDateString('fr-FR'),
+        timeShort(r.timestamp),
+        libelleJour(d),
+        st ? st.initials : '?',
+        compteurDe(st, r.compteurId).nom,
+        'occurrence',
+        '',
+      ];
+    }
+    const axe = axeDe(suivis, r.suiviId);
+    const suivant = tries.slice(i + 1).find((x) => x.studentId === r.studentId && x.suiviId === r.suiviId && x.kind !== 'compteur');
     let duree = '';
     if (!r.fin && suivant) {
       const dSuiv = new Date(suivant.timestamp);
@@ -1691,6 +1730,10 @@ function migrerReleves(releves) {
   return (releves || [])
     .filter((r) => r && r.studentId && r.timestamp)
     .map((r) => {
+      // Un relevé de compteur n'a jamais eu d'autre format : rien à migrer,
+      // et surtout pas lui donner un `suiviId` — il se confondrait avec un
+      // relevé de suivi continu dans tout ce qui filtre dessus.
+      if (r.kind === 'compteur') return r;
       const suiviId = r.suiviId || 'principal';
       if (r.critere !== undefined) return { ...r, suiviId };
       return { id: r.id, studentId: r.studentId, suiviId, timestamp: r.timestamp, critere: r.etat, source: r.source || 'pastille' };
@@ -1707,6 +1750,13 @@ function migrerStudentsSuivi(students) {
   });
 }
 
+/* Compteur d'occurrence d'une personne, par id — repli explicite pour un
+   compteur supprimé, même principe que CRITERE_INCONNU. */
+const COMPTEUR_INCONNU = { id: null, nom: 'Compteur retiré' };
+function compteurDe(student, compteurId) {
+  return ((student && student.compteurs) || []).find((c) => c.id === compteurId) || COMPTEUR_INCONNU;
+}
+
 /* Repli sur la configuration par défaut si aucun axe n'a encore été
    enregistré, et filtrage défensif des entrées mal formées — un axe stocké
    sans liste de critères, ou un critère sans clé, ne doit pas faire planter
@@ -1715,7 +1765,15 @@ function migrerAxesSuivi(stocke) {
   if (!Array.isArray(stocke) || stocke.length === 0) return DEFAULT_SUIVIS;
   return stocke
     .filter((a) => a && a.id)
-    .map((a) => ({ id: a.id, nom: a.nom || 'Suivi continu', criteres: (a.criteres || []).filter((c) => c && c.k) }));
+    .map((a) => {
+      // L'axe historique (id « principal ») portait le nom de la
+      // fonctionnalité elle-même ; les tablettes déjà en service le portent
+      // encore. Un nom personnalisé, sur cet axe ou un autre, n'est jamais
+      // écrasé.
+      const nomParDefaut = a.id === 'principal' ? 'Suivi de stabilité' : 'Suivi continu';
+      const nom = a.id === 'principal' && a.nom === 'Suivi continu' ? 'Suivi de stabilité' : (a.nom || nomParDefaut);
+      return { id: a.id, nom, criteres: (a.criteres || []).filter((c) => c && c.k) };
+    });
 }
 
 /* Jours de la semaine dans l'ordre d'affichage d'un emploi du temps — lundi
@@ -2049,7 +2107,7 @@ function masteryStatus(obj, points) {
   return { mastered: streak >= m.sessions, threshold: m.threshold, needed: m.sessions, streak: Math.min(streak, m.sessions), unit, sens };
 }
 
-/* --- Balance Program ---
+/* --- Équilibre ---
    Une séance comporte plusieurs essais. Le dernier élément du tableau est
    l'essai en cours. Les anciennes cotations à un seul passage sont converties
    à la volée pour rester lisibles. */
@@ -2186,7 +2244,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
     return [
       new Date(sess.date).toLocaleDateString('fr-FR'),
       timeShort(sess.date),
-      sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Balance Program' : 'Séance libre',
+      sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Équilibre' : 'Séance libre',
       intervenantName(sess.intervenantId),
       studentName(sid),
       obj.name,
@@ -2264,7 +2322,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
               if (!e || !e.outcome) return;
               const o = outcomeMeta(obj, e.outcome);
               rows.push([
-                ...b, 'Balance Program', ti + 1, st.name, o ? o.label : e.outcome,
+                ...b, 'Équilibre', ti + 1, st.name, o ? o.label : e.outcome,
                 o && o.exclu ? '' : o && o.reussite ? 1 : 0,
                 e.demande ? 'Oui' : 'Non', e.renforce ? 'Oui' : 'Non', '',
                 ...mesureEssaiCells(entry, ti),
@@ -4341,6 +4399,26 @@ function AbaApp() {
       return { ...x, suivisActifs };
     }));
 
+  /* --- compteurs d'occurrence --- */
+  /* Pas de bibliothèque : chaque personne a les siens, créés et nommés sur sa
+     propre fiche. Le seul lien avec la bibliothèque de suivi continu est le
+     stockage des relevés — même tableau, même export. */
+  const ajouterCompteur = (studentId) =>
+    setStudents((l) => l.map((s) => (s.id === studentId ? { ...s, compteurs: [...(s.compteurs || []), { id: uid(), nom: 'Nouveau compteur' }] } : s)));
+
+  const renommerCompteur = (studentId, compteurId, nom) =>
+    setStudents((l) => l.map((s) => (s.id === studentId
+      ? { ...s, compteurs: (s.compteurs || []).map((c) => (c.id === compteurId ? { ...c, nom } : c)) }
+      : s)));
+
+  /* Les occurrences déjà notées restent dans l'historique et l'export,
+     marquées « Compteur retiré » — même principe que la suppression d'un axe
+     de suivi continu. */
+  const supprimerCompteur = (studentId, compteurId) =>
+    setStudents((l) => l.map((s) => (s.id === studentId
+      ? { ...s, compteurs: (s.compteurs || []).filter((c) => c.id !== compteurId) }
+      : s)));
+
   /* Un relevé s'ajoute simplement à la suite : il vaut jusqu'au suivant, pour
      la journée en cours — voir l'état dormant. Le critère de clé `crise` crée
      en plus une fiche crise minimale dans le tableau habituel, quel que soit
@@ -4387,6 +4465,36 @@ function AbaApp() {
       notify(`${nom} — ${metaCritere(axe ? axe.criteres : [], critere).l}`);
     }
   };
+
+  /* Compteurs d'occurrence : un appui, un relevé de plus, sur le même
+     principe que noterSuivi mais sans critère ni fin — chaque appui compte
+     pour lui-même, rien ne « vaut jusqu'au suivant ». */
+  const noterCompteur = (studentId, compteurId) => {
+    setReleves((l) => [...l, { id: uid(), studentId, compteurId, timestamp: new Date().toISOString(), kind: 'compteur', source: 'pastille' }]);
+  };
+
+  /* Annule le dernier appui du jour pour ce compteur — un doigt qui glisse est
+     la première correction attendue, pas un aller-retour par Export. Sans
+     effet si rien n'a encore été compté aujourd'hui. */
+  const annulerDernierCompteur = (studentId, compteurId) => {
+    setReleves((l) => {
+      let idx = -1;
+      let dernierTs = -Infinity;
+      l.forEach((r, i) => {
+        if (r.kind !== 'compteur' || r.studentId !== studentId || r.compteurId !== compteurId) return;
+        const d = new Date(r.timestamp);
+        if (!memeJour(d, new Date())) return;
+        const t = d.getTime();
+        if (t > dernierTs) { dernierTs = t; idx = i; }
+      });
+      return idx < 0 ? l : l.filter((_, i) => i !== idx);
+    });
+  };
+
+  /* Occurrence ajoutée après coup, depuis la correction d'une journée —
+     symétrique de ajouterReleve pour un compteur. */
+  const ajouterCompteurReleve = (studentId, compteurId, timestamp) =>
+    setReleves((l) => [...l, { id: uid(), studentId, compteurId, timestamp, kind: 'compteur', source: 'manuel' }]);
 
   /* Clôture la journée d'un axe : le dernier critère cesse de courir, le
      suivi redevient dormant. Sans effet si rien n'était en cours. */
@@ -4440,7 +4548,7 @@ function AbaApp() {
      par axe actif — dès qu'il y en a plus d'un, seule la couleur reste lisible,
      le libellé se lit dans la feuille de choix. */
   const pastillesSuivi = students
-    .filter((s) => (s.suivisActifs || []).length > 0)
+    .filter((s) => (s.suivisActifs || []).length > 0 || (s.compteurs || []).length > 0)
     .map((st) => {
       const blocs = (st.suivisActifs || [])
         .map((suiviId) => axeDe(axesSuivi, suiviId))
@@ -4450,7 +4558,8 @@ function AbaApp() {
           const meta = releve ? metaCritere(axe.criteres, releve.critere) : null;
           return { axe, releve, meta };
         });
-      return { st, blocs };
+      const totalCompteurs = (st.compteurs || []).reduce((n, c) => n + comptesCompteurJour(releves, st.id, c.id, Date.now()), 0);
+      return { st, blocs, totalCompteurs };
     });
 
   /* Contenu d'un onglet ou d'un écran ouvert depuis le tiroir, désigné par sa
@@ -4480,6 +4589,7 @@ function AbaApp() {
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
             axesSuivi={axesSuivi} onToggleAxeSuivi={toggleAxeSuivi}
             onCreerSuivi={creerSuiviPour}
+            onAjouterCompteur={ajouterCompteur} onRenommerCompteur={renommerCompteur} onSupprimerCompteur={supprimerCompteur}
             addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective}
             duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase}
             onSaveTemplate={saveTemplate}
@@ -4537,6 +4647,7 @@ function AbaApp() {
             onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => setEcran('personnes')}
             onOuvrirMenu={ouvrirMenu} planDuJour={planDuJour}
             activeSession={activeSession} setActiveSession={setActiveSession}
+            onAnnulerCorrection={() => allerA('export')}
             onFinish={(session, suivante) => {
               const { isEdit, ...rest } = session;
               // Passage à l'atelier suivant : la nouvelle séance remplace l'active,
@@ -4560,6 +4671,9 @@ function AbaApp() {
               } else if (!suivante) {
                 notify(isEdit ? 'Séance corrigée' : 'Séance enregistrée');
               }
+              // Une correction repart d'Export, là où elle a été ouverte —
+              // sans ça, valider une correction laisse sur l'onglet Session.
+              if (isEdit && !suivante) allerA('export');
             }}
           />
         );
@@ -4574,7 +4688,7 @@ function AbaApp() {
             onMarkCrisesSent={markCrisesSent} onMarkRelevesSent={markRelevesSent}
             onEditSession={(s) => { editSession(s); allerA('session'); }}
             onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
-            onOuvrirJournee={(j) => setJourneeSuivi({ studentId: j.studentId, suiviId: j.suiviId, jour: j.jour })}
+            onOuvrirJournee={(j) => setJourneeSuivi({ studentId: j.studentId, suiviId: j.suiviId, compteurId: j.compteurId, jour: j.jour })}
             onExportManager={exportManager}
             onOuvrirMenu={ouvrirMenu}
           />
@@ -4667,7 +4781,11 @@ function AbaApp() {
         className="fixed bottom-0 left-0 right-0 z-30 px-3 pt-8 pointer-events-none"
         style={{
           background: `linear-gradient(to top, ${PAPER} 60%, transparent)`,
-          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.6rem)',
+          // Barre abaissée : moins d'espace qu'avant entre les libellés ABC/
+          // CRISE (désormais hors flux, voir plus bas) et le bord de l'écran.
+          // Ce padding doit rester assez grand pour contenir ces libellés :
+          // ils ne comptent plus dans la hauteur de la rangée qui les porte.
+          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.25rem)',
           display: saisieEnCours ? 'none' : undefined,
         }}
       >
@@ -4721,6 +4839,14 @@ function AbaApp() {
                       +{caches}
                     </span>
                   )}
+                  {/* Total des compteurs du jour, tous compteurs confondus —
+                      le détail par compteur se lit dans la feuille de choix. */}
+                  {p.totalCompteurs > 0 && (
+                    <span className="px-2.5 py-1.5 flex items-center gap-1" style={{ backgroundColor: PAPER, color: INK_SOFT, fontFamily: F_MONO }}
+                      title="Total des compteurs aujourd'hui">
+                      <Hash size={11} />Σ{p.totalCompteurs}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -4752,25 +4878,29 @@ function AbaApp() {
           </div>
         )}
 
-        <div className="flex items-end justify-center gap-2">
+        {/* items-center, plutôt que items-end : les libellés ABC/CRISE sont
+            sortis du flux (position absolute) pour ne plus pousser leurs
+            cercles vers le haut — sans ça, aucun alignement centré n'est
+            possible entre des icônes de tailles différentes. */}
+        <div className="flex items-center justify-center gap-2">
           {/* Comportement à consigner sans qu'il relève d'une crise. Libellé
               visible en permanence : icône seule + title ne se lit jamais au
               doigt sur tablette, et c'est un des deux boutons "toujours
               accessibles" du produit — il ne doit pas s'apprendre par essai. */}
-          <div className="flex flex-col items-center gap-1 shrink-0">
+          <div className="relative flex items-center justify-center shrink-0">
             <button
               onClick={openObservation}
-              className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 active:scale-[0.96] transition-transform"
+              className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg border-2 active:scale-[0.96] transition-transform"
               style={{ backgroundColor: CARD, borderColor: COLOR_ABC, color: COLOR_ABC }}
               title="Observation ABC, hors crise"
               aria-label="Observation ABC"
             >
-              <ClipboardList size={22} />
+              <ClipboardList size={20} />
             </button>
-            <span className="text-[11px] font-medium" style={{ fontFamily: F_DISPLAY, color: COLOR_ABC }}>ABC</span>
+            <span className="absolute top-full mt-1 text-[11px] font-medium whitespace-nowrap" style={{ fontFamily: F_DISPLAY, color: COLOR_ABC }}>ABC</span>
           </div>
 
-          <div className="rounded-full flex items-center gap-0.5 p-1 shadow-lg" style={{ backgroundColor: NAV_BG }}>
+          <div className="rounded-full flex items-center gap-0.5 p-1.5 shadow-lg" style={{ backgroundColor: NAV_BG }}>
             {[
               { k: 'suivi', label: 'Suivi', icon: TrendingUp },
               { k: 'session', label: 'Session', icon: Play },
@@ -4782,7 +4912,7 @@ function AbaApp() {
                 <button
                   key={t.k}
                   onClick={() => allerA(t.k)}
-                  className="rounded-full px-4 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
+                  className="rounded-full px-4 py-3.5 text-base font-medium flex items-center justify-center gap-1.5"
                   style={{
                     fontFamily: F_DISPLAY,
                     backgroundColor: on ? ACCENT : 'transparent',
@@ -4790,24 +4920,24 @@ function AbaApp() {
                   }}
                   aria-label={t.label}
                 >
-                  <Icon size={16} />
+                  <Icon size={20} />
                   <span className="hidden sm:inline">{t.label}</span>
                 </button>
               );
             })}
           </div>
 
-          <div className="flex flex-col items-center gap-1 shrink-0">
+          <div className="relative flex items-center justify-center shrink-0">
             <button
               onClick={openCrisis}
-              className="w-14 h-14 rounded-full flex items-center justify-center text-white shadow-lg active:scale-[0.96] transition-transform"
+              className="w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg active:scale-[0.96] transition-transform"
               style={{ backgroundColor: CRISIS }}
               title="Ouvrir une fiche de crise"
               aria-label="Crise"
             >
-              <AlertTriangle size={24} />
+              <AlertTriangle size={20} />
             </button>
-            <span className="text-[11px] font-semibold" style={{ fontFamily: F_DISPLAY, color: CRISIS }}>CRISE</span>
+            <span className="absolute top-full mt-1 text-[11px] font-semibold whitespace-nowrap" style={{ fontFamily: F_DISPLAY, color: CRISIS }}>CRISE</span>
           </div>
         </div>
         </div>
@@ -4942,10 +5072,47 @@ function AbaApp() {
                   </div>
                 );
               })}
-              <p className="text-xs mt-1" style={{ color: INK_SOFT }}>
+              {axes.length > 0 && <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
                 Un critère vaut jusqu'au suivant ou jusqu'à la clôture.
                 « Crise » crée en plus une fiche crise, dont la durée court jusqu'au critère suivant.
-              </p>
+              </p>}
+              {/* Compteurs d'occurrence de la personne : un appui = une
+                  occurrence de plus, sans notion de « en cours ». */}
+              {(st.compteurs || []).map((c) => {
+                const total = comptesCompteurJour(releves, st.id, c.id, Date.now());
+                return (
+                  <div key={c.id} className="mb-5 last:mb-0">
+                    <div className="text-sm font-semibold mb-1" style={{ fontFamily: F_DISPLAY }}>{c.nom}</div>
+                    <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+                      <span style={{ fontFamily: F_MONO }}>{total}</span> occurrence{total !== 1 ? 's' : ''} aujourd'hui.
+                    </p>
+                    <button
+                      onClick={() => noterCompteur(st.id, c.id)}
+                      className="w-full rounded-2xl py-4 text-sm font-semibold text-white active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+                      style={{ backgroundColor: CAT_INDIGO, fontFamily: F_DISPLAY }}
+                    >
+                      <Hash size={16} /> +1 occurrence
+                    </button>
+                    <div className="flex items-center gap-2 mt-2">
+                      <button
+                        onClick={() => annulerDernierCompteur(st.id, c.id)}
+                        disabled={total === 0}
+                        className="flex-1 rounded-2xl py-2.5 text-sm border disabled:opacity-40"
+                        style={{ borderColor: BORDER, color: INK_SOFT, fontFamily: F_DISPLAY }}
+                      >
+                        Annuler le dernier appui
+                      </button>
+                      <button
+                        onClick={() => { setChoixSuivi(null); setJourneeSuivi({ studentId: st.id, compteurId: c.id, jour: jourLocal(Date.now()) }); }}
+                        className="flex-1 rounded-2xl py-2.5 text-sm border flex items-center justify-center gap-1.5"
+                        style={{ borderColor: BORDER, color: INK_SOFT, fontFamily: F_DISPLAY }}
+                      >
+                        <Pencil size={13} /> Corriger la journée
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         );
@@ -4956,6 +5123,7 @@ function AbaApp() {
           cible={journeeSuivi}
           releves={releves} students={students} axesSuivi={axesSuivi}
           onAjouter={ajouterReleve} onModifier={modifierReleve} onSupprimer={supprimerReleve}
+          onAjouterCompteur={ajouterCompteurReleve}
           onClose={() => setJourneeSuivi(null)}
         />
       )}
@@ -5937,6 +6105,7 @@ function BoutonPhase({ obj, onChange }) {
 function PanneauPersonnes({
   students, guidances, templates, premiereConfiguration, focus,
   addStudent, removeStudent, renameStudent, axesSuivi, onToggleAxeSuivi, onCreerSuivi,
+  onAjouterCompteur, onRenommerCompteur, onSupprimerCompteur,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
   onOuvrirGuidances, onOuvrirModeles, onOuvrirAteliers, onOuvrirIntervenants,
 }) {
@@ -6075,6 +6244,42 @@ function PanneauPersonnes({
                     )}
                     <button onClick={() => setAjoutSuivi(s.id)} className="text-xs flex items-center gap-1 mt-2" style={{ color: INK_SOFT }}>
                       <Plus size={13} /> Ajouter un suivi
+                    </button>
+                  </div>
+                  {/* Compteurs d'occurrence : pas de bibliothèque, ils se
+                      créent et se renomment directement sur la fiche. */}
+                  <div className="mt-3">
+                    <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Compteurs d'occurrence</div>
+                    {(s.compteurs || []).length === 0 ? (
+                      <p className="text-xs" style={{ color: INK_SOFT }}>Aucun compteur pour cette personne.</p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {(s.compteurs || []).map((c) => (
+                          <div key={c.id} className="rounded-xl px-2.5 py-2 flex items-center gap-2" style={{ backgroundColor: CARD }}>
+                            <Hash size={14} style={{ color: INK_SOFT }} className="shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <Field
+                                value={c.nom}
+                                onChange={(nom) => onRenommerCompteur(s.id, c.id, nom)}
+                                placeholder="Nom du compteur"
+                              />
+                            </div>
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`Supprimer le compteur « ${c.nom} » ?\n\nLes occurrences déjà notées restent dans l'historique et l'export, marquées comme un compteur retiré.`)) onSupprimerCompteur(s.id, c.id);
+                              }}
+                              style={{ color: INK_SOFT }}
+                              className="shrink-0"
+                              title="Supprimer ce compteur"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <button onClick={() => onAjouterCompteur(s.id)} className="text-xs flex items-center gap-1 mt-2" style={{ color: INK_SOFT }}>
+                      <Plus size={13} /> Ajouter un compteur
                     </button>
                   </div>
                 </div>
@@ -6993,9 +7198,9 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, crises, guidances, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish }) {
+function SessionScreen({ students, ateliers, intervenants, crises, guidances, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish, onAnnulerCorrection }) {
   if (activeSession) {
-    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} notify={notify} onFinish={onFinish} suiteDuJour={planDuJour && planDuJour.restants} />;
+    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} notify={notify} onFinish={onFinish} onAnnulerCorrection={onAnnulerCorrection} suiteDuJour={planDuJour && planDuJour.restants} />;
   }
   return (
     <SessionSetup
@@ -7082,11 +7287,21 @@ function AtelierLancement({
   return (
     <>
       {banniere}
-      {titre && <div className="font-semibold mb-3" style={{ fontFamily: F_DISPLAY }}>{titre}</div>}
+      {titre && (
+        /* Le lancement se fait d'ici plutôt qu'en bas de carte : sur une
+           configuration longue, l'éducateur ne devrait pas avoir à redescendre
+           jusqu'au bouton après avoir relu le nom de l'atelier. */
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{titre}</div>
+          <Btn onClick={lancer} disabled={!ready} className="text-sm py-2 shrink-0">
+            <Play size={16} /> Lancer
+          </Btn>
+        </div>
+      )}
 
       {mode === 'balance' && (
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Sélectionnez les personnes concernées : chacune cotera son propre Balance Program.
+          Sélectionnez les personnes concernées : chacune cotera son propre Équilibre.
         </p>
       )}
 
@@ -7215,7 +7430,7 @@ function AtelierLancement({
             <div className="font-semibold mb-2" style={{ fontFamily: F_DISPLAY }}>{st.initials}</div>
             {visibleObjectives(st).length === 0 ? (
               <div className="text-sm" style={{ color: INK_SOFT }}>
-                {mode === 'balance' ? 'Aucun Balance Program défini pour cette personne.' : 'Aucun objectif défini pour cette personne.'}
+                {mode === 'balance' ? 'Aucun Équilibre défini pour cette personne.' : 'Aucun objectif défini pour cette personne.'}
               </div>
             ) : (
               <div className="space-y-1.5">
@@ -7257,18 +7472,35 @@ function AtelierLancement({
         );
       })}
 
-      <Btn onClick={lancer} disabled={!ready} className="w-full mt-2">
-        <Play size={17} /> Lancer
-      </Btn>
+      {/* Sans titre (atelier déplié depuis la liste), pas d'en-tête pour
+          accueillir le bouton : il reste ici, seule implémentation restante
+          pour ce cas. */}
+      {!titre && (
+        <Btn onClick={lancer} disabled={!ready} className="w-full mt-2">
+          <Play size={17} /> Lancer
+        </Btn>
+      )}
     </>
   );
 }
 
+/* Les trois façons d'ouvrir une session : Atelier (le cas courant, ouvert par
+   défaut), Équilibre et Libre. Elles étaient auparavant deux entrées perdues
+   au fond de la liste « Un autre atelier » — assez peu visibles pour être
+   ignorées un jour de routine chargée. */
+const SELECTIONS_SESSION = [
+  { k: 'atelier', label: 'Atelier' },
+  { k: 'equilibre', label: 'Équilibre' },
+  { k: 'libre', label: 'Libre' },
+];
+
 function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, onStart }) {
   const proposition = planDuJour && planDuJour.restants && planDuJour.restants[0];
+  const [selection, setSelection] = useState('atelier');
   const [intervenantId, setIntervenantId] = useState(null);
   const [autresOuverts, setAutresOuverts] = useState(() => !proposition);
   const [ouvertId, setOuvertId] = useState(null);
+  const studentsEquilibre = React.useMemo(() => personnesAvecEquilibre(students), [students]);
 
   const jour = planDuJour ? planDuJour.jour : new Date().getDay();
   const autresAteliers = ordonnerPropositions(ateliers, planDuJour && planDuJour.restants, proposition ? proposition.id : null);
@@ -7319,6 +7551,22 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
         <BoutonMenu onClick={onOuvrirMenu} />
       </div>
 
+      <div className="rounded-full flex items-center gap-0.5 p-1 mb-4" style={{ backgroundColor: NAV_BG }}>
+        {SELECTIONS_SESSION.map((s) => {
+          const on = selection === s.k;
+          return (
+            <button
+              key={s.k}
+              onClick={() => setSelection(s.k)}
+              className="flex-1 rounded-full px-3 py-2 text-sm font-medium"
+              style={{ fontFamily: F_DISPLAY, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}
+            >
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
+
       {intervenants.length > 0 && (
         <Card className="mb-4">
           <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Intervenant qui cote</div>
@@ -7336,109 +7584,119 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
         </Card>
       )}
 
-      {proposition ? (
+      {selection === 'atelier' && (
+        <>
+          {proposition ? (
+            <Card className="mb-4">
+              <AtelierLancement
+                key={proposition.id}
+                students={students} atelier={proposition} mode="atelier" jour={jour}
+                intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant={false}
+                notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
+                titre={proposition.name}
+                banniere={
+                  <div className="flex items-center gap-1.5 text-xs mb-1" style={{ color: INK_SOFT }}>
+                    <CalendarDays size={13} />
+                    {(JOURS.find((j) => j.k === planDuJour.jour) || {}).label} · {(() => {
+                      const rang = planDuJour.total - planDuJour.restants.length + 1;
+                      return rang === 1 ? '1er' : `${rang}e`;
+                    })()} sur {planDuJour.total}
+                  </div>
+                }
+              />
+            </Card>
+          ) : (
+            <Card className="mb-4">
+              <Empty>Aucun atelier programmé aujourd'hui.</Empty>
+            </Card>
+          )}
+
+          {!autresOuverts ? (
+            <Btn variant="ghost" onClick={() => setAutresOuverts(true)} className="w-full">
+              <ChevronDown size={16} /> Lancer un autre atelier
+            </Btn>
+          ) : (
+            <div className="space-y-2">
+              <div className="text-xs uppercase tracking-wide" style={{ color: INK_SOFT }}>Un autre atelier</div>
+              {autresAteliers.map((a) => {
+                const apercu = configurerAtelier(students, a, jour, 'atelier');
+                const open = ouvertId === a.id;
+                return (
+                  <div key={a.id} className="rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
+                    <div className="flex items-center gap-2">
+                      <button className="flex-1 text-left min-w-0" onClick={() => setOuvertId(open ? null : a.id)}>
+                        <span className="block font-semibold text-sm truncate" style={{ fontFamily: F_DISPLAY }}>{a.name}</span>
+                        <span className="block text-xs" style={{ color: INK_SOFT }}>
+                          {apercu.studentIds.length} personne{apercu.studentIds.length !== 1 ? 's' : ''} prévue{apercu.studentIds.length !== 1 ? 's' : ''}
+                        </span>
+                      </button>
+                      {apercu.studentIds.length > 0 && (
+                        <button
+                          onClick={() => demarrer({
+                            mode: 'atelier', atelierId: a.id, studentIds: apercu.studentIds, selected: apercu.selected,
+                            favorites: apercu.favorites, doubleCotation: false, intervenantId,
+                          })}
+                          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+                          style={{ backgroundColor: ACCENT, color: ACCENT_INK }}
+                          title="Lancer directement avec la configuration habituelle"
+                        >
+                          <Play size={16} />
+                        </button>
+                      )}
+                      <button onClick={() => setOuvertId(open ? null : a.id)} className="shrink-0" style={{ color: INK_SOFT }}>
+                        <ChevronRight size={18} style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
+                      </button>
+                    </div>
+                    {open && (
+                      <div className="mt-3">
+                        <AtelierLancement
+                          key={`${a.id}-ouvert`}
+                          students={students} atelier={a} mode="atelier" jour={jour}
+                          intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant
+                          notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {selection === 'equilibre' && (
         <Card className="mb-4">
-          <AtelierLancement
-            key={proposition.id}
-            students={students} atelier={proposition} mode="atelier" jour={jour}
-            intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant={false}
-            notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
-            titre={proposition.name}
-            banniere={
-              <div className="flex items-center gap-1.5 text-xs mb-1" style={{ color: INK_SOFT }}>
-                <CalendarDays size={13} />
-                {(JOURS.find((j) => j.k === planDuJour.jour) || {}).label} · {(() => {
-                  const rang = planDuJour.total - planDuJour.restants.length + 1;
-                  return rang === 1 ? '1er' : `${rang}e`;
-                })()} sur {planDuJour.total}
-              </div>
-            }
-          />
-        </Card>
-      ) : (
-        <Card className="mb-4">
-          <Empty>Aucun atelier programmé aujourd'hui.</Empty>
+          {studentsEquilibre.length === 0 ? (
+            <Empty>Aucune personne accompagnée n'a de programme Équilibre.</Empty>
+          ) : (
+            <AtelierLancement
+              key="equilibre"
+              students={studentsEquilibre} atelier={null} mode="balance" jour={jour}
+              intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant
+              notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
+              titre="Équilibre"
+            />
+          )}
         </Card>
       )}
 
-      {!autresOuverts ? (
-        <Btn variant="ghost" onClick={() => setAutresOuverts(true)} className="w-full">
-          <ChevronDown size={16} /> Lancer un autre atelier
-        </Btn>
-      ) : (
-        <div className="space-y-2">
-          <div className="text-xs uppercase tracking-wide" style={{ color: INK_SOFT }}>Un autre atelier</div>
-          {autresAteliers.map((a) => {
-            const apercu = configurerAtelier(students, a, jour, 'atelier');
-            const open = ouvertId === a.id;
-            return (
-              <div key={a.id} className="rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
-                <div className="flex items-center gap-2">
-                  <button className="flex-1 text-left min-w-0" onClick={() => setOuvertId(open ? null : a.id)}>
-                    <span className="block font-semibold text-sm truncate" style={{ fontFamily: F_DISPLAY }}>{a.name}</span>
-                    <span className="block text-xs" style={{ color: INK_SOFT }}>
-                      {apercu.studentIds.length} personne{apercu.studentIds.length !== 1 ? 's' : ''} prévue{apercu.studentIds.length !== 1 ? 's' : ''}
-                    </span>
-                  </button>
-                  {apercu.studentIds.length > 0 && (
-                    <button
-                      onClick={() => demarrer({
-                        mode: 'atelier', atelierId: a.id, studentIds: apercu.studentIds, selected: apercu.selected,
-                        favorites: apercu.favorites, doubleCotation: false, intervenantId,
-                      })}
-                      className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                      style={{ backgroundColor: ACCENT, color: ACCENT_INK }}
-                      title="Lancer directement avec la configuration habituelle"
-                    >
-                      <Play size={16} />
-                    </button>
-                  )}
-                  <button onClick={() => setOuvertId(open ? null : a.id)} className="shrink-0" style={{ color: INK_SOFT }}>
-                    <ChevronRight size={18} style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
-                  </button>
-                </div>
-                {open && (
-                  <div className="mt-3">
-                    <AtelierLancement
-                      key={`${a.id}-ouvert`}
-                      students={students} atelier={a} mode="atelier" jour={jour}
-                      intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant
-                      notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          {[{ cle: 'balance', label: 'Balance Program', mode: 'balance' }, { cle: 'libre', label: 'Séance libre', mode: 'atelier' }].map((entree) => {
-            const open = ouvertId === entree.cle;
-            return (
-              <div key={entree.cle} className="rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
-                <button className="w-full flex items-center justify-between" onClick={() => setOuvertId(open ? null : entree.cle)}>
-                  <span className="font-semibold text-sm" style={{ fontFamily: F_DISPLAY }}>{entree.label}</span>
-                  <ChevronRight size={18} style={{ color: INK_SOFT, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
-                </button>
-                {open && (
-                  <div className="mt-3">
-                    <AtelierLancement
-                      key={`${entree.cle}-ouvert`}
-                      students={students} atelier={null} mode={entree.mode} jour={jour}
-                      intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant
-                      notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
-                    />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+      {selection === 'libre' && (
+        <Card className="mb-4">
+          <AtelierLancement
+            key="libre"
+            students={students} atelier={null} mode="atelier" jour={jour}
+            intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant
+            notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
+            titre="Séance libre"
+          />
+        </Card>
       )}
     </div>
   );
 }
 
-function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, notify, onFinish, suiteDuJour }) {
+function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, notify, onFinish, onAnnulerCorrection, suiteDuJour }) {
   const isEdit = !!session.isEdit;
   const [currentId, setCurrentId] = useState(session.studentIds[0]);
   const [viewMode, setViewMode] = useState('priority');
@@ -7515,7 +7773,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
       (session.selectedObjectives[sid] || []).forEach((oid) => {
         const o = session.objectiveSnapshot[oid];
         if (!o) return;
-        /* En séance Balance Program, la cotation doit être accessible sans
+        /* En séance Équilibre, la cotation doit être accessible sans
            passer par la vue par personne : elle figure d'office ici. */
         const autoBalance = session.mode === 'balance' && o.type === 'balance';
         if (o.favorite || autoBalance) naturel.push(`${sid}|${oid}`);
@@ -7525,7 +7783,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     return [...memorise.filter((k) => naturel.includes(k)), ...naturel.filter((k) => !memorise.includes(k))];
   })();
 
-  /* Zone dominante pour les Balance Program, zone latérale pour le reste */
+  /* Zone dominante pour les Équilibre, zone latérale pour le reste */
   const balanceKeys = priorityItems.filter((k) => {
     const o = session.objectiveSnapshot[k.split('|')[1]];
     return o && o.type === 'balance';
@@ -7712,12 +7970,12 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
         <div className="min-w-0">
           {isEdit ? (
             <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>
-              {atelier ? atelier.name : session.mode === 'balance' ? 'Balance Program' : 'Séance libre'}
+              {atelier ? atelier.name : session.mode === 'balance' ? 'Équilibre' : 'Séance libre'}
             </h1>
           ) : (
             <button onClick={() => setFeuille('atelier')} className="flex items-center gap-1 max-w-full text-left" title="Changer d'atelier">
               <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>
-                {atelier ? atelier.name : session.mode === 'balance' ? 'Balance Program' : 'Séance libre'}
+                {atelier ? atelier.name : session.mode === 'balance' ? 'Équilibre' : 'Séance libre'}
               </h1>
               <ChevronDown size={16} style={{ color: INK_SOFT }} className="shrink-0" />
             </button>
@@ -7730,7 +7988,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
         </div>
         <div className="flex flex-wrap gap-2 shrink-0">
           {isEdit && (
-            <Btn variant="ghost" onClick={() => setSession(null)} className="text-sm py-2.5">Annuler</Btn>
+            <Btn variant="ghost" onClick={() => { setSession(null); if (onAnnulerCorrection) onAnnulerCorrection(); }} className="text-sm py-2.5">Annuler</Btn>
           )}
           {!isEdit && (
             <button
@@ -7839,7 +8097,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 );
               };
 
-              /* Sans Balance Program, un flux unique suffit. */
+              /* Sans Équilibre, un flux unique suffit. */
               if (balanceKeys.length === 0) {
                 return (
                   <ReorderList
@@ -7853,8 +8111,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 );
               }
 
-              /* Avec Balance Program : il occupe la zone principale, les autres
-                 objectifs prioritaires passent sur le côté. Deux Balance ou plus
+              /* Avec Équilibre : il occupe la zone principale, les autres
+                 objectifs prioritaires passent sur le côté. Deux Équilibre ou plus
                  se placent côte à côte dans cette zone. */
               const styleBalance = {
                 zoom,
@@ -9140,7 +9398,13 @@ function FriseJournee({ students, axesSuivi, releves, onOuvrirSuivi }) {
       lignes.push({ st, axe, segments: segmentsJournee(releves, st.id, suiviId, maintenant, maintenant) });
     });
   });
-  if (lignes.length === 0) return null;
+  const lignesCompteurs = [];
+  students.forEach((st) => {
+    (st.compteurs || []).forEach((c) => {
+      lignesCompteurs.push({ st, compteur: c, total: comptesCompteurJour(releves, st.id, c.id, maintenant) });
+    });
+  });
+  if (lignes.length === 0 && lignesCompteurs.length === 0) return null;
 
   return (
     <Card className="mb-4">
@@ -9200,6 +9464,24 @@ function FriseJournee({ students, axesSuivi, releves, onOuvrirSuivi }) {
           );
         })}
       </div>
+      {/* Compteurs : pas de segments à dessiner, juste le total du jour —
+          une ligne compacte suffit, l'historique se lit depuis la pastille. */}
+      {lignesCompteurs.length > 0 && (
+        <div className="space-y-1.5 mt-4">
+          {lignesCompteurs.map(({ st, compteur, total }) => (
+            <button
+              key={`${st.id}-${compteur.id}`}
+              className="w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs"
+              style={{ backgroundColor: PAPER }}
+              onClick={() => onOuvrirSuivi(st.id)}
+              title="Compter une occurrence de plus"
+            >
+              <span style={{ color: INK_SOFT }}>{st.initials} — {compteur.nom}</span>
+              <span style={{ fontFamily: F_MONO }}>{total}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }
@@ -9209,24 +9491,104 @@ function FriseJournee({ students, axesSuivi, releves, onOuvrirSuivi }) {
    par relevé. Rien n'est recalculé à la main — aucune durée n'est stockée, tout
    ce qui en dérive (la frise, la feuille d'export, la durée des fiches crise
    nées d'un relevé « crise ») se recale sur la liste corrigée. */
-function FeuilleJourneeSuivi({ cible, releves, students, axesSuivi, onAjouter, onModifier, onSupprimer, onClose }) {
+function FeuilleJourneeSuivi({ cible, releves, students, axesSuivi, onAjouter, onModifier, onSupprimer, onAjouterCompteur, onClose }) {
   const [heure, setHeure] = useState('');
   const [critere, setCritere] = useState('');
 
   const st = students.find((s) => s.id === cible.studentId);
+  const estCompteur = !!cible.compteurId;
   const axe = axeDe(axesSuivi, cible.suiviId);
   const criteres = (axe && axe.criteres) || [];
   /* Midi local : n'importe quelle heure de la journée visée conviendrait pour
      la comparaison de jour, celle-ci ne bascule jamais d'un fuseau à l'autre. */
-  const duJour = relevesDuJour(releves, cible.studentId, cible.suiviId, new Date(`${cible.jour}T12:00:00`));
+  const duJourAxe = estCompteur ? [] : relevesDuJour(releves, cible.studentId, cible.suiviId, new Date(`${cible.jour}T12:00:00`));
+  /* Un compteur n'a pas relevesDuJour (filtré sur suiviId) : ses occurrences se
+     trouvent à la main, sur le même principe. */
+  const duJourCompteur = React.useMemo(() => {
+    if (!estCompteur) return [];
+    const refDate = new Date(`${cible.jour}T12:00:00`);
+    return (releves || [])
+      .filter((r) => r && r.kind === 'compteur' && r.studentId === cible.studentId && r.compteurId === cible.compteurId)
+      .map((r) => ({ r, d: new Date(r.timestamp) }))
+      .filter(({ d }) => !Number.isNaN(d.getTime()) && memeJour(d, refDate))
+      .sort((a, b) => a.d - b.d)
+      .map(({ r }) => r);
+  }, [releves, estCompteur, cible.studentId, cible.compteurId, cible.jour]);
+  const duJour = estCompteur ? duJourCompteur : duJourAxe;
 
   const ajouter = () => {
+    if (estCompteur) {
+      const iso = isoDepuisJourHeure(cible.jour, heure);
+      if (!iso) return;
+      onAjouterCompteur(cible.studentId, cible.compteurId, iso);
+      setHeure('');
+      return;
+    }
     const iso = isoDepuisJourHeure(cible.jour, heure);
     if (!iso || !critere) return;
     onAjouter(cible.studentId, cible.suiviId, iso, critere === '__fin' ? null : critere, critere === '__fin');
     setHeure('');
     setCritere('');
   };
+
+  if (estCompteur) {
+    const nomCompteur = compteurDe(st, cible.compteurId).nom;
+    return (
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={onClose}>
+        <div className="rounded-2xl p-5 max-w-md w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
+          <div className="flex items-start justify-between gap-2 mb-1">
+            <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>
+              {st ? st.initials : '?'} — {nomCompteur}
+            </span>
+            <button onClick={onClose} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
+          </div>
+          <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
+            {dateKey(`${cible.jour}T12:00:00`)} — corrigez une heure, ajoutez une occurrence oubliée,
+            retirez un appui de trop.
+          </p>
+
+          {duJour.length === 0 ? (
+            <Empty>Aucune occurrence ce jour-là.</Empty>
+          ) : (
+            <div className="space-y-1.5 mb-4">
+              {duJour.map((r) => (
+                <div key={r.id} className="rounded-xl p-2.5 flex items-center gap-2" style={{ backgroundColor: PAPER }}>
+                  <input
+                    type="time"
+                    value={heureInput(r.timestamp)}
+                    onChange={(ev) => {
+                      const iso = isoDepuisJourHeure(cible.jour, ev.target.value);
+                      if (iso) onModifier(r.id, { timestamp: iso });
+                    }}
+                    className="rounded-lg px-2 py-1.5 text-sm border shrink-0"
+                    style={{ borderColor: BORDER, backgroundColor: CARD, fontFamily: F_MONO }}
+                  />
+                  <span className="flex-1 text-xs" style={{ color: INK_SOFT }}>
+                    {r.source === 'manuel' ? 'ajouté à la main' : 'occurrence'}
+                  </span>
+                  <button onClick={() => onSupprimer(r.id)} style={{ color: INK_SOFT }} className="shrink-0" title="Supprimer cet appui">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Ajouter une occurrence</div>
+          <div className="flex items-center gap-2">
+            <input
+              type="time"
+              value={heure}
+              onChange={(ev) => setHeure(ev.target.value)}
+              className="rounded-lg px-2 py-1.5 text-sm border flex-1"
+              style={{ borderColor: BORDER, backgroundColor: PAPER, fontFamily: F_MONO }}
+            />
+            <Btn onClick={ajouter} disabled={!heure} className="px-3 shrink-0"><Plus size={16} /></Btn>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={onClose}>
@@ -9732,7 +10094,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
   const rienATransmettre = !aTransmettre.seances.length && !aTransmettre.crises.length && !aTransmettre.journees.length;
 
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || 'Séance libre';
-  const sessionLabel = (sess) => (sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Balance Program' : 'Séance libre');
+  const sessionLabel = (sess) => (sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Équilibre' : 'Séance libre');
 
   function makeFile() {
     const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, guidances, studentFilter, chosenReleves, axesSuivi);
