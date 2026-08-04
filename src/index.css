@@ -13,21 +13,27 @@
   --border: #D7E0EE;
   --ink: #0E1B33;
   --ink-soft: #52627A;
-  /* Même teinte que l'accent sombre, désaturée de 30% : le bleu pur d'origine
-     (#2453FF, saturation 100%) lisait trop électrique sur le fond clair. */
-  --accent: #4566DE;
+  /* Charbon neutre, plus de bleu du tout : le premier essai désaturé
+     (#4566DE) restait perceptiblement bleu. Le sombre garde le bleu
+     (#5B8CFF) — confirmé, il n'est pas touché. */
+  --accent: #2B2B2B;
   --accent-ink: #FFFFFF;
   --nav-bg: #E4E9F5;
   --crisis: #D7263D;
   /* Fond très pâle d'une ligne sélectionnée : teinte l'accent au lieu du
      mélange hexadécimal + alpha, invalide maintenant que --accent est une
      variable et non un littéral. */
-  --accent-wash: rgba(69, 102, 222, 0.08);
+  --accent-wash: rgba(43, 43, 43, 0.08);
   /* Voile derrière modales, feuilles et tiroir : noir fixe, indépendant du
      thème (comme la palette catégorielle). Un seul token pour ne plus avoir
      de valeur ponctuelle divergente (une des occurrences codait un noir
      teinté olive par erreur). */
   --overlay-backdrop: rgba(0, 0, 0, 0.5);
+  /* Identité du bouton/icône ABC : même charbon que l'accent en clair
+     (demandé avec le changement d'accent) ; violet catégoriel inchangé en
+     sombre. Token dédié plutôt que réutiliser --accent, pour ne pas lier
+     l'identité ABC au réglage futur de l'accent lui-même. */
+  --color-abc: #2B2B2B;
 }
 :root[data-theme='dark'] {
   --paper: #0A1120;
@@ -40,6 +46,7 @@
   --nav-bg: #0F1830;
   --crisis: #FF5470;
   --accent-wash: rgba(91, 140, 255, 0.14);
+  --color-abc: #7C5CFF;
 }
 
 /* Confort tablette : pas de rebond élastique ni de zoom involontaire
