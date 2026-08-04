@@ -123,6 +123,7 @@ function isIndependentCode(guidances, code) {
 
 const TYPES = {
   trials: { label: 'Essai par essai', short: 'Essais', icon: ListChecks, color: '#7A6A9A' },
+  occurrence: { label: 'Par occurrence', short: 'Occurrence', icon: Hash, color: '#0F8B6C' },
   interval: { label: 'Niveau par intervalle', short: 'Intervalle', icon: LayoutGrid, color: '#6B5178' },
   chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: '#2E8B7A' },
   balance: { label: 'Balance Program', short: 'Balance', icon: Route, color: '#A0567A' },
@@ -246,11 +247,17 @@ const DEFAULT_INTERVAL_LEVELS = [
 ];
 const LEVEL_COLORS = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
 
-/* Types dont le score est un pourcentage : seuls ceux-là admettent un critère de maîtrise */
+/* Types dont le score est un pourcentage : eux seuls portent des cibles successives */
 const PERCENT_TYPES = ['trials', 'interval', 'chaining', 'balance'];
+/* Types admettant un critère d'acquisition. Le comptage d'occurrences en a un
+   lui aussi, mais sur un nombre brut et souvent dans l'autre sens : un
+   comportement problème est acquis quand il passe *sous* le seuil. */
+const MASTERY_TYPES = [...PERCENT_TYPES, 'occurrence'];
 /* Types dont la cotation repose sur des niveaux de guidance */
 const USES_GUIDANCE = ['trials', 'chaining'];
-const DEFAULT_MASTERY = { threshold: 80, sessions: 3, unit: 'sessions' };
+/* `sens` : 'min' = au moins le seuil (le défaut historique, et le seul sens qui
+   ait du sens pour un pourcentage de réussite), 'max' = au plus le seuil. */
+const DEFAULT_MASTERY = { threshold: 80, sessions: 3, unit: 'sessions', sens: 'min' };
 
 /* ==================== Sécurité : code PIN et sauvegarde chiffrée ====================
    Tout se fait avec l'API Web Crypto du navigateur, sans aucun serveur.
@@ -883,7 +890,8 @@ function mesuresExport(mesures) {
 
 function emptyEntry(obj) {
   const base = (() => {
-    if (obj.type === 'trials') return { trials: obj.config.trialCount ? Array(obj.config.trialCount).fill(null) : [], running: false, startedAt: null, pendingMs: 0 };
+    if (obj.type === 'trials') return { trials: obj.config.trialCount ? Array(obj.config.trialCount).fill(null) : [], running: false, startedAt: null };
+    if (obj.type === 'occurrence') return { count: 0 };
     if (obj.type === 'interval') return { marks: {}, segments: [] };
     if (obj.type === 'chaining') return { steps: {} };
     if (obj.type === 'balance') return { trials: [{ steps: {} }] };
@@ -907,6 +915,7 @@ function trialMs(t) {
 function entryMatches(obj, entry) {
   if (!entry) return false;
   if (obj.type === 'trials') return Array.isArray(entry.trials);
+  if (obj.type === 'occurrence') return typeof entry.count === 'number';
   if (obj.type === 'interval') return !!entry.marks;
   if (obj.type === 'chaining') return !!entry.steps;
   if (obj.type === 'balance') return Array.isArray(entry.trials) || !!entry.steps;
@@ -915,14 +924,12 @@ function entryMatches(obj, entry) {
 
 /* Fige les chronomètres encore en cours d'une cotation : celui des essais, à
    plat sur l'entrée, et celui de la mesure auxiliaire, imbriqué dans
-   `mesures.chrono`. `cumulePending` n'est vrai que pour le renforcement, qui
-   décompte à part le temps figé pendant que les cotations sont suspendues. */
-function figerChronos(entry, stamp, cumulePending) {
+   `mesures.chrono`. */
+function figerChronos(entry, stamp) {
   if (!entry) return entry;
   let next = entry;
   if (entry.running && entry.startedAt) {
     next = { ...next, running: false, elapsedMs: (entry.elapsedMs || 0) + (stamp - entry.startedAt), startedAt: null };
-    if (cumulePending) next.pendingMs = (entry.pendingMs || 0) + (stamp - entry.startedAt);
   }
   const chrono = entry.mesures && entry.mesures.chrono;
   if (chrono && chrono.running && chrono.startedAt) {
@@ -988,16 +995,10 @@ function finalizeSession(session) {
   Object.entries(session.data || {}).forEach(([sid, objs]) => {
     data[sid] = {};
     Object.entries(objs).forEach(([oid, entry]) => {
-      data[sid][oid] = figerChronos(entry, stamp, false);
+      data[sid][oid] = figerChronos(entry, stamp);
     });
   });
-  const reinforcement = {};
-  Object.entries(session.reinforcement || {}).forEach(([sid, r]) => {
-    reinforcement[sid] = r && r.running && r.startedAt
-      ? { running: false, startedAt: null, totalMs: (r.totalMs || 0) + (stamp - r.startedAt) }
-      : r;
-  });
-  return { ...session, data, reinforcement, endedAt: session.isEdit ? session.endedAt || stamp : stamp };
+  return { ...session, data, endedAt: session.isEdit ? session.endedAt || stamp : stamp };
 }
 
 /* ==================== Séance mouvante ====================
@@ -1083,13 +1084,22 @@ function objectifsParDefaut(student, atelier, mode) {
    même forme amputée des seules clés d'instance. Partagé par la fiche
    personne et la bibliothèque de modèles pour ne pas en garder deux versions
    qui divergeraient. */
+/* Seuil d'acquisition en toutes lettres, préposition comprise : un seul endroit
+   pour la description d'un objectif et le badge de sa courbe. L'unité suit le
+   type, le sens suit le critère. */
+function libelleSeuil(obj) {
+  const m = { ...DEFAULT_MASTERY, ...(obj.config.mastery || {}) };
+  const unite = PERCENT_TYPES.includes(obj.type) ? '%' : 'occ.';
+  return m.sens === 'max' ? `à ${m.threshold} ${unite} ou moins` : `à ${m.threshold} ${unite}`;
+}
+
 function descriptionObjectif(obj) {
   const meta = typeMeta(obj.type);
   let s = meta.short;
   if (obj.type === 'trials') s += obj.config.trialCount ? ` · ${obj.config.trialCount} essais prévus` : ' · essais sans limite';
   if (obj.type === 'interval') s += ` · toutes les ${fmtDuration(intervalStepSec(obj) * 1000)} · ${INTERVAL_MODE_SHORT[obj.config.intervalMode] || 'momentané'} · ${(obj.config.levels || []).length} niveaux`;
   if (obj.type === 'chaining' || obj.type === 'balance') s += ` · ${(obj.config.steps || []).length} étapes`;
-  if (obj.config.mastery) s += ` · acquis à ${obj.config.mastery.threshold} % sur ${obj.config.mastery.sessions} ${obj.config.mastery.unit === 'days' ? 'jours' : 'séances'}`;
+  if (obj.config.mastery) s += ` · acquis ${libelleSeuil(obj)} sur ${obj.config.mastery.sessions} ${obj.config.mastery.unit === 'days' ? 'jours' : 'séances'}`;
   if (obj.config.avecCompteur) s += ' · compteur';
   if (obj.config.avecChrono) {
     s += (obj.config.chronoMode === 'countdown' && obj.config.chronoSeconds)
@@ -1184,8 +1194,8 @@ function ajouterPersonne(session, student, oids, stamp, favorisAtelier) {
 }
 
 /* Départ en cours de séance : les cotations restent acquises, les
-   chronomètres et le renforcement s'arrêtent là. À distinguer de la
-   suppression, qui efface — d'où deux fonctions et deux commandes. */
+   chronomètres s'arrêtent là. À distinguer de la suppression, qui efface —
+   d'où deux fonctions et deux commandes. */
 function retirerPersonne(session, sid, stamp) {
   if (!session) return session;
   const presence = { ...(session.presence || {}) };
@@ -1194,15 +1204,10 @@ function retirerPersonne(session, sid, stamp) {
 
   const maj = {};
   Object.entries((session.data || {})[sid] || {}).forEach(([oid, e]) => {
-    maj[oid] = figerChronos(e, stamp, false);
+    maj[oid] = figerChronos(e, stamp);
   });
 
-  const reinforcement = { ...(session.reinforcement || {}) };
-  const r = reinforcement[sid];
-  if (r && r.running && r.startedAt) {
-    reinforcement[sid] = { running: false, startedAt: null, totalMs: (r.totalMs || 0) + (stamp - r.startedAt) };
-  }
-  return { ...session, presence, data: { ...(session.data || {}), [sid]: maj }, reinforcement };
+  return { ...session, presence, data: { ...(session.data || {}), [sid]: maj } };
 }
 
 /* Suppression : la personne n'aurait pas dû figurer dans cette séance. Tout ce
@@ -1230,7 +1235,6 @@ function supprimerPersonne(session, sid) {
     objectiveSnapshot,
     data: sansElle(session.data),
     notes: sansElle(session.notes),
-    reinforcement: sansElle(session.reinforcement),
     hidden: sansElle(session.hidden),
     presence: sansElle(session.presence),
     priorityOrder: (session.priorityOrder || []).filter((k) => k.split('|')[0] !== sid),
@@ -1243,8 +1247,8 @@ function supprimerPersonne(session, sid) {
    une fiche de crise ouverte reste rattachée à l'atelier où elle a commencé.
    `chainId` relie les deux séances, sur le principe des crises enchaînées.
 
-   Contrepartie assumée : nouveau chronomètre, temps de renforcement repartis
-   de zéro. Un atelier a sa durée propre. */
+   Contrepartie assumée : le chronomètre repart de zéro. Un atelier a sa durée
+   propre. */
 function chainerAtelier(session, atelierId, plan, stamp) {
   const chainId = session.chainId || session.id;
   const close = finalizeSession({ ...session, chainId, chainIndex: session.chainIndex || 1 });
@@ -1781,6 +1785,9 @@ function summarize(obj, entry, guidances) {
         .join(' '),
     };
   }
+  if (obj.type === 'occurrence') {
+    return { result: `${entry.count} occurrence${entry.count !== 1 ? 's' : ''}`, detail: '' };
+  }
   if (obj.type === 'interval') {
     const levels = obj.config.levels || [];
     const { totals, total } = intervalTotals(obj, entry);
@@ -1842,6 +1849,7 @@ function objectiveScore(obj, entry, guidances) {
     if (!done.length) return null;
     return { value: Math.round((done.filter((t) => isIndependentCode(gList, trialCode(t))).length / done.length) * 100), percent: true, unit: '%' };
   }
+  if (obj.type === 'occurrence') return { value: entry.count, percent: false, unit: 'occ.' };
   if (obj.type === 'interval') {
     const { totals, total } = intervalTotals(obj, entry);
     if (!total) return null;
@@ -1882,18 +1890,24 @@ function toDayPoints(points) {
     .map((e) => ({ value: Math.round(e.sum / e.n) }));
 }
 
-/* Objectif acquis si les N dernières séances (ou N derniers jours) atteignent toutes le seuil */
+/* Objectif acquis si les N dernières séances (ou N derniers jours) tiennent
+   toutes le seuil. `sens` décide du côté : « au moins » pour un pourcentage de
+   réussite, « au plus » pour un comptage qu'on cherche à faire baisser. Les
+   objectifs enregistrés avant l'ajout du champ retombent sur 'min', donc sur le
+   comportement d'origine. */
 function masteryStatus(obj, points) {
-  if (!PERCENT_TYPES.includes(obj.type)) return null;
+  if (!MASTERY_TYPES.includes(obj.type)) return null;
   const m = { ...DEFAULT_MASTERY, ...(obj.config.mastery || {}) };
   const unit = m.unit === 'days' ? 'days' : 'sessions';
+  const sens = m.sens === 'max' ? 'max' : 'min';
   const series = unit === 'days' ? toDayPoints(points) : points;
+  const tient = (v) => (sens === 'max' ? v <= m.threshold : v >= m.threshold);
   let streak = 0;
   for (let i = series.length - 1; i >= 0; i--) {
-    if (series[i].value >= m.threshold) streak++;
+    if (tient(series[i].value)) streak++;
     else break;
   }
-  return { mastered: streak >= m.sessions, threshold: m.threshold, needed: m.sessions, streak: Math.min(streak, m.sessions), unit };
+  return { mastered: streak >= m.sessions, threshold: m.threshold, needed: m.sessions, streak: Math.min(streak, m.sessions), unit, sens };
 }
 
 /* --- Balance Program ---
@@ -2063,22 +2077,6 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
       ]);
     });
 
-    /* Temps de renforcement et temps d'activité, par personne. L'activité se
-       compte sur la présence réelle : une personne arrivée en cours de séance
-       ne doit pas se voir créditer la séance entière. */
-    Object.entries(sess.reinforcement || {}).forEach(([sid, r]) => {
-      if (studentFilter && !studentFilter.includes(sid)) return;
-      const renfo = Math.round((r.totalMs || 0) / 1000);
-      if (!renfo) return;
-      const activite = Math.max(0, Math.round(dureePresence(sess, sid) / 1000) - renfo);
-      rows.push([
-        ...base(sess, sid, { name: 'Temps de renforcement', activeTargetName: null, activePhaseName: '—', config: {} }),
-        'Renforcement', 1, '',
-        `${Math.round(renfo / 60)} min de renforcement · ${Math.round(activite / 60)} min d'activité`,
-        '', '', '', renfo, '', '',
-      ]);
-    });
-
     (sess.studentIds || []).forEach((sid) => {
       if (studentFilter && !studentFilter.includes(sid)) return;
       const objIds = (sess.selectedObjectives && sess.selectedObjectives[sid]) || [];
@@ -2104,6 +2102,12 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
             ]);
           });
         }
+
+        /* Le mode Occurrence n'a pas d'essais discrets : comme dans son
+           implémentation d'origine, il ne produit pas de ligne dans
+           « Détail par essai » — son nombre se lit sur la feuille
+           « Cotations », au niveau de l'objectif (summarize/objectiveScore,
+           génériques à tous les modes). */
 
         if (obj.type === 'chaining') {
           (obj.config.steps || []).forEach((st, i) => {
@@ -4157,13 +4161,6 @@ function AbaApp() {
       return { ...x, suivisActifs };
     }));
 
-  /* --- suivi de renforcement ---
-     Hors activation, aucun bouton de renforcement n'apparaît en séance : tout
-     le monde n'en a pas besoin, et l'ajouter par défaut aurait encombré la
-     fiche de chaque personne pour rien. */
-  const toggleSuiviRenforcement = (id) =>
-    setStudents((l) => l.map((x) => (x.id === id ? { ...x, suiviRenforcement: !x.suiviRenforcement } : x)));
-
   /* Un relevé s'ajoute simplement à la suite : il vaut jusqu'au suivant, pour
      la journée en cours — voir l'état dormant. Le critère de clé `crise` crée
      en plus une fiche crise minimale dans le tableau habituel, quel que soit
@@ -4299,8 +4296,8 @@ function AbaApp() {
             students={students} guidances={guidances} templates={objectiveTemplates} focus={focusEcran}
             premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
-            axesSuivi={axesSuivi} onToggleAxeSuivi={toggleAxeSuivi} onToggleRenforcement={toggleSuiviRenforcement}
-            onCreerSuivi={creerSuiviPour} onOuvrirSuivis={() => ouvrirEcran('suivicontinu')}
+            axesSuivi={axesSuivi} onToggleAxeSuivi={toggleAxeSuivi}
+            onCreerSuivi={creerSuiviPour}
             addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective}
             duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase}
             onSaveTemplate={saveTemplate}
@@ -4338,7 +4335,7 @@ function AbaApp() {
       case 'abc':
         return <PanneauAbc abcOptions={abcOptions} onSetAbc={setAbcOptions} />;
       case 'suivicontinu':
-        return <PanneauSuiviContinu axes={axesSuivi} students={students} onSetAxes={majAxesSuivi} focus={focusEcran} />;
+        return <PanneauSuiviContinu axes={axesSuivi} students={students} onSetAxes={majAxesSuivi} onToggleAxeSuivi={toggleAxeSuivi} focus={focusEcran} />;
       case 'suivi':
         return (
           <SuiviScreen
@@ -5389,7 +5386,7 @@ function PanneauAbc({ abcOptions, onSetAbc }) {
    rattachés. Chaque carte rappelle qui
    l'utilise — sans ça, un suivi créé pour une personne et jamais activé se
    confondrait avec un suivi en service. */
-function PanneauSuiviContinu({ axes, students, onSetAxes, focus }) {
+function PanneauSuiviContinu({ axes, students, onSetAxes, onToggleAxeSuivi, focus }) {
   const cartes = useRef({});
   useEffect(() => {
     if (!focus || !focus.axe) return;
@@ -5397,9 +5394,11 @@ function PanneauSuiviContinu({ axes, students, onSetAxes, focus }) {
     if (node) node.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [focus]);
 
+  const actifPour = (axe) => (students || []).filter((s) => (s.suivisActifs || []).includes(axe.id));
+
   const ajouterAxe = () => onSetAxes([...axes, { id: uid(), nom: 'Nouveau suivi', criteres: [] }]);
   const supprimerAxe = (axe) => {
-    const utilise = (students || []).filter((s) => (s.suivisActifs || []).includes(axe.id));
+    const utilise = actifPour(axe);
     const avertissement = utilise.length
       ? `\n\nIl est actif pour ${utilise.map((s) => s.initials).join(', ')} : il y sera désactivé.`
       : '';
@@ -5408,11 +5407,9 @@ function PanneauSuiviContinu({ axes, students, onSetAxes, focus }) {
   };
   return (
     <div>
-      <SectionTitle sub="Les critères notés au fil de la journée, indépendamment des ateliers. Créez-en autant qu'il en faut : chaque personne active les siens depuis sa fiche.">Suivi continu</SectionTitle>
+      <SectionTitle sub="Les critères notés au fil de la journée, indépendamment des ateliers. Créez-en autant qu'il en faut, et cochez qui les suit.">Suivi continu</SectionTitle>
       {axes.length === 0 && <Empty>Aucun suivi dans la bibliothèque.</Empty>}
-      {axes.map((axe) => {
-        const utilise = (students || []).filter((s) => (s.suivisActifs || []).includes(axe.id));
-        return (
+      {axes.map((axe) => (
         <Card key={axe.id} className="mb-4">
           <div ref={(n) => { cartes.current[axe.id] = n; }}>
             <div className="flex items-center gap-2 mb-1">
@@ -5425,8 +5422,25 @@ function PanneauSuiviContinu({ axes, students, onSetAxes, focus }) {
                 <Trash2 size={16} />
               </button>
             </div>
-            <div className="text-xs mb-3" style={{ color: INK_SOFT }}>
-              {utilise.length ? `Actif pour ${utilise.map((s) => s.initials).join(', ')}` : 'Activé pour personne pour l’instant'}
+            {/* Assignation depuis l'axe, symétrique de celle de la fiche d'une
+                personne — même geste que les personnes habituelles d'un
+                atelier. */}
+            <div className="mb-3">
+              <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Actif pour</div>
+              {(students || []).length === 0 ? (
+                <p className="text-xs" style={{ color: INK_SOFT }}>Aucune personne accompagnée pour l'instant.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {students.map((s) => (
+                    <Chip
+                      key={s.id}
+                      label={s.initials}
+                      on={(s.suivisActifs || []).includes(axe.id)}
+                      onClick={() => onToggleAxeSuivi(s.id, axe.id)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
             <CritereListEditor
               criteres={axe.criteres}
@@ -5434,8 +5448,7 @@ function PanneauSuiviContinu({ axes, students, onSetAxes, focus }) {
             />
           </div>
         </Card>
-        );
-      })}
+      ))}
       <Btn variant="ghost" onClick={ajouterAxe} className="w-full text-sm">
         <Plus size={16} /> Ajouter un suivi
       </Btn>
@@ -5663,7 +5676,7 @@ function BoutonPhase({ obj, onChange }) {
    distance, une carte dans Gestion et une carte dans Personnes. */
 function PanneauPersonnes({
   students, guidances, templates, premiereConfiguration, focus,
-  addStudent, removeStudent, renameStudent, axesSuivi, onToggleAxeSuivi, onCreerSuivi, onOuvrirSuivis, onToggleRenforcement,
+  addStudent, removeStudent, renameStudent, axesSuivi, onToggleAxeSuivi, onCreerSuivi,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
   onOuvrirGuidances, onOuvrirModeles, onOuvrirAteliers, onOuvrirIntervenants,
 }) {
@@ -5672,6 +5685,8 @@ function PanneauPersonnes({
   const [copyingObj, setCopyingObj] = useState(null);
   const [copyTargets, setCopyTargets] = useState([]);
   const [initials, setInitials] = useState('');
+  /* Personne pour laquelle on choisit un suivi à ajouter. */
+  const [ajoutSuivi, setAjoutSuivi] = useState(null);
   const studentRefs = useRef({});
 
   const ajouter = () => {
@@ -5752,7 +5767,6 @@ function PanneauPersonnes({
                     {s.objectives.length} objectif{s.objectives.length !== 1 ? 's' : ''}
                     {(s.suivisActifs || []).length > 0 &&
                       ` · ${(s.suivisActifs || []).map((id) => (axeDe(axesSuivi, id) || {}).nom).filter(Boolean).join(', ')}`}
-                    {s.suiviRenforcement && ' · renforcement suivi'}
                   </span>
                 </span>
               </span>
@@ -5769,49 +5783,40 @@ function PanneauPersonnes({
                       if (window.confirm(`Supprimer ${s.initials} et ses ${s.objectives.length} objectif(s) ?`)) removeStudent(s.id);
                     }}
                   />
-                  {/* La bibliothèque de suivis se choisit ici : cocher ceux qui
-                      concernent cette personne, ou en créer un pour elle. */}
-                  {axesSuivi.length === 0 && (
-                    <p className="text-xs mt-2.5" style={{ color: INK_SOFT }}>Aucun suivi continu dans la bibliothèque.</p>
-                  )}
-                  {axesSuivi.map((axe) => {
-                    const actif = (s.suivisActifs || []).includes(axe.id);
-                    return (
-                      <button key={axe.id} onClick={() => onToggleAxeSuivi(s.id, axe.id)} className="flex items-start gap-2.5 text-left w-full mt-2.5">
-                        <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: actif ? INK : BORDER }}>
-                          <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: actif ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{axe.nom}</span>
-                          <span className="block text-xs" style={{ color: INK_SOFT }}>
-                            Ajoute une pastille en bas d'écran pour noter à tout moment son critère —
-                            {' '}{axe.criteres.map((c) => c.l).join(', ') || 'aucun critère défini'}. Sans activation, aucune pastille n'apparaît.
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                  <div className="flex items-center gap-3 flex-wrap mt-2.5">
-                    <button onClick={() => onCreerSuivi(s.id)} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
-                      <Plus size={13} /> Nouveau suivi continu
-                    </button>
-                    <button onClick={onOuvrirSuivis} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
-                      <Activity size={13} /> Gérer les suivis
+                  {/* Seuls les suivis actifs de cette personne figurent ici.
+                      La bibliothèque étant illimitée, tous les lister en
+                      interrupteurs faisait grossir la fiche sans fin : le choix
+                      passe par une feuille, ouverte à la demande. */}
+                  <div className="mt-2.5">
+                    <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Suivi continu</div>
+                    {(s.suivisActifs || []).length === 0 ? (
+                      <p className="text-xs" style={{ color: INK_SOFT }}>Aucun suivi actif pour cette personne.</p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {(s.suivisActifs || []).map((id) => {
+                          const axe = axeDe(axesSuivi, id);
+                          if (!axe) return null;
+                          return (
+                            <div key={axe.id} className="rounded-xl px-2.5 py-2 flex items-start gap-2" style={{ backgroundColor: CARD }}>
+                              <Activity size={14} style={{ color: INK_SOFT, marginTop: 2 }} className="shrink-0" />
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{axe.nom}</span>
+                                <span className="block text-xs" style={{ color: INK_SOFT }}>
+                                  {axe.criteres.map((c) => c.l).join(', ') || 'aucun critère défini'}
+                                </span>
+                              </span>
+                              <button onClick={() => onToggleAxeSuivi(s.id, axe.id)} style={{ color: INK_SOFT }} className="shrink-0" title="Retirer ce suivi">
+                                <X size={15} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <button onClick={() => setAjoutSuivi(s.id)} className="text-xs flex items-center gap-1 mt-2" style={{ color: INK_SOFT }}>
+                      <Plus size={13} /> Ajouter un suivi
                     </button>
                   </div>
-                  <button onClick={() => onToggleRenforcement(s.id)} className="flex items-start gap-2.5 text-left w-full mt-2.5">
-                    <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: s.suiviRenforcement ? INK : BORDER }}>
-                      <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: s.suiviRenforcement ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Suivi de renforcement</span>
-                      <span className="block text-xs" style={{ color: INK_SOFT }}>
-                        Ajoute en séance un bouton pour mettre la personne en renforcement — les
-                        cotations sont alors suspendues et le temps décompté. Sans activation, le
-                        bouton n'apparaît pas.
-                      </span>
-                    </span>
-                  </button>
                 </div>
                 <div className="space-y-1.5 mb-3">
                   {s.objectives.map((o) => {
@@ -5911,6 +5916,64 @@ function PanneauPersonnes({
         ))}
       </div>
       )}
+
+      {ajoutSuivi && (
+        <FeuilleAjoutSuivi
+          student={students.find((s) => s.id === ajoutSuivi)}
+          axes={axesSuivi}
+          onChoisir={(axeId) => { onToggleAxeSuivi(ajoutSuivi, axeId); setAjoutSuivi(null); }}
+          onCreer={() => { const sid = ajoutSuivi; setAjoutSuivi(null); onCreerSuivi(sid); }}
+          onClose={() => setAjoutSuivi(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* Choix d'un suivi continu à activer pour une personne : la bibliothèque moins
+   ce qu'elle a déjà. En créer un depuis ici l'active et bascule sur l'onglet
+   Suivi continu, où se définissent ses critères — un suivi sans critère ne sert
+   à rien, autant y conduire tout de suite. */
+function FeuilleAjoutSuivi({ student, axes, onChoisir, onCreer, onClose }) {
+  const dispo = (axes || []).filter((a) => !((student && student.suivisActifs) || []).includes(a.id));
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={onClose}>
+      <div className="rounded-2xl p-5 max-w-sm w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>
+            Ajouter un suivi — {student ? student.initials : ''}
+          </span>
+          <button onClick={onClose} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
+        </div>
+
+        {dispo.length === 0 ? (
+          <Empty>
+            {(axes || []).length === 0
+              ? 'Aucun suivi dans la bibliothèque.'
+              : 'Tous les suivis de la bibliothèque sont déjà actifs pour cette personne.'}
+          </Empty>
+        ) : (
+          <div className="space-y-1.5 mb-4">
+            {dispo.map((axe) => (
+              <button
+                key={axe.id}
+                onClick={() => onChoisir(axe.id)}
+                className="w-full rounded-xl px-3 py-2.5 text-left border"
+                style={{ borderColor: BORDER }}
+              >
+                <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{axe.nom}</span>
+                <span className="block text-xs" style={{ color: INK_SOFT }}>
+                  {axe.criteres.map((c) => c.l).join(', ') || 'aucun critère défini'}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <Btn variant="ghost" onClick={onCreer} className="w-full text-sm">
+          <Plus size={16} /> Créer un nouveau suivi
+        </Btn>
+      </div>
     </div>
   );
 }
@@ -6041,6 +6104,10 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
   const [threshold, setThreshold] = useState((initConfig.mastery || DEFAULT_MASTERY).threshold);
   const [masterySessions, setMasterySessions] = useState((initConfig.mastery || DEFAULT_MASTERY).sessions);
   const [masteryUnit, setMasteryUnit] = useState((initConfig.mastery || DEFAULT_MASTERY).unit || 'sessions');
+  /* Sens du critère, propre au mode Occurrence : « au moins » (augmenter un
+     comportement) ou « au plus » (le réduire). Les autres modes restent sur
+     « au moins », seul sens cohérent pour un pourcentage de réussite. */
+  const [masterySens, setMasterySens] = useState((initConfig.mastery || DEFAULT_MASTERY).sens || 'min');
 
   function submit() {
     if (!name.trim()) return;
@@ -6058,7 +6125,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
     }
     if (type === 'chaining' || type === 'balance') config.steps = steps;
     if (type === 'balance' && balanceSet.length) config.balanceOutcomes = balanceSet;
-    if (avecCompteur) {
+    if (avecCompteur && type !== 'occurrence') {
       config.avecCompteur = true;
       if (parEssaiPossible && compteurParEssai) config.compteurParEssai = true;
     }
@@ -6071,13 +6138,16 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
       if (parEssaiPossible && chronoParEssai) config.chronoParEssai = true;
     }
     if (USES_GUIDANCE.includes(type) && guidanceSet.length) config.guidanceSet = guidanceSet;
-    if (PERCENT_TYPES.includes(type)) {
+    if (MASTERY_TYPES.includes(type)) {
+      const occ = type === 'occurrence';
       config.mastery = {
-        threshold: threshold === '' || threshold === null ? 80 : Math.min(100, Math.max(1, Number(threshold))),
+        threshold: threshold === '' || threshold === null ? 80 : Math.min(occ ? 999 : 100, Math.max(occ ? 0 : 1, Number(threshold))),
         sessions: masterySessions === '' || masterySessions === null ? 3 : Math.min(60, Math.max(1, Number(masterySessions))),
         unit: masteryUnit,
+        sens: occ ? masterySens : 'min',
       };
-      if (targets.length) config.targets = targets;
+      // Les cibles successives ne concernent que les types à pourcentage.
+      if (PERCENT_TYPES.includes(type) && targets.length) config.targets = targets;
     }
     /* Une phase renommée à la création remplace la première entrée ; un
        changement de phase en cours de suivi passe par le bouton dédié, qui
@@ -6396,25 +6466,38 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
         </div>
       )}
 
-      {PERCENT_TYPES.includes(type) && (
+      {MASTERY_TYPES.includes(type) && (
         <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
           <div className="flex items-center gap-1.5 mb-2">
             <Award size={14} style={{ color: INK_SOFT }} />
             <span className="text-xs font-medium" style={{ color: INK_SOFT }}>Critère d'acquisition</span>
           </div>
+          {type === 'occurrence' && (
+            <div className="flex gap-1.5 mb-2">
+              {[{ k: 'max', l: 'Au plus' }, { k: 'min', l: 'Au moins' }].map((s) => (
+                <button key={s.k} onClick={() => setMasterySens(s.k)} className="rounded-lg px-3 py-2 text-xs border"
+                  style={{ borderColor: masterySens === s.k ? INK : BORDER, backgroundColor: masterySens === s.k ? INK : 'transparent', color: masterySens === s.k ? '#fff' : INK_SOFT }}>
+                  {s.l}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm">À partir de</span>
+            <span className="text-sm">{type === 'occurrence' ? '' : 'À partir de'}</span>
             <input
-              type="number" inputMode="numeric" min="1" max="100" value={threshold}
+              type="number" inputMode="numeric" min={type === 'occurrence' ? 0 : 1} max={type === 'occurrence' ? 999 : 100} value={threshold}
               /* On accepte la saisie telle quelle pendant la frappe, y compris
                  vide : borner à chaque caractère empêchait d'écrire « 85 »,
                  le « 8 » intermédiaire étant aussitôt réécrit. */
               onChange={(e) => setThreshold(e.target.value === '' ? '' : Number(e.target.value))}
-              onBlur={() => setThreshold((v) => (v === '' || v === null ? 80 : Math.min(100, Math.max(1, Number(v)))))}
+              onBlur={() => setThreshold((v) => {
+                if (v === '' || v === null) return 80;
+                return type === 'occurrence' ? Math.min(999, Math.max(0, Number(v))) : Math.min(100, Math.max(1, Number(v)));
+              })}
               className="w-16 rounded-lg border px-2 py-2 text-sm bg-transparent text-center"
               style={{ borderColor: BORDER, fontFamily: F_MONO, color: INK }}
             />
-            <span className="text-sm">% sur</span>
+            <span className="text-sm">{type === 'occurrence' ? 'occurrences sur' : '% sur'}</span>
             <input
               type="number" inputMode="numeric" min="1" max="60" value={masterySessions}
               onChange={(e) => setMasterySessions(e.target.value === '' ? '' : Number(e.target.value))}
@@ -6435,6 +6518,13 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
           {masteryUnit === 'days' && (
             <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
               Plusieurs séances d'une même journée sont moyennées et comptent pour un seul jour.
+            </p>
+          )}
+          {type === 'occurrence' && (
+            <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
+              {masterySens === 'max'
+                ? '« Au plus 0 » vise l\'extinction complète du comportement.'
+                : 'Utile pour suivre l\'augmentation d\'un comportement à développer, par exemple des demandes spontanées.'}
             </p>
           )}
         </div>
@@ -6562,22 +6652,26 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
           Mesures annexes — à part de la cotation, indépendantes l'une de l'autre
         </div>
         <div className="space-y-3">
-          <div>
-            <button onClick={() => setAvecCompteur((v) => !v)} className="flex items-center gap-1.5 text-sm">
-              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecCompteur ? INK : BORDER }}>
-                <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecCompteur ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-              </span>
-              Compteur
-            </button>
-            {avecCompteur && parEssaiPossible && (
-              <button onClick={() => setCompteurParEssai((v) => !v)} className="flex items-center gap-1.5 text-xs mt-2 ml-1" style={{ color: INK_SOFT }}>
-                <span className="w-7 h-4 rounded-full relative shrink-0" style={{ backgroundColor: compteurParEssai ? INK : BORDER }}>
-                  <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white" style={{ left: compteurParEssai ? '0.875rem' : '0.125rem', transition: 'left .15s' }} />
+          {/* Sur le mode Occurrence, le comptage est déjà la cotation : un
+              compteur annexe en plus serait une source d'erreur de saisie. */}
+          {type !== 'occurrence' && (
+            <div>
+              <button onClick={() => setAvecCompteur((v) => !v)} className="flex items-center gap-1.5 text-sm">
+                <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecCompteur ? INK : BORDER }}>
+                  <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecCompteur ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
                 </span>
-                Relancer à chaque essai
+                Compteur
               </button>
-            )}
-          </div>
+              {avecCompteur && parEssaiPossible && (
+                <button onClick={() => setCompteurParEssai((v) => !v)} className="flex items-center gap-1.5 text-xs mt-2 ml-1" style={{ color: INK_SOFT }}>
+                  <span className="w-7 h-4 rounded-full relative shrink-0" style={{ backgroundColor: compteurParEssai ? INK : BORDER }}>
+                    <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white" style={{ left: compteurParEssai ? '0.875rem' : '0.125rem', transition: 'left .15s' }} />
+                  </span>
+                  Relancer à chaque essai
+                </button>
+              )}
+            </div>
+          )}
           <div>
             <button onClick={() => setAvecChrono((v) => !v)} className="flex items-center gap-1.5 text-sm">
               <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecChrono ? INK : BORDER }}>
@@ -7325,41 +7419,10 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
       Object.entries(s0.data || {}).forEach(([sid, objs]) => {
         data[sid] = {};
         Object.entries(objs).forEach(([oid, e]) => {
-          data[sid][oid] = figerChronos(e, stamp, false);
+          data[sid][oid] = figerChronos(e, stamp);
         });
       });
       return { ...s0, data, pausedAt: stamp, pauses: [...(s0.pauses || []), { from: stamp, to: null }] };
-    });
-  }
-
-  /* Renforcement : pendant qu'il court, les cotations de la personne sont
-     suspendues. On mesure ainsi le temps d'activité et le temps de renforcement. */
-  const renfoDe = (sid) => (session.reinforcement && session.reinforcement[sid]) || { running: false, startedAt: null, totalMs: 0 };
-  const renfoTotal = (sid) => {
-    const r = renfoDe(sid);
-    return (r.totalMs || 0) + (r.running && r.startedAt ? now - r.startedAt : 0);
-  };
-  const enRenfo = (sid) => !!renfoDe(sid).running;
-
-  function toggleRenfo(sid) {
-    setSession((s0) => {
-      const cur = (s0.reinforcement && s0.reinforcement[sid]) || { running: false, startedAt: null, totalMs: 0 };
-      let next;
-      let data = s0.data;
-      if (cur.running) {
-        next = { running: false, startedAt: null, totalMs: (cur.totalMs || 0) + (Date.now() - cur.startedAt) };
-      } else {
-        next = { running: true, startedAt: Date.now(), totalMs: cur.totalMs || 0 };
-        // Les chronomètres en cours de cette personne sont figés
-        const stamp = Date.now();
-        const objs = s0.data[sid] || {};
-        const maj = {};
-        Object.entries(objs).forEach(([oid, e]) => {
-          maj[oid] = figerChronos(e, stamp, true);
-        });
-        data = { ...s0.data, [sid]: maj };
-      }
-      return { ...s0, data, reinforcement: { ...(s0.reinforcement || {}), [sid]: next } };
     });
   }
 
@@ -7554,7 +7617,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                     now={now} elapsed={elapsed}
                     session={session} crises={crises} studentId={sid} guidances={guidances}
                     studentLabel={st ? st.initials : null}
-                    paused={enRenfo(sid)}
                     onStudentClick={() => { setCurrentId(sid); setViewMode('student'); }}
                     hidden={hiddenFor(sid).includes(oid)}
                     onToggleHidden={() => toggleHidden(sid, oid)}
@@ -7638,7 +7700,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       now={now} elapsed={elapsed}
                       session={session} crises={crises} studentId={currentId} guidances={guidances}
                       hidden={hiddenFor(currentId).includes(oid)}
-                      paused={enRenfo(currentId)}
                       onToggleHidden={() => toggleHidden(currentId, oid)}
                       onExpand={() => setExpanded({ sid: currentId, oid })}
                       onChange={(p) => updateEntry(currentId, oid, p)}
@@ -7700,16 +7761,14 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           </div>
         )}
 
-        {/* Rail de personnes : navigation, renforcement, arrivée et départ —
-            les trois se jouaient auparavant à trois endroits de l'écran. */}
+        {/* Rail de personnes : navigation, arrivée et départ — les trois se
+            jouaient auparavant à trois endroits de l'écran. */}
         <div className="shrink-0 flex flex-col gap-1.5 sticky top-20 self-start">
           {session.studentIds.map((sid) => {
             const st = students.find((s) => s.id === sid);
             if (!st) return null;
             const present = isEdit || estPresent(session, sid);
             const on = viewMode === 'student' && sid === currentId;
-            const actif = enRenfo(sid);
-            const total = renfoTotal(sid);
             return (
               <div key={sid} className="flex flex-col items-center gap-0.5">
                 <button
@@ -7721,22 +7780,14 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                   style={{
                     fontFamily: F_DISPLAY,
                     opacity: present ? 1 : 0.45,
-                    backgroundColor: actif ? '#D69A2D' : on ? INK : CARD,
-                    color: actif || on ? '#fff' : INK_SOFT,
-                    borderColor: actif ? '#D69A2D' : on ? INK : BORDER,
+                    backgroundColor: on ? INK : CARD,
+                    color: on ? '#fff' : INK_SOFT,
+                    borderColor: on ? INK : BORDER,
                   }}
                   title={!present ? 'Reparti de l’atelier — appuyer pour faire revenir' : undefined}
                 >
                   {st.initials.replace(/\./g, '').slice(0, 3)}
-                  {actif && (
-                    <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: '#D69A2D', color: '#fff', border: `2px solid ${CARD}` }}>
-                      <Gift size={10} />
-                    </span>
-                  )}
                 </button>
-                {actif && total > 0 && (
-                  <span className="text-[10px]" style={{ fontFamily: F_MONO, color: '#D69A2D' }}>{fmtClock(total)}</span>
-                )}
                 {!isEdit && (
                   <button onClick={() => setFeuille({ personne: sid })} style={{ color: INK_SOFT }} title="Options">
                     <ChevronDown size={14} />
@@ -7794,10 +7845,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           sid={feuille.personne}
           students={students}
           present={isEdit || estPresent(session, feuille.personne)}
-          renfoSuivi={!!(students.find((s) => s.id === feuille.personne) || {}).suiviRenforcement}
-          renfoActif={enRenfo(feuille.personne)}
-          renfoTotalMs={renfoTotal(feuille.personne)}
-          onToggleRenfo={() => { toggleRenfo(feuille.personne); setFeuille(null); }}
           onPartir={() => partir(feuille.personne)}
           onFaireRevenir={() => { fairRevenir(feuille.personne); setFeuille(null); }}
           onSupprimer={() => supprimer(feuille.personne)}
@@ -8035,7 +8082,7 @@ function FeuilleAjout({ session, students, atelier, onClose, onConfirm }) {
 /* Actions propres à une personne de la séance. Départ (cotations conservées)
    et suppression (destructif) sont volontairement deux commandes distinctes :
    un bouton unique aurait effacé des données sans le dire clairement. */
-function FeuillePersonne({ sid, students, present, renfoSuivi, renfoActif, renfoTotalMs, onToggleRenfo, onPartir, onFaireRevenir, onSupprimer, onClose }) {
+function FeuillePersonne({ sid, students, present, onPartir, onFaireRevenir, onSupprimer, onClose }) {
   const st = students.find((s) => s.id === sid);
   if (!st) return null;
   return (
@@ -8046,11 +8093,6 @@ function FeuillePersonne({ sid, students, present, renfoSuivi, renfoActif, renfo
           <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
         </div>
         <div className="space-y-1.5">
-          {present && (renfoSuivi || renfoActif) && (
-            <button onClick={onToggleRenfo} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left" style={{ borderColor: BORDER }}>
-              <Gift size={16} /> {renfoActif ? `Reprendre les cotations (${fmtClock(renfoTotalMs)} de renforcement)` : 'Mettre en renforcement'}
-            </button>
-          )}
           {present ? (
             <button onClick={onPartir} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm text-left" style={{ borderColor: BORDER }}>
               <Users size={16} /> A quitté l'atelier — garder ses cotations
@@ -8073,16 +8115,10 @@ function FeuillePersonne({ sid, students, present, renfoSuivi, renfoActif, renfo
   );
 }
 
-function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, paused, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick }) {
+function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick }) {
   /* Double-appui sur l'intitulé : agrandit la fiche. On le détecte à la main,
      l'événement natif de double-clic étant peu fiable au toucher sur iOS. */
   const dernierAppui = useRef(0);
-  /* Autorisation ponctuelle de coter pendant un renforcement. Elle retombe
-     dès que le renforcement se termine, pour ne pas rester active à l'insu. */
-  const [forcer, setForcer] = useState(false);
-  useEffect(() => {
-    if (!paused) setForcer(false);
-  }, [paused]);
   function handleHeaderTap() {
     if (!onExpand) return;
     const t = Date.now();
@@ -8144,27 +8180,9 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
           </button>
         )}
       </div>
-      {paused && !forcer && (
-        <button
-          onClick={() => {
-            if (window.confirm("Coter malgré le renforcement ?\n\nLe temps de renforcement continue d'être décompté : la cotation sera enregistrée, mais elle porte sur un moment hors activité.")) {
-              setForcer(true);
-            }
-          }}
-          className="mt-2 w-full text-xs flex items-center justify-center gap-1.5 rounded-lg px-2 py-2"
-          style={{ backgroundColor: '#D69A2D', color: '#fff' }}
-        >
-          <Gift size={12} /> En renforcement — appuyer pour coter quand même
-        </button>
-      )}
-      {paused && forcer && (
-        <div className="mt-2 text-xs flex items-center justify-between gap-2 rounded-lg px-2 py-1.5" style={{ backgroundColor: PAPER, color: INK_SOFT }}>
-          <span className="flex items-center gap-1.5"><Gift size={12} /> Cotation autorisée pendant le renforcement</span>
-          <button onClick={() => setForcer(false)} style={{ color: INK_SOFT }}><X size={13} /></button>
-        </div>
-      )}
-      <div className="mt-3" style={paused && !forcer ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
+      <div className="mt-3">
         {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
+        {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
         {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
         {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} />}
@@ -8361,6 +8379,26 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chr
 }
 
 /* --- Widgets de cotation --- */
+
+/* Chaque appui compte une occurrence. Pas d'essais, pas de niveaux : le
+   comptage brut est la cotation elle-même. Le chronomètre annexe, s'il est
+   activé, sert de fenêtre d'observation sans changer ce widget. */
+function OccurrenceWidget({ entry, onChange }) {
+  return (
+    <div className="flex items-center gap-3">
+      <button onClick={() => onChange({ count: Math.max(0, entry.count - 1) })} disabled={entry.count === 0}
+        className="w-12 h-12 rounded-xl border flex items-center justify-center text-xl disabled:opacity-30"
+        style={{ borderColor: BORDER, color: INK_SOFT }}>−</button>
+      <button onClick={() => onChange({ count: entry.count + 1 })}
+        className="flex-1 rounded-xl py-4 text-white active:scale-95 transition-transform"
+        style={{ backgroundColor: TYPES.occurrence.color }}>
+        <span className="text-2xl font-semibold" style={{ fontFamily: F_MONO }}>{entry.count}</span>
+        <span className="text-sm ml-2 opacity-90">+1</span>
+      </button>
+    </div>
+  );
+}
+
 function TrialsWidget({ obj, entry, guidances, onChange }) {
   const list = objectiveGuidances(obj, guidances);
   const trials = entry.trials || [];
@@ -9204,7 +9242,9 @@ function resumerObjectifs(students, sessions, guidances) {
       if (etat && points.length >= RESUME_PLATEAU_MIN) {
         const cinq = points.slice(-5);
         const moyenne = Math.round(cinq.reduce((a, p) => a + p.value, 0) / cinq.length);
-        const ecart = etat.threshold - moyenne;
+        /* L'écart au seuil se compte du côté qu'il reste à franchir : sur un
+           critère « au plus », c'est le dépassement qui manque à combler. */
+        const ecart = etat.sens === 'max' ? moyenne - etat.threshold : etat.threshold - moyenne;
         if (ecart > 0 && ecart <= RESUME_ECART_MAX) {
           groupes.plateau.push({ ...base, ...etat, moyenne });
         }
@@ -9314,7 +9354,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
           >
             {mastery.mastered
               ? <><Award size={13} /> Acquis</>
-              : `${mastery.streak}/${mastery.needed} ${mastery.unit === 'days' ? 'jours' : 'séances'} à ${mastery.threshold} %`}
+              : `${mastery.streak}/${mastery.needed} ${mastery.unit === 'days' ? 'jours' : 'séances'} ${libelleSeuil(obj)}`}
           </span>
         )}
       </div>

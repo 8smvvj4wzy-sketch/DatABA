@@ -45,7 +45,7 @@ function extraireLigne(nom) {
 }
 
 const code = `
-  const ListChecks = 'ListChecks', LayoutGrid = 'LayoutGrid', ListOrdered = 'ListOrdered', Route = 'Route', HelpCircle = 'HelpCircle';
+  const ListChecks = 'ListChecks', Hash = 'Hash', LayoutGrid = 'LayoutGrid', ListOrdered = 'ListOrdered', Route = 'Route', HelpCircle = 'HelpCircle';
   const INK_SOFT = '#5B6B5E';
   ${extraire('TYPES')}
   const PERCENT_TYPES = ${extraireLigne('PERCENT_TYPES')};
@@ -65,9 +65,12 @@ const code = `
 // eslint-disable-next-line no-new-func
 const { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais } = new Function(code)();
 
-/* ==================== Lot A : quatre modes, et pas un de plus ==================== */
-t('exactement quatre modes de cotation', Object.keys(TYPES), ['trials', 'interval', 'chaining', 'balance']);
-t('les modes retirés ont bien disparu', Object.keys(TYPES).some((k) => ['probe', 'occurrence', 'timer', 'latency'].includes(k)), false);
+/* ==================== Lot A : cinq modes, et pas un de plus ====================
+   Le comptage par occurrence, retiré faute d'usage, a été réintroduit comme
+   un mode de cotation à part entière — les trois autres modes retirés à la
+   même occasion (probe, timer, latence) restent absents. */
+t('exactement cinq modes de cotation', Object.keys(TYPES), ['trials', 'occurrence', 'interval', 'chaining', 'balance']);
+t('les modes encore retirés restent absents', Object.keys(TYPES).some((k) => ['probe', 'timer', 'latency'].includes(k)), false);
 PERCENT_TYPES.forEach((k) => t(`PERCENT_TYPES ne référence que des modes existants (${k})`, !!TYPES[k], true));
 USES_GUIDANCE.forEach((k) => t(`USES_GUIDANCE ne référence que des modes existants (${k})`, !!TYPES[k], true));
 
@@ -78,16 +81,22 @@ t('un type absent ne fait pas planter l\'affichage', typeMeta(undefined).label, 
 
 /* ==================== emptyEntry : la mesure auxiliaire est du bord ==================== */
 const OBJ_TRIALS = { type: 'trials', config: { trialCount: 0 } };
+const OBJ_OCCURRENCE = { type: 'occurrence', config: {} };
 const OBJ_INTERVAL = { type: 'interval', config: {} };
 const OBJ_CHAINING = { type: 'chaining', config: {} };
 const OBJ_BALANCE = { type: 'balance', config: {} };
 const OBJ_RETIRE = { type: 'probe', config: {} };
 
 t('trials : entrée vide porte des mesures vides', emptyEntry(OBJ_TRIALS).mesures, mesuresVides());
+t('occurrence : entrée vide part de zéro', emptyEntry(OBJ_OCCURRENCE), { count: 0, mesures: mesuresVides() });
 t('interval : entrée vide porte des mesures vides', emptyEntry(OBJ_INTERVAL).mesures, mesuresVides());
 t('chaining : entrée vide porte des mesures vides', emptyEntry(OBJ_CHAINING).mesures, mesuresVides());
 t('balance : entrée vide porte des mesures vides', emptyEntry(OBJ_BALANCE).mesures, mesuresVides());
 t('un type retiré ne produit plus de cotation', emptyEntry(OBJ_RETIRE), {});
+
+t('entryMatches reconnaît une entrée occurrence', entryMatches(OBJ_OCCURRENCE, emptyEntry(OBJ_OCCURRENCE)), true);
+t('un compte à zéro reste une entrée valide (0 est un nombre)', entryMatches(OBJ_OCCURRENCE, { count: 0 }), true);
+t("une entrée sans compte n'est pas une cotation occurrence", entryMatches(OBJ_OCCURRENCE, { count: '3' }), false);
 
 t('entryMatches est vrai sur une entrée neuve de chaque mode conservé', entryMatches(OBJ_TRIALS, emptyEntry(OBJ_TRIALS)), true);
 t('un type retiré ne correspond plus à rien', entryMatches(OBJ_RETIRE, { value: 1 }), false);
@@ -96,31 +105,25 @@ t('un type retiré ne correspond plus à rien', entryMatches(OBJ_RETIRE, { value
    Le chrono d'un essai chronométré (à plat sur l'entrée) et le chrono
    auxiliaire (imbriqué dans mesures.chrono) doivent se figer chacun de son
    côté, sans se marcher dessus. */
-t('entrée absente : pas de plantage', figerChronos(undefined, 1000, false), undefined);
+t('entrée absente : pas de plantage', figerChronos(undefined, 1000), undefined);
 
-const entreeInerte = { trials: [], running: false, startedAt: null, pendingMs: 0, mesures: mesuresVides() };
-t('rien en cours : entrée renvoyée telle quelle', figerChronos(entreeInerte, 1000, false), entreeInerte);
+const entreeInerte = { trials: [], running: false, startedAt: null, mesures: mesuresVides() };
+t('rien en cours : entrée renvoyée telle quelle', figerChronos(entreeInerte, 1000), entreeInerte);
 
 const entreeDeuxChronos = {
   trials: [],
-  running: true, startedAt: 1000, pendingMs: 0,
+  running: true, startedAt: 1000,
   mesures: { compteur: { total: 3, valideA: null }, chrono: { elapsedMs: 2000, running: true, startedAt: 4000, valideA: null } },
 };
-const figee = figerChronos(entreeDeuxChronos, 6000, false);
+const figee = figerChronos(entreeDeuxChronos, 6000);
 t("le chrono de l'essai est figé sur son propre fragment", figee.elapsedMs, 5000);
 t("le chrono de l'essai est arrêté", figee.running, false);
 t('le chrono auxiliaire est figé sur son propre fragment, sans se mélanger', figee.mesures.chrono.elapsedMs, 4000);
 t('le chrono auxiliaire est arrêté', figee.mesures.chrono.running, false);
 t('le compteur auxiliaire traverse le repliage sans changer', figee.mesures.compteur, { total: 3, valideA: null });
 
-const entreeRenfo = { running: true, startedAt: 1000, pendingMs: 500, mesures: mesuresVides() };
-const figeeRenfo = figerChronos(entreeRenfo, 3500, true);
-t('cumulePending alimente pendingMs pour le renforcement', figeeRenfo.pendingMs, 3000);
-const figeeSansRenfo = figerChronos(entreeRenfo, 3500, false);
-t('sans cumulePending, pendingMs ne bouge pas', figeeSansRenfo.pendingMs, 500);
-
-const entreeSansMesures = { running: true, startedAt: 1000, pendingMs: 0 };
-t("une entrée sans mesures traverse le repliage sans qu'on lui en invente", 'mesures' in figerChronos(entreeSansMesures, 2000, false), false);
+const entreeSansMesures = { running: true, startedAt: 1000 };
+t("une entrée sans mesures traverse le repliage sans qu'on lui en invente", 'mesures' in figerChronos(entreeSansMesures, 2000), false);
 
 /* ==================== mesuresExport : jamais un zéro par défaut ==================== */
 t('rien mesuré : toutes les cellules vides', mesuresExport(undefined), { compteurTotal: '', chronoSecondes: '', valideA: '' });
