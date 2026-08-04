@@ -105,10 +105,21 @@ function useFonts() {
 @keyframes abaInFromRight { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
 @keyframes abaInFromLeft  { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
 @keyframes abaTiroir { from { transform: translateX(-100%); } to { transform: none; } }
+/* Essai qui vient d'être coté : accuse réception du tap sans jamais retarder
+   le suivant — la cellule existait déjà (grise), seul son remplissage est
+   neuf, donc l'animation ne rejoue que sur cette cellule précise. */
+@keyframes abaTrialIn { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: scale(1); } }
+.aba-trial-in { animation: abaTrialIn .15s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes abaToastIn { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.aba-toast-in { animation: abaToastIn .2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.aba-toast-out { opacity: 0; transform: translate(-50%, 4px); transition: opacity .16s ease-in, transform .16s ease-in; }
 @media (prefers-reduced-motion: reduce) {
   @keyframes abaInFromRight { from { opacity: 1; } to { opacity: 1; } }
   @keyframes abaInFromLeft  { from { opacity: 1; } to { opacity: 1; } }
   @keyframes abaTiroir { from { transform: none; } to { transform: none; } }
+  .aba-trial-in { animation: none; }
+  .aba-toast-in { animation: none; transform: translate(-50%, 0); }
+  .aba-toast-out { transition: opacity .16s ease-in; transform: translate(-50%, 0); }
 }
 [data-reorder] {
   -webkit-user-select: none;
@@ -3346,6 +3357,8 @@ function AbaApp() {
     return () => clearInterval(id);
   }, [openCrises.length]);
   const [toast, setToast] = useState(null);
+  const [toastLeaving, setToastLeaving] = useState(false);
+  const toastToken = useRef(0);
   const rootRef = useRef(null);
   const contentRef = useRef(null);
   const [dir, setDir] = useState(0);
@@ -3809,8 +3822,11 @@ function AbaApp() {
   }, [activeSession, loaded]);
 
   function notify(msg) {
+    const jeton = ++toastToken.current;
     setToast(msg);
-    setTimeout(() => setToast(null), 2600);
+    setToastLeaving(false);
+    setTimeout(() => { if (toastToken.current === jeton) setToastLeaving(true); }, 2600);
+    setTimeout(() => { if (toastToken.current === jeton) setToast(null); }, 2760);
   }
 
   /* --- gestion --- */
@@ -4997,7 +5013,10 @@ function AbaApp() {
       )}
 
       {toast && (
-        <div className="fixed left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 rounded-xl text-sm shadow-lg" style={{ backgroundColor: ACCENT, color: ACCENT_INK, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8rem)' }}>
+        <div
+          className={`fixed left-1/2 z-40 px-4 py-2.5 rounded-xl text-sm shadow-lg ${toastLeaving ? 'aba-toast-out' : 'aba-toast-in'}`}
+          style={{ backgroundColor: ACCENT, color: ACCENT_INK, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8rem)' }}
+        >
           {toast}
         </div>
       )}
@@ -8598,6 +8617,10 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
 
   const cells = unlimited ? [...trials.filter((t) => trialCode(t)), null] : trials;
 
+  /* Anime uniquement la cellule qui vient d'être cotée — pas tout l'historique
+     à chaque remontage du widget (changement d'onglet, dépliage de la carte). */
+  const [justRecorded, setJustRecorded] = useState(null);
+
   function record(code) {
     let next;
     let idx;
@@ -8619,6 +8642,7 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
     if (compteurParEssai || chronoParEssai) {
       Object.assign(patch, relancerMesures(entry, idx, compteurParEssai, chronoParEssai, Date.now()));
     }
+    setJustRecorded(idx);
     onChange(patch);
   }
 
@@ -8653,7 +8677,7 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
           return (
             <div key={i} className="shrink-0 text-center">
               <div
-                className="w-9 h-9 rounded-lg flex items-center justify-center text-xs font-semibold border"
+                className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-semibold border ${code && i === justRecorded ? 'aba-trial-in' : ''}`}
                 style={{
                   fontFamily: F_MONO,
                   backgroundColor: g ? g.color : CARD,
@@ -10234,7 +10258,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
             et le seul requis pour enregistrer — il ne doit pas se perdre sous
             des mesures annexes optionnelles. */}
         <div>
-          <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: crisis.studentId ? INK_SOFT : CRISIS }}>
+          <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: crisis.studentId ? INK_SOFT : CRISIS, transition: 'color .15s ease-out' }}>
             Personne concernée {!crisis.studentId && '— requis pour enregistrer'}
           </div>
           {students.length === 0 ? (
