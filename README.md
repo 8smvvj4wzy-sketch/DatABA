@@ -13,7 +13,7 @@ rien n'est envoyé vers un serveur.
 3. [Le code de sécurité](#3-le-code-de-sécurité)
 4. [Écran Gestion](#4-écran-gestion)
 5. [Écran Personnes accompagnées](#5-écran-personnes-accompagnées)
-6. [Les quatre modes de cotation](#6-les-quatre-modes-de-cotation)
+6. [Les cinq modes de cotation](#6-les-cinq-modes-de-cotation)
 7. [Écran Session](#7-écran-session)
 8. [Crises et observations ABC](#8-crises-et-observations-abc)
 9. [Écran Suivi](#9-écran-suivi)
@@ -239,17 +239,17 @@ Export et restauration (section 13).
 
 ## 5. Écran Personnes accompagnées
 
-Appuyez sur une personne pour dérouler sa fiche : ses **suivis continus**, son
-**suivi de renforcement**, puis ses **objectifs**.
+Appuyez sur une personne pour dérouler sa fiche : ses **suivis continus**, puis
+ses **objectifs**.
 
 ### Les suivis continus d'une personne
 
-Un interrupteur par suivi de la bibliothèque (section 4) : cochez ceux qui la
-concernent. Deux liens complètent la liste :
-
-- **Nouveau suivi continu** — le crée, l'active pour cette personne, et ouvre
-  son panneau pour en définir les critères dans la foulée ;
-- **Gérer les suivis** — ouvre la bibliothèque.
+Seuls les suivis **actifs** pour cette personne s'affichent, chacun retirable
+d'une croix. **Ajouter un suivi** ouvre une feuille listant ceux de la
+bibliothèque (section 4) qui ne sont pas encore actifs pour elle ; on en choisit
+un, ou on en crée un nouveau — il est aussitôt activé, et l'onglet Suivi continu
+s'ouvre pour en définir les critères. Depuis cet onglet, une rangée de puces
+d'initiales sur chaque suivi permet symétriquement d'y assigner des personnes.
 
 Supprimer un suivi de la bibliothèque le désactive partout où il l'était ; les
 relevés déjà notés restent dans l'historique et l'export, marqués comme un
@@ -260,7 +260,7 @@ suivi retiré.
 1. **Intitulé** — la formulation qui parle à l'équipe.
 2. **Phase** — Ligne de base, Intervention, Maintien ou Généralisation. Sans ce
    repère, une courbe ne dit pas ce qui a produit un changement.
-3. **Mode de cotation** — parmi les huit décrits en section 6.
+3. **Mode de cotation** — parmi les cinq décrits en section 6.
 4. **Réglages propres au mode** (nombre d'essais, durée, étapes…).
 5. **Réponses possibles** — pour les modes à guidance : lesquelles s'affichent,
    dans quel ordre (appui long pour déplacer), et **lesquelles comptent comme
@@ -306,7 +306,7 @@ quelle séance l'intervention a commencé.
 
 ---
 
-## 6. Les quatre modes de cotation
+## 6. Les cinq modes de cotation
 
 ### Essai par essai
 Une réponse par essai, avec son niveau de guidance. Nombre d'essais **sans
@@ -314,6 +314,21 @@ limite** par défaut, ou nombre prévu (3, 5, 8, 10, 20 ou libre) servant de
 simple repère : rien n'empêche de dépasser.
 
 → Score : pourcentage de réponses autonomes.
+
+### Par occurrence
+Un simple comptage : chaque appui sur **+1** enregistre une occurrence du
+comportement observé, avec un **−1** pour corriger un appui de trop.
+
+Le **critère d'acquisition** se règle dans les deux sens — **au moins** N
+occurrences (pour développer un comportement, par exemple des demandes
+spontanées) ou **au plus** N (pour en réduire un ; « au plus 0 » vise
+l'extinction complète), sur un nombre de séances ou de jours consécutifs.
+
+Le chronomètre des mesures annexes, s'il est activé, sert de fenêtre
+d'observation ; le compteur annexe n'est pas proposé sur ce mode, le comptage
+étant déjà la cotation elle-même.
+
+→ Score : nombre brut d'occurrences.
 
 ### Niveau par intervalle
 Relevé périodique du niveau de fonctionnement. Le **pas est libre, de 10
@@ -363,8 +378,9 @@ calcul** — une étape non présentée n'est pas un échec — mais restent
 comptabilisées à part.
 
 ### Mesures annexes : compteur et chronomètre
-Deux options, indépendantes l'une de l'autre, disponibles sur les quatre modes
-ci-dessus **et** sur les fiches crise et ABC. Elles produisent une donnée à
+Deux options, indépendantes l'une de l'autre, disponibles sur les modes
+ci-dessus (compteur excepté sur Occurrence, où il ferait double emploi avec la
+cotation) **et** sur les fiches crise et ABC. Elles produisent une donnée à
 part de la cotation — un comptage ou une durée relevés en marge, jamais
 mélangés à un score ni à une courbe de progression.
 
@@ -462,21 +478,6 @@ nombreuses étapes.
 | Haut-parleur / vibreur | Couper le son ou la vibration des alertes d'intervalle |
 | Note d'observation | Champ libre par personne, exporté à part |
 | **Enregistrer** | Clôture la séance |
-
-### Renforcement
-
-Au-dessus de la zone de cotation, une pastille par personne présente. Un appui
-la met **en renforcement** : ses fiches se grisent dans les deux vues, ses
-cotations sont suspendues et ses chronomètres se figent. Un second appui reprend
-la cotation.
-
-Si un comportement mérite d'être coté malgré le renforcement, un bandeau sur la
-fiche permet de le débloquer après confirmation. L'autorisation ne vaut que pour
-cette fiche, et retombe dès la fin du renforcement.
-
-Le temps cumulé s'affiche sur la pastille. Le rapport Excel indique, pour chaque
-personne et chaque séance, le **temps de renforcement** et le **temps
-d'activité** correspondant.
 
 L'écran reste allumé pendant la cotation (mention « écran maintenu »). Si elle
 n'apparaît pas, réglez la mise en veille de l'appareil sur « jamais ».

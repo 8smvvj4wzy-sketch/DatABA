@@ -233,7 +233,6 @@ t('objectif inconnu ignoré plutôt que planter',
 {
   const depart = seanceBase();
   depart.data.B.o4 = { trials: [], running: true, startedAt: T0 + 100_000, elapsedMs: 5_000 };
-  depart.reinforcement = { B: { running: true, startedAt: T0 + 200_000, totalMs: 60_000 } };
   const s = F.retirerPersonne(depart, 'B', T0 + 600_000);
 
   t('la présence est bornée au départ', s.presence.B, { from: T0, to: T0 + 600_000 });
@@ -241,7 +240,6 @@ t('objectif inconnu ignoré plutôt que planter',
   t('ses cotations sont conservées', !!s.data.B.o4, true);
   t('son chronomètre est figé', s.data.B.o4.running, false);
   t('le temps couru est cumulé', s.data.B.o4.elapsedMs, 5_000 + 500_000);
-  t('son renforcement est arrêté', s.reinforcement.B, { running: false, startedAt: null, totalMs: 60_000 + 400_000 });
   t('la personne restée n\'est pas touchée', s.presence.A, undefined);
 }
 
@@ -254,7 +252,6 @@ t('objectif inconnu ignoré plutôt que planter',
   avant.objectiveSnapshot.o4 = { ...objTrials, id: 'o4' };
   avant.notes = { A: 'note A', B: 'note B' };
   avant.hidden = { B: ['o4'] };
-  avant.reinforcement = { B: { running: false, startedAt: null, totalMs: 1000 } };
   avant.presence = { B: { from: T0, to: null } };
   avant.priorityOrder = ['A|o1', 'B|o4', 'A|o2'];
   const s = F.supprimerPersonne(avant, 'B');
@@ -264,7 +261,6 @@ t('objectif inconnu ignoré plutôt que planter',
   t('ses cotations disparaissent', s.data.B, undefined);
   t('sa note disparaît', s.notes, { A: 'note A' });
   t('ses objectifs masqués disparaissent', s.hidden, {});
-  t('son renforcement disparaît', s.reinforcement, {});
   t('sa présence disparaît', s.presence, {});
   t('l\'ordre des prioritaires est purgé', s.priorityOrder, ['A|o1', 'A|o2']);
   t('l\'instantané perd l\'objectif devenu orphelin', Object.keys(s.objectiveSnapshot).sort(), ['o1', 'o2']);
