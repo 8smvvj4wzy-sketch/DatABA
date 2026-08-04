@@ -13,14 +13,16 @@
   --border: #D7E0EE;
   --ink: #0E1B33;
   --ink-soft: #52627A;
-  --accent: #2453FF;
+  /* Même teinte que l'accent sombre, désaturée de 30% : le bleu pur d'origine
+     (#2453FF, saturation 100%) lisait trop électrique sur le fond clair. */
+  --accent: #4566DE;
   --accent-ink: #FFFFFF;
   --nav-bg: #E4E9F5;
   --crisis: #D7263D;
   /* Fond très pâle d'une ligne sélectionnée : teinte l'accent au lieu du
      mélange hexadécimal + alpha, invalide maintenant que --accent est une
      variable et non un littéral. */
-  --accent-wash: rgba(36, 83, 255, 0.08);
+  --accent-wash: rgba(69, 102, 222, 0.08);
   /* Voile derrière modales, feuilles et tiroir : noir fixe, indépendant du
      thème (comme la palette catégorielle). Un seul token pour ne plus avoir
      de valeur ponctuelle divergente (une des occurrences codait un noir

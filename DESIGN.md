@@ -7,7 +7,7 @@ colors:
   paper: "#F3F6FB"
   card: "#FFFFFF"
   border: "#D7E0EE"
-  accent: "#2453FF"
+  accent: "#4566DE"
   accent-ink: "#FFFFFF"
   nav-bg: "#E4E9F5"
   crisis: "#D7263D"
@@ -83,7 +83,7 @@ par variables CSS, jamais la structure.
 Stratégie *Restrained* (mode Operate) : neutraux dominants, un seul accent qui porte l'action et la sélection.
 
 ### Primary
-- **Accent** (`#2453FF` clair / `#5B8CFF` sombre) : boutons primaires, sélection courante, focus. Texte associé : `accent-ink` (`#FFFFFF` clair / `#071021` sombre — toujours le sens qui garde le contraste).
+- **Accent** (`#4566DE` clair / `#5B8CFF` sombre) : boutons primaires, sélection courante, focus. Texte associé : `accent-ink` (`#FFFFFF` clair / `#071021` sombre — toujours le sens qui garde le contraste). Le clair a été désaturé (~-30%) début 2026 : le bleu pur d'origine (`#2453FF`) lisait trop électrique sur le fond `paper`.
 
 ### Neutral
 - **Ink** (`#0E1B33` clair / `#E7ECF7` sombre) : texte principal.
