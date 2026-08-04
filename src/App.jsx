@@ -5039,13 +5039,17 @@ function PanneauEmploiDuTemps({
                                 selon le jour. Tant qu'aucun jour n'est ajusté, il n'y a
                                 qu'une liste et rien de plus à régler ; un jour ajusté part
                                 d'une copie de la liste commune et s'en détache. */}
+                            {/* Libellés en toutes lettres, là où la rangée
+                                « Jours » juste au-dessus est en deux lettres :
+                                deux rangées de puces identiques à quelques
+                                pixels l'une de l'autre se confondent. */}
                             {resume.jours.length > 1 && (
                               <div className="flex flex-wrap gap-1.5 mb-2">
                                 <Chip label="Tous les jours" on={jourPersonnes == null} onClick={() => setJourPersonnes(null)} />
                                 {JOURS.filter((j) => resume.jours.includes(j.k)).map((j) => (
                                   <Chip
                                     key={j.k}
-                                    label={`${j.label.slice(0, 2)}${resume.joursAjustes.includes(j.k) ? ' •' : ''}`}
+                                    label={`${j.label}${resume.joursAjustes.includes(j.k) ? ' •' : ''}`}
                                     on={jourPersonnes === j.k}
                                     onClick={() => setJourPersonnes(jourPersonnes === j.k ? null : j.k)}
                                   />
