@@ -48,6 +48,23 @@ const CAT_CYAN = '#00B8D9';
 const CAT_LILAC = '#A78BFA';
 const CAT_SLATE = '#64748B';
 
+/* Texte sur aplat catégoriel : la palette ci-dessus est fixe entre thèmes,
+   donc son texte doit l'être aussi — pas de token accent-ink réactif ici.
+   Le blanc fixe ne tient pas 4.5:1 sur l'ambre ni le corail ; on choisit noir
+   ou blanc selon lequel des deux tient le meilleur contraste, plutôt que d'en
+   présumer un seul pour toute la palette. */
+function texteLisibleSur(hex) {
+  const c = hex.replace('#', '');
+  const r = parseInt(c.substring(0, 2), 16) / 255;
+  const g = parseInt(c.substring(2, 4), 16) / 255;
+  const b = parseInt(c.substring(4, 6), 16) / 255;
+  const lin = (v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  const contrasteBlanc = 1.05 / (L + 0.05);
+  const contrasteNoir = (L + 0.05) / 0.05;
+  return contrasteBlanc >= contrasteNoir ? '#fff' : '#000';
+}
+
 /* ==================== Points restés ouverts ====================
    Le document de décisions laisse plusieurs choix à trancher. Ils sont
    rassemblés ici plutôt qu'arbitrés dans le code : une seule ligne à changer
@@ -620,7 +637,7 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
             <button onClick={() => setShowReset(true)} className="text-xs underline" style={{ color: INK_SOFT }}>Mot de passe oublié ?</button>
           </div>
           {showReset && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+            <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
               <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
                 <h2 className="font-semibold mb-2" style={{ fontFamily: F_DISPLAY }}>Réinitialiser</h2>
                 <p className="text-sm mb-4" style={{ color: INK_SOFT }}>
@@ -661,7 +678,7 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
           <button onClick={() => setShowReset(true)} className="text-xs underline" style={{ color: INK_SOFT }}>Code oublié ?</button>
         </div>
         {showReset && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
             <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
               <h2 className="font-semibold mb-2" style={{ fontFamily: F_DISPLAY }}>Réinitialiser le code</h2>
               <p className="text-sm mb-4" style={{ color: INK_SOFT }}>
@@ -2822,7 +2839,7 @@ function Empty({ children }) {
    des écrans de cotation en production. */
 function Modale({ titre, onClose, children, className }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
       <div className={`rounded-2xl p-4 max-w-sm w-full max-h-[80vh] overflow-y-auto ${className || ''}`} style={{ backgroundColor: CARD }}>
         <div className="flex items-center justify-between mb-3">
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{titre}</span>
@@ -3200,7 +3217,7 @@ function PassphraseModal({ mode, error, onSubmit, onClose }) {
   const ready = mode === 'export' ? p1.length >= 4 && p1 === p2 : p1.length > 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
       <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
         <div className="flex justify-end mb-1">
           <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
@@ -4173,7 +4190,9 @@ function AbaApp() {
     isNew: true,
     kind,
     sessionId: (activeSession && activeSession.id) || null,
-    studentId: null,
+    // Séance à une seule personne présente : pas de raison de la redemander,
+    // surtout au moment où on en a le moins le temps.
+    studentId: (activeSession && activeSession.studentIds && activeSession.studentIds.length === 1) ? activeSession.studentIds[0] : null,
     atelierId: (activeSession && activeSession.atelierId) || null,
     intervenantIds: activeSession && activeSession.intervenantId ? [activeSession.intervenantId] : [],
     commentaire: '',
@@ -4711,17 +4730,23 @@ function AbaApp() {
           </div>
         )}
 
-        <div className="flex items-center justify-center gap-2">
-          {/* Comportement à consigner sans qu'il relève d'une crise */}
-          <button
-            onClick={openObservation}
-            className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 shrink-0 active:scale-[0.96] transition-transform"
-            style={{ backgroundColor: CARD, borderColor: COLOR_ABC, color: COLOR_ABC }}
-            title="Observation ABC, hors crise"
-            aria-label="Observation ABC"
-          >
-            <ClipboardList size={22} />
-          </button>
+        <div className="flex items-end justify-center gap-2">
+          {/* Comportement à consigner sans qu'il relève d'une crise. Libellé
+              visible en permanence : icône seule + title ne se lit jamais au
+              doigt sur tablette, et c'est un des deux boutons "toujours
+              accessibles" du produit — il ne doit pas s'apprendre par essai. */}
+          <div className="flex flex-col items-center gap-1 shrink-0">
+            <button
+              onClick={openObservation}
+              className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 active:scale-[0.96] transition-transform"
+              style={{ backgroundColor: CARD, borderColor: COLOR_ABC, color: COLOR_ABC }}
+              title="Observation ABC, hors crise"
+              aria-label="Observation ABC"
+            >
+              <ClipboardList size={22} />
+            </button>
+            <span className="text-[11px] font-medium" style={{ fontFamily: F_DISPLAY, color: COLOR_ABC }}>ABC</span>
+          </div>
 
           <div className="rounded-full flex items-center gap-0.5 p-1 shadow-lg" style={{ backgroundColor: NAV_BG }}>
             {[
@@ -4750,15 +4775,18 @@ function AbaApp() {
             })}
           </div>
 
-          <button
-            onClick={openCrisis}
-            className="w-14 h-14 rounded-full flex items-center justify-center text-white shadow-lg shrink-0 active:scale-[0.96] transition-transform"
-            style={{ backgroundColor: CRISIS }}
-            title="Ouvrir une fiche de crise"
-            aria-label="Crise"
-          >
-            <AlertTriangle size={24} />
-          </button>
+          <div className="flex flex-col items-center gap-1 shrink-0">
+            <button
+              onClick={openCrisis}
+              className="w-14 h-14 rounded-full flex items-center justify-center text-white shadow-lg active:scale-[0.96] transition-transform"
+              style={{ backgroundColor: CRISIS }}
+              title="Ouvrir une fiche de crise"
+              aria-label="Crise"
+            >
+              <AlertTriangle size={24} />
+            </button>
+            <span className="text-[11px] font-semibold" style={{ fontFamily: F_DISPLAY, color: CRISIS }}>CRISE</span>
+          </div>
         </div>
         </div>
       </div>
@@ -4769,7 +4797,7 @@ function AbaApp() {
       {tiroir && (
         <div
           className="fixed inset-0 z-40"
-          style={{ backgroundColor: 'rgba(32,41,31,0.35)' }}
+          style={{ backgroundColor: 'var(--overlay-backdrop)' }}
           onClick={TIROIR_FERME_AU_TAP_DEHORS ? () => setTiroir(false) : undefined}
         >
           <div
@@ -4837,7 +4865,7 @@ function AbaApp() {
         return (
           <div
             className="fixed inset-0 z-50 flex items-end justify-center"
-            style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}
+            style={{ backgroundColor: 'var(--overlay-backdrop)' }}
             onClick={() => setChoixSuivi(null)}
           >
             <div
@@ -4924,7 +4952,7 @@ function AbaApp() {
       )}
 
       {backupPrompt && backupPrompt.mode === 'export-choix' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
           <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
             <div className="flex justify-end mb-1">
               <button onClick={() => setBackupPrompt(null)} style={{ color: INK_SOFT }}><X size={18} /></button>
@@ -5014,7 +5042,7 @@ function ChangePinModal({ security, onSave, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
       <div className="rounded-2xl p-5 max-w-xs w-full" style={{ backgroundColor: CARD }}>
         <div className="flex justify-end mb-1">
           <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
@@ -6144,7 +6172,7 @@ function PanneauPersonnes({
 function FeuilleAjoutSuivi({ student, axes, onChoisir, onCreer, onClose }) {
   const dispo = (axes || []).filter((a) => !((student && student.suivisActifs) || []).includes(a.id));
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={onClose}>
       <div className="rounded-2xl p-5 max-w-sm w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>
@@ -8021,7 +8049,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
 function FeuilleReglages({ hasInterval, soundOn, setSoundOn, vibrateOn, setVibrateOn, zoom, cycleZoom, hiddenCount, onReafficher, onAbandon, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
       <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
         <div className="flex items-center justify-between mb-3">
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Réglages de la séance</span>
@@ -8099,7 +8127,7 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
     : [];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
       <div className="rounded-2xl p-5 max-w-sm w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }}>
         <div className="flex items-center justify-between mb-3">
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Passer à l'atelier suivant</span>
@@ -8170,7 +8198,7 @@ function FeuilleAjout({ session, students, atelier, onClose, onConfirm }) {
 
   if (!absents.length) {
     return (
-      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
         <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
           <div className="flex items-center justify-between mb-3">
             <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Ajouter une personne</span>
@@ -8185,7 +8213,7 @@ function FeuilleAjout({ session, students, atelier, onClose, onConfirm }) {
   const visibles = st ? (session.mode === 'balance' ? st.objectives.filter((o) => o.type === 'balance') : st.objectives) : [];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
       <div className="rounded-2xl p-5 max-w-sm w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }}>
         <div className="flex items-center justify-between mb-3">
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Ajouter une personne</span>
@@ -8242,7 +8270,7 @@ function FeuillePersonne({ sid, students, present, onPartir, onFaireRevenir, onS
   const st = students.find((s) => s.id === sid);
   if (!st) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
       <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
         <div className="flex items-center justify-between mb-3">
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{st.initials}</span>
@@ -8629,7 +8657,7 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
                 style={{
                   fontFamily: F_MONO,
                   backgroundColor: g ? g.color : CARD,
-                  color: g ? '#fff' : INK_SOFT,
+                  color: g ? texteLisibleSur(g.color) : INK_SOFT,
                   borderColor: g ? g.color : BORDER,
                   boxShadow: isNext ? `0 0 0 2px ${TYPES.trials.color}66` : 'none',
                 }}
@@ -8645,17 +8673,20 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
       </div>
 
       <div className="flex flex-wrap gap-1.5">
-        {list.map((g) => (
-          <button
-            key={g.code}
-            onClick={() => record(g.code)}
-            className="flex-1 min-w-[72px] rounded-xl py-3 text-white active:scale-95 transition-transform"
-            style={{ backgroundColor: g.color }}
-          >
-            <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
-            <div className="text-[10px] opacity-90 leading-tight break-words" style={{ overflowWrap: 'anywhere' }}>{g.label}</div>
-          </button>
-        ))}
+        {list.map((g) => {
+          const texte = texteLisibleSur(g.color);
+          return (
+            <button
+              key={g.code}
+              onClick={() => record(g.code)}
+              className="flex-1 min-w-[72px] rounded-xl py-3 active:scale-95 transition-transform"
+              style={{ backgroundColor: g.color, color: texte }}
+            >
+              <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
+              <div className="text-[11px] leading-tight break-words" style={{ overflowWrap: 'anywhere', color: texte }}>{g.label}</div>
+            </button>
+          );
+        })}
       </div>
       <div className="flex items-center justify-between mt-2">
         <span className="text-xs" style={{ color: INK_SOFT }}>
@@ -9168,7 +9199,7 @@ function FeuilleJourneeSuivi({ cible, releves, students, axesSuivi, onAjouter, o
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={onClose}>
       <div className="rounded-2xl p-5 max-w-md w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
         <div className="flex items-start justify-between gap-2 mb-1">
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>
@@ -10199,6 +10230,25 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
           </div>
         )}
 
+        {/* En tête de fiche : c'est le champ le plus structurant pour l'export
+            et le seul requis pour enregistrer — il ne doit pas se perdre sous
+            des mesures annexes optionnelles. */}
+        <div>
+          <div className="text-xs mb-2 flex items-center gap-1.5" style={{ color: crisis.studentId ? INK_SOFT : CRISIS }}>
+            Personne concernée {!crisis.studentId && '— requis pour enregistrer'}
+          </div>
+          {students.length === 0 ? (
+            <div className="text-sm" style={{ color: INK_SOFT }}>Aucune personne enregistrée.</div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {students.map((s) => (
+                <Chip key={s.id} label={s.initials} color={CRISIS} on={crisis.studentId === s.id}
+                  onClick={() => set({ studentId: crisis.studentId === s.id ? null : s.id })} />
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
           <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
             Mesures annexes — un comptage et une durée, indépendants de la grille ABC
@@ -10211,20 +10261,6 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
             couleur={estObservation ? COLOR_ABC : CRISIS}
             onChange={(mesures) => set({ mesures })}
           />
-        </div>
-
-        <div>
-          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Personne concernée</div>
-          {students.length === 0 ? (
-            <div className="text-sm" style={{ color: INK_SOFT }}>Aucune personne enregistrée.</div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {students.map((s) => (
-                <Chip key={s.id} label={s.initials} color={CRISIS} on={crisis.studentId === s.id}
-                  onClick={() => set({ studentId: crisis.studentId === s.id ? null : s.id })} />
-              ))}
-            </div>
-          )}
         </div>
 
         <div>
@@ -10333,18 +10369,32 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
         <div>
           <div className="text-sm font-medium mb-1" style={{ fontFamily: F_DISPLAY }}>Fonction supposée</div>
           <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Hypothèse de travail, à confronter aux observations répétées</div>
+          {/* Les 4 fonctions classiques du comportement d'abord ; « Indéterminée »
+              est le repli, pas une 5e fonction du même rang — elle reste à
+              un tap, juste visuellement à part pour ne pas faire 5 choix
+              équivalents au même point de décision. */}
           <div className="flex flex-wrap gap-2">
-            {CRISIS_FUNCTIONS.map((fn) => {
+            {CRISIS_FUNCTIONS.filter((fn) => fn.k !== 'indetermine').map((fn) => {
               const on = crisis.fonction === fn.k;
               return (
                 <button key={fn.k} onClick={() => set({ fonction: on ? null : fn.k })}
                   className="rounded-xl px-4 py-2.5 border text-sm"
-                  style={{ fontFamily: F_DISPLAY, borderColor: fn.color, backgroundColor: on ? fn.color : 'transparent', color: on ? '#fff' : fn.color }}>
+                  style={{ fontFamily: F_DISPLAY, borderColor: fn.color, backgroundColor: on ? fn.color : 'transparent', color: on ? texteLisibleSur(fn.color) : fn.color }}>
                   {fn.label}
                 </button>
               );
             })}
           </div>
+          {CRISIS_FUNCTIONS.filter((fn) => fn.k === 'indetermine').map((fn) => {
+            const on = crisis.fonction === fn.k;
+            return (
+              <button key={fn.k} onClick={() => set({ fonction: on ? null : fn.k })}
+                className="mt-1.5 rounded-xl px-4 py-2 border border-dashed text-xs"
+                style={{ fontFamily: F_DISPLAY, borderColor: fn.color, backgroundColor: on ? fn.color : 'transparent', color: on ? texteLisibleSur(fn.color) : INK_SOFT }}>
+                {fn.label}
+              </button>
+            );
+          })}
         </div>
 
         {!estObservation && (
@@ -10356,12 +10406,13 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
             <div className="flex gap-2">
               {CRISIS_INTENSITES.map((i) => {
                 const on = crisis.intensite === i.n;
+                const texte = on ? texteLisibleSur(i.color) : i.color;
                 return (
                   <button key={i.n} onClick={() => set({ intensite: on ? null : i.n })}
                     className="flex-1 rounded-xl px-2 py-2.5 border text-left"
-                    style={{ borderColor: i.color, backgroundColor: on ? i.color : 'transparent', color: on ? '#fff' : i.color }}>
+                    style={{ borderColor: i.color, backgroundColor: on ? i.color : 'transparent', color: texte }}>
                     <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{i.n} · {i.label}</div>
-                    <div className="text-[10px] leading-tight" style={{ opacity: 0.85 }}>{i.aide}</div>
+                    <div className="text-[11px] leading-tight" style={{ color: texte, opacity: 0.85 }}>{i.aide}</div>
                   </button>
                 );
               })}
@@ -10385,7 +10436,17 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
             se partagent la ligne suivante. Sur trois boutons côte à côte, le
             dernier débordait de l'écran. */}
         <div className="pt-1">
-          <Btn onClick={() => onSave(crisis)} className="w-full mb-2" style={{ backgroundColor: estObservation ? COLOR_ABC : CRISIS }}>
+          <Btn
+            onClick={() => {
+              const abcVide = !(crisis.antecedent || '').trim() && !(crisis.comportement || '').trim() && !(crisis.consequence || '').trim()
+                && (crisis.antecedentTags || []).length === 0 && (crisis.comportementTags || []).length === 0 && (crisis.consequenceTags || []).length === 0;
+              if (abcVide && !window.confirm('Aucune observation A, B ou C renseignée : la fiche sera enregistrée sans détail de comportement.\n\nEnregistrer quand même ?')) return;
+              onSave(crisis);
+            }}
+            disabled={!crisis.studentId}
+            className="w-full mb-2"
+            style={{ backgroundColor: estObservation ? COLOR_ABC : CRISIS }}
+          >
             {isNew
               ? (estObservation ? <><Save size={16} /> Enregistrer</> : <><Square size={16} /> Terminer et enregistrer</>)
               : <><Save size={16} /> Enregistrer les modifications</>}
