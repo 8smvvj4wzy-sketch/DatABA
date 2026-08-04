@@ -83,7 +83,7 @@ par variables CSS, jamais la structure.
 Stratégie *Restrained* (mode Operate) : neutraux dominants, un seul accent qui porte l'action et la sélection.
 
 ### Primary
-- **Accent** (`#2B2B2B` clair / `#5B8CFF` sombre) : boutons primaires, sélection courante, focus. Texte associé : `accent-ink` (`#FFFFFF` clair / `#071021` sombre — toujours le sens qui garde le contraste). Le clair est passé du bleu pur d'origine (`#2453FF`, trop électrique sur `paper`) à un charbon neutre début 2026 — le sombre reste bleu, confirmé qu'il convient tel quel.
+- **Accent** (`#3A3A3A` clair / `#5B8CFF` sombre) : boutons primaires, sélection courante, focus. Texte associé : `accent-ink` (`#FFFFFF` clair / `#071021` sombre — toujours le sens qui garde le contraste). Le clair est passé du bleu pur d'origine (`#2453FF`, trop électrique sur `paper`) à un charbon neutre début 2026 — le sombre reste bleu, confirmé qu'il convient tel quel.
 
 ### Neutral
 - **Ink** (`#0E1B33` clair / `#E7ECF7` sombre) : texte principal.
@@ -95,7 +95,7 @@ Stratégie *Restrained* (mode Operate) : neutraux dominants, un seul accent qui 
 
 ### Alerte
 - **Crisis** (`#D7263D` clair / `#FF5470` sombre) : réservée aux boutons CRISE et aux marqueurs de crise. N'entre jamais dans la palette catégorielle.
-- **Color ABC** (`#2B2B2B` clair / `#7C5CFF` sombre) : réservée au bouton et aux marqueurs d'observation ABC. Assortie à l'accent en clair (même charbon), reste le violet catégoriel en sombre — token dédié pour ne pas lier l'identité ABC à un futur réglage de l'accent seul.
+- **Color ABC** (`#3A3A3A` clair / `#7C5CFF` sombre) : réservée au bouton et aux marqueurs d'observation ABC. Assortie à l'accent en clair (même charbon), reste le violet catégoriel en sombre — token dédié pour ne pas lier l'identité ABC à un futur réglage de l'accent seul.
 
 ### Palette catégorielle (fixe, hors thème)
 Utilisée pour les guidances, les types de cotation, les fonctions de crise et les courbes de suivi — jamais recalculée par thème, choisie pour rester lisible sur les deux fonds.
