@@ -33,7 +33,8 @@ function extraire(nom) {
 }
 
 const NOMS = [
-  'memeJour', 'JOURS', 'migrerEmploiDuTemps', 'ateliersDuJour', 'planifierJour',
+  'memeJour', 'JOURS', 'migrerEmploiDuTemps', 'ateliersDuJour',
+  'fusionnerOrdreJour', 'appliquerOrdreAuxAutresJours', 'planifierJour',
   'personnesPrevues', 'personnesToutesPrevues', 'joursAjustes', 'resumeAtelier',
 ];
 
@@ -44,7 +45,7 @@ const code = `
 // eslint-disable-next-line no-new-func
 const F = new Function(code)();
 const {
-  migrerEmploiDuTemps, ateliersDuJour, planifierJour,
+  migrerEmploiDuTemps, ateliersDuJour, fusionnerOrdreJour, appliquerOrdreAuxAutresJours, planifierJour,
   personnesPrevues, personnesToutesPrevues, joursAjustes, resumeAtelier,
 } = F;
 
@@ -90,6 +91,55 @@ t(
 );
 t('atelier supprimé écarté silencieusement', ateliersDuJour({ 1: ['at1', 'at9'] }, ateliers, 1).map((a) => a.id), ['at1']);
 t('jour absent de l\'emploi du temps renvoie une liste vide', ateliersDuJour({ 1: ['at1'] }, ateliers, 2), []);
+
+/* ==================== fusionnerOrdreJour ====================
+   Le cas d'usage : « chaque jour commence par accueil et finit par goûter »
+   doit survivre même quand le jour cible porte un atelier intercalaire que le
+   jour de référence n'a pas. */
+
+t(
+  'un atelier intercalaire au jour cible se range entre le début et la fin communs',
+  fusionnerOrdreJour(['Accueil', 'Sport', 'Goûter'], ['Langage', 'Accueil', 'Goûter', 'Motricité']),
+  ['Accueil', 'Langage', 'Motricité', 'Goûter']
+);
+t(
+  'jour cible déjà conforme à l\'ordre de référence : rien ne bouge',
+  fusionnerOrdreJour(['Accueil', 'Sport', 'Goûter'], ['Accueil', 'Sport', 'Goûter', 'Motricité']),
+  ['Accueil', 'Sport', 'Goûter', 'Motricité']
+);
+t('cas général A,B,C / C,A,D', fusionnerOrdreJour(['A', 'B', 'C'], ['C', 'A', 'D']), ['A', 'D', 'C']);
+t('aucun atelier commun : jour cible inchangé', fusionnerOrdreJour(['A', 'B'], ['X', 'Y']), ['X', 'Y']);
+t('sous-ensemble du jour de référence', fusionnerOrdreJour(['A', 'B', 'C'], ['C', 'A']), ['A', 'C']);
+t(
+  'aucun atelier n\'est ajouté ni retiré, seul l\'ordre change',
+  fusionnerOrdreJour(['Accueil', 'Sport', 'Goûter'], ['Langage', 'Accueil', 'Goûter', 'Motricité']).sort(),
+  ['Accueil', 'Goûter', 'Langage', 'Motricité'].sort()
+);
+
+/* ==================== appliquerOrdreAuxAutresJours ==================== */
+
+t(
+  'applique la fusion aux jours programmés, ignore les jours vides',
+  appliquerOrdreAuxAutresJours(
+    { 1: ['Accueil', 'Sport', 'Goûter'], 2: ['Langage', 'Accueil', 'Goûter', 'Motricité'], 3: [] },
+    1
+  ),
+  { 1: ['Accueil', 'Sport', 'Goûter'], 2: ['Accueil', 'Langage', 'Motricité', 'Goûter'], 3: [] }
+);
+t(
+  'réappliquer un ordre déjà propagé ne change plus rien (idempotent)',
+  appliquerOrdreAuxAutresJours(
+    appliquerOrdreAuxAutresJours(
+      { 1: ['Accueil', 'Sport', 'Goûter'], 2: ['Langage', 'Accueil', 'Goûter', 'Motricité'] },
+      1
+    ),
+    1
+  ),
+  appliquerOrdreAuxAutresJours(
+    { 1: ['Accueil', 'Sport', 'Goûter'], 2: ['Langage', 'Accueil', 'Goûter', 'Motricité'] },
+    1
+  )
+);
 
 /* ==================== planifierJour ==================== */
 
