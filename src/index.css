@@ -21,6 +21,11 @@
      mélange hexadécimal + alpha, invalide maintenant que --accent est une
      variable et non un littéral. */
   --accent-wash: rgba(36, 83, 255, 0.08);
+  /* Voile derrière modales, feuilles et tiroir : noir fixe, indépendant du
+     thème (comme la palette catégorielle). Un seul token pour ne plus avoir
+     de valeur ponctuelle divergente (une des occurrences codait un noir
+     teinté olive par erreur). */
+  --overlay-backdrop: rgba(0, 0, 0, 0.5);
 }
 :root[data-theme='dark'] {
   --paper: #0A1120;
