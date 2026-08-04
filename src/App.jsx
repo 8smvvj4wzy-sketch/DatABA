@@ -2595,12 +2595,17 @@ function BoutonMenu({ onClick }) {
   );
 }
 
-function Chip({ label, on, onClick, color = INK }) {
+function Chip({ label, on, onClick, color = ACCENT }) {
+  /* INK sert de texte, pas de fond : en thème sombre il est quasi blanc, donc
+     un chip sélectionné qui l'utilisait comme remplissage devenait blanc sur
+     blanc. Le remplissage par défaut est l'accent, avec son texte apparié —
+     exactement le motif documenté pour les chips sélectionnés. */
+  const texte = color === ACCENT ? ACCENT_INK : '#fff';
   return (
     <button
       onClick={onClick}
       className="rounded-xl px-4 py-2.5 border text-sm active:scale-95 transition-transform"
-      style={{ fontFamily: F_DISPLAY, borderColor: on ? color : BORDER, backgroundColor: on ? color : 'transparent', color: on ? '#fff' : INK_SOFT }}
+      style={{ fontFamily: F_DISPLAY, borderColor: on ? color : BORDER, backgroundColor: on ? color : 'transparent', color: on ? texte : INK_SOFT }}
     >
       {label}
     </button>
