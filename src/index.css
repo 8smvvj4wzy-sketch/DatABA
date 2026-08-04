@@ -16,14 +16,14 @@
   /* Charbon neutre, plus de bleu du tout : le premier essai désaturé
      (#4566DE) restait perceptiblement bleu. Le sombre garde le bleu
      (#5B8CFF) — confirmé, il n'est pas touché. */
-  --accent: #3A3A3A;
+  --accent: #4A4A4A;
   --accent-ink: #FFFFFF;
   --nav-bg: #E4E9F5;
   --crisis: #D7263D;
   /* Fond très pâle d'une ligne sélectionnée : teinte l'accent au lieu du
      mélange hexadécimal + alpha, invalide maintenant que --accent est une
      variable et non un littéral. */
-  --accent-wash: rgba(58, 58, 58, 0.08);
+  --accent-wash: rgba(74, 74, 74, 0.08);
   /* Voile derrière modales, feuilles et tiroir : noir fixe, indépendant du
      thème (comme la palette catégorielle). Un seul token pour ne plus avoir
      de valeur ponctuelle divergente (une des occurrences codait un noir
@@ -33,7 +33,7 @@
      (demandé avec le changement d'accent) ; violet catégoriel inchangé en
      sombre. Token dédié plutôt que réutiliser --accent, pour ne pas lier
      l'identité ABC au réglage futur de l'accent lui-même. */
-  --color-abc: #3A3A3A;
+  --color-abc: #4A4A4A;
 }
 :root[data-theme='dark'] {
   --paper: #0A1120;
