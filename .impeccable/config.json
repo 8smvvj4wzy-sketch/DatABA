@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "space grotesk",
+        "createdAt": "2026-08-04T17:12:07.849Z",
+        "reason": "Police déjà en place avant cette session, explicitement conservée dans la proposition de refonte validée par l'utilisateur (« je garde Space Grotesk... pas de nouvelle police »)"
+      }
+    ]
+  }
+}

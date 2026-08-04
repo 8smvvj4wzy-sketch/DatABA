@@ -54,7 +54,7 @@ const NOMS = [
   'jourLocal', 'dureeReleve', 'journeesSuivi', 'migrerEnvoisCrises',
   'grouperParJour', 'libelleJour', 'segmentAppareil', 'nomFichier', 'timeShort',
 ];
-const code = `const CRISIS = '#B3261E';\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
+const code = `const CRISIS = '#B3261E';\nconst CAT_TEAL = ${extraireLigne('CAT_TEAL')};\nconst CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};\nconst CAT_AMBER = ${extraireLigne('CAT_AMBER')};\nconst CAT_CORAL = ${extraireLigne('CAT_CORAL')};\nconst CAT_VIOLET = ${extraireLigne('CAT_VIOLET')};\nconst CAT_CYAN = ${extraireLigne('CAT_CYAN')};\nconst CAT_LILAC = ${extraireLigne('CAT_LILAC')};\nconst CAT_SLATE = ${extraireLigne('CAT_SLATE')};\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
 // eslint-disable-next-line no-new-func
 const {
   DEFAULT_CRITERES_SUIVI, CRITERE_INCONNU, DEFAULT_SUIVIS,

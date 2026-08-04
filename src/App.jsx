@@ -7,19 +7,46 @@ import {
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
   ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, CalendarDays, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
-  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle,
+  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon,
 } from 'lucide-react';
 
-/* ==================== Design tokens ==================== */
-const INK = '#20291F';
-const INK_SOFT = '#5B6B5E';
-const PAPER = '#EFF2EC';
-const CARD = '#FBFCFA';
-const BORDER = '#DBE3D8';
-const CRISIS = '#B3261E';
+/* ==================== Design tokens ====================
+   Valeurs posées par les variables CSS de index.css (--ink, --paper, etc.),
+   qui basculent selon [data-theme] sur <html>. Ce ne sont pas des couleurs
+   figées : elles s'adaptent au thème clair/sombre choisi dans le tiroir. */
+const INK = 'var(--ink)';
+const INK_SOFT = 'var(--ink-soft)';
+const PAPER = 'var(--paper)';
+const CARD = 'var(--card)';
+const BORDER = 'var(--border)';
+const CRISIS = 'var(--crisis)';
 /* Fond de la barre de navigation du bas : un cran plus sombre que la page,
    pour que la pilule se détache sans devenir un bloc noir en bas d'écran. */
-const NAV_BG = '#DFE5DA';
+const NAV_BG = 'var(--nav-bg)';
+/* Couleur d'accent : actions principales, sélection, états actifs.
+   Utilisée avec parcimonie (mode Operate) — jamais en décoration. */
+const ACCENT = 'var(--accent)';
+const ACCENT_INK = 'var(--accent-ink)';
+/* Fond teinté d'une ligne ou d'un bloc sélectionné : accent à faible
+   opacité, calculé par thème (voir index.css). */
+const ACCENT_WASH = 'var(--accent-wash)';
+/* Couleur du bouton flottant ABC/observation, distincte de CRISIS pour ne
+   jamais se confondre avec l'alerte crise. */
+const COLOR_ABC = '#7C5CFF';
+
+/* ==================== Palette catégorielle ====================
+   Sert partout où plusieurs catégories doivent rester visuellement
+   distinctes (guidances, types de cotation, fonctions de crise, courbes de
+   suivi). Indépendante des tokens de surface ci-dessus : elle ne change pas
+   avec le thème clair/sombre, choisie pour rester lisible sur les deux. */
+const CAT_TEAL = '#00A870';
+const CAT_INDIGO = '#3B5BDB';
+const CAT_AMBER = '#FF8A3D';
+const CAT_CORAL = '#FF4D6D';
+const CAT_VIOLET = '#7C5CFF';
+const CAT_CYAN = '#00B8D9';
+const CAT_LILAC = '#A78BFA';
+const CAT_SLATE = '#64748B';
 
 /* ==================== Points restés ouverts ====================
    Le document de décisions laisse plusieurs choix à trancher. Ils sont
@@ -86,10 +113,10 @@ function useFonts() {
    le drapeau "independent" désigne ce qui compte comme réussite autonome
    dans les pourcentages et les critères de maîtrise. */
 const DEFAULT_GUIDANCE = [
-  { code: 'I', label: 'Indépendant', color: '#0F8B6C', independent: true },
-  { code: 'GP', label: 'Guidance partielle', color: '#D69A2D', independent: false },
-  { code: 'GT', label: 'Guidance totale', color: '#A8402F', independent: false },
-  { code: '0', label: 'Mauvaise réponse', color: '#565E54', independent: false },
+  { code: 'I', label: 'Indépendant', color: CAT_TEAL, independent: true },
+  { code: 'GP', label: 'Guidance partielle', color: CAT_AMBER, independent: false },
+  { code: 'GT', label: 'Guidance totale', color: CAT_CORAL, independent: false },
+  { code: '0', label: 'Mauvaise réponse', color: CAT_SLATE, independent: false },
 ];
 
 /* Version du jeu de guidances préenregistrées. Incrémentée quand on en ajoute,
@@ -111,7 +138,7 @@ function objectiveGuidances(obj, guidances) {
   const sel = all.filter((g) => codes.includes(g.code));
   return sel.length ? sel : all;
 }
-const GUIDANCE_PALETTE = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
+const GUIDANCE_PALETTE = [CAT_TEAL, CAT_INDIGO, CAT_AMBER, CAT_CORAL, CAT_VIOLET, CAT_CYAN, CAT_LILAC, CAT_SLATE];
 
 function guidanceByCode(guidances, code) {
   return (guidances || DEFAULT_GUIDANCE).find((g) => g.code === code) || null;
@@ -122,18 +149,18 @@ function isIndependentCode(guidances, code) {
 }
 
 const TYPES = {
-  trials: { label: 'Essai par essai', short: 'Essais', icon: ListChecks, color: '#7A6A9A' },
-  occurrence: { label: 'Par occurrence', short: 'Occurrence', icon: Hash, color: '#0F8B6C' },
-  interval: { label: 'Niveau par intervalle', short: 'Intervalle', icon: LayoutGrid, color: '#6B5178' },
-  chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: '#2E8B7A' },
-  balance: { label: 'Balance Program', short: 'Balance', icon: Route, color: '#A0567A' },
+  trials: { label: 'Essai par essai', short: 'Essais', icon: ListChecks, color: CAT_VIOLET },
+  occurrence: { label: 'Par occurrence', short: 'Occurrence', icon: Hash, color: CAT_TEAL },
+  interval: { label: 'Niveau par intervalle', short: 'Intervalle', icon: LayoutGrid, color: CAT_LILAC },
+  chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: CAT_CYAN },
+  balance: { label: 'Balance Program', short: 'Balance', icon: Route, color: CAT_INDIGO },
 };
 
 /* Couleur commune à tout ce qui mesure une durée : le chronomètre par essai
    d'un objectif « essai par essai » et le chronomètre auxiliaire. */
-const COLOR_CHRONO = '#C36A2E';
+const COLOR_CHRONO = CAT_AMBER;
 /* Couleur du compteur auxiliaire. */
-const COLOR_COMPTEUR = '#0F8B6C';
+const COLOR_COMPTEUR = CAT_TEAL;
 
 /* Un objectif enregistré avant la refonte peut porter un type retiré. On ne le
    ressuscite pas — on évite seulement qu'il fasse planter l'affichage. */
@@ -154,10 +181,10 @@ const INTERVAL_MODE_SHORT = { momentane: 'momentané', partiel: 'partiel', total
    indépendants — une demande de la personne, et le moment du renforcement,
    qui varie d'une étape à l'autre. */
 const BALANCE_OUTCOMES = [
-  { k: 'reussi', label: 'Réussi', short: 'R', color: '#0F8B6C', reussite: true },
-  { k: 'guide', label: 'Guidé', short: 'G', color: '#D69A2D', reussite: false },
-  { k: 'erreur', label: 'Mauvaise réponse', short: 'E', color: '#A8402F', reussite: false },
-  { k: 'manque', label: 'Étape manquée', short: 'M', color: '#565E54', reussite: false, exclu: true },
+  { k: 'reussi', label: 'Réussi', short: 'R', color: CAT_TEAL, reussite: true },
+  { k: 'guide', label: 'Guidé', short: 'G', color: CAT_AMBER, reussite: false },
+  { k: 'erreur', label: 'Mauvaise réponse', short: 'E', color: CAT_CORAL, reussite: false },
+  { k: 'manque', label: 'Étape manquée', short: 'M', color: CAT_SLATE, reussite: false, exclu: true },
 ];
 
 /* Réponses retenues pour un Balance Program : celles de l'objectif, sinon
@@ -220,17 +247,17 @@ const DEFAULT_ABC = {
    une échelle plus fine donnerait une fausse impression de précision sur un
    jugement qui reste subjectif. */
 const CRISIS_INTENSITES = [
-  { n: 1, label: 'Légère', aide: 'Gérable, retour au calme rapide', color: '#7A9A3A' },
-  { n: 2, label: 'Modérée', aide: 'A demandé un accompagnement soutenu', color: '#D69A2D' },
-  { n: 3, label: 'Forte', aide: 'Difficilement contenue, retentissement marqué', color: '#A8402F' },
+  { n: 1, label: 'Légère', aide: 'Gérable, retour au calme rapide', color: CAT_TEAL },
+  { n: 2, label: 'Modérée', aide: 'A demandé un accompagnement soutenu', color: CAT_AMBER },
+  { n: 3, label: 'Forte', aide: 'Difficilement contenue, retentissement marqué', color: CAT_CORAL },
 ];
 
 const CRISIS_FUNCTIONS = [
-  { k: 'attention', label: 'Attention', color: '#2E6E8E' },
-  { k: 'echappement', label: 'Échappement', color: '#C36A2E' },
-  { k: 'tangible', label: 'Tangible', color: '#7A9A3A' },
-  { k: 'sensoriel', label: 'Sensoriel', color: '#7A6A9A' },
-  { k: 'indetermine', label: 'Indéterminée', color: '#565E54' },
+  { k: 'attention', label: 'Attention', color: CAT_CYAN },
+  { k: 'echappement', label: 'Échappement', color: CAT_AMBER },
+  { k: 'tangible', label: 'Tangible', color: CAT_TEAL },
+  { k: 'sensoriel', label: 'Sensoriel', color: CAT_VIOLET },
+  { k: 'indetermine', label: 'Indéterminée', color: CAT_SLATE },
 ];
 
 const DEFAULT_CHAIN_STEPS = [
@@ -245,7 +272,7 @@ const DEFAULT_INTERVAL_LEVELS = [
   { id: 'lv3', name: 'Crise' },
   { id: 'lv4', name: 'Post-crise' },
 ];
-const LEVEL_COLORS = ['#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', '#A8402F', '#2E6E8E', '#7A6A9A', '#6B5178'];
+const LEVEL_COLORS = [CAT_TEAL, CAT_INDIGO, CAT_AMBER, CAT_CORAL, CAT_VIOLET, CAT_CYAN, CAT_LILAC, CAT_SLATE];
 
 /* Types dont le score est un pourcentage : eux seuls portent des cibles successives */
 const PERCENT_TYPES = ['trials', 'interval', 'chaining', 'balance'];
@@ -395,7 +422,7 @@ function PinPad({ title, subtitle, onSubmit, error, digits, submitLabel, disable
       <div className={`flex justify-center gap-3 ${compact ? 'mb-4' : 'mb-6'}`}>
         {Array.from({ length: Math.max(minLen, value.length) }, (_, i) => (
           <div key={i} className={compact ? 'w-3.5 h-3.5 rounded-full border-2' : 'w-4 h-4 rounded-full border-2'}
-            style={{ borderColor: INK, backgroundColor: i < value.length ? INK : 'transparent' }} />
+            style={{ borderColor: ACCENT, backgroundColor: i < value.length ? ACCENT : 'transparent' }} />
         ))}
       </div>
       {error && <p className="text-sm text-center mb-3" style={{ color: CRISIS }}>{error}</p>}
@@ -548,7 +575,7 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
           <div className="flex gap-2 mb-3">
             {[{ k: 'pin', l: 'Code chiffré' }, { k: 'password', l: 'Mot de passe' }].map((m) => (
               <button key={m.k} onClick={() => setNewMode(m.k)} className="flex-1 rounded-xl py-3 border text-sm font-medium"
-                style={{ fontFamily: F_DISPLAY, borderColor: newMode === m.k ? INK : BORDER, backgroundColor: newMode === m.k ? INK : 'transparent', color: newMode === m.k ? '#fff' : INK_SOFT }}>
+                style={{ fontFamily: F_DISPLAY, borderColor: newMode === m.k ? ACCENT : BORDER, backgroundColor: newMode === m.k ? ACCENT : 'transparent', color: newMode === m.k ? ACCENT_INK : INK_SOFT }}>
                 {m.l}
               </button>
             ))}
@@ -557,7 +584,7 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
             <div className="flex gap-2 mb-3">
               {[4, 6].map((n) => (
                 <button key={n} onClick={() => setNewDigits(n)} className="flex-1 rounded-xl py-3 border text-sm font-medium"
-                  style={{ fontFamily: F_DISPLAY, borderColor: newDigits === n ? INK : BORDER, backgroundColor: newDigits === n ? INK : 'transparent', color: newDigits === n ? '#fff' : INK_SOFT }}>
+                  style={{ fontFamily: F_DISPLAY, borderColor: newDigits === n ? ACCENT : BORDER, backgroundColor: newDigits === n ? ACCENT : 'transparent', color: newDigits === n ? ACCENT_INK : INK_SOFT }}>
                   {n} chiffres
                 </button>
               ))}
@@ -1402,10 +1429,10 @@ function crisisIntervals(session, crises, stepMinutes, studentId) {
    en comparant l'horodatage du relevé aux bornes des séances. Aucune saisie
    supplémentaire n'est demandée ici pour ça. */
 const DEFAULT_CRITERES_SUIVI = [
-  { k: 'stable', l: 'Stable', color: '#2E7D5B' },
-  { k: 'pre-crise', l: 'Pré-crise', color: '#D69A2D' },
+  { k: 'stable', l: 'Stable', color: CAT_TEAL },
+  { k: 'pre-crise', l: 'Pré-crise', color: CAT_AMBER },
   { k: 'crise', l: 'Crise', color: CRISIS },
-  { k: 'post-crise', l: 'Post-crise', color: '#5B6B8E' },
+  { k: 'post-crise', l: 'Post-crise', color: CAT_CYAN },
 ];
 
 /* Clé volontairement fixe (pas uid()) : c'est l'identifiant de l'axe
@@ -1422,12 +1449,12 @@ const PASTILLE_PAVES_MAX = 3;
 /* Repli pour un critère renommé ou supprimé de la configuration : les relevés
    passés qui le portaient restent affichés, sans jamais ressusciter la clé
    retirée — même principe que TYPE_INCONNU pour les modes de cotation. */
-const CRITERE_INCONNU = { k: null, l: 'Critère retiré', color: '#9AA0A6' };
+const CRITERE_INCONNU = { k: null, l: 'Critère retiré', color: CAT_SLATE };
 
 /* Palette proposée à la création d'un critère, indépendante de celle des
    guidances et des niveaux d'intervalle : ces listes n'ont pas à évoluer
    ensemble. */
-const PALETTE_SUIVI = ['#2E7D5B', '#0F8B6C', '#7A9A3A', '#D69A2D', '#C36A2E', CRISIS, '#5B6B8E', '#2E6E8E', '#7A6A9A'];
+const PALETTE_SUIVI = [CAT_TEAL, CAT_INDIGO, CAT_AMBER, CAT_CORAL, CAT_VIOLET, CRISIS, CAT_CYAN, CAT_LILAC, CAT_SLATE];
 
 function metaCritere(criteres, k) {
   return (criteres || []).find((c) => c.k === k) || CRITERE_INCONNU;
@@ -2484,9 +2511,9 @@ function Btn({ children, onClick, variant = 'solid', disabled, className = '', s
   const base = 'rounded-xl px-4 py-3 font-medium flex items-center justify-center gap-2 transition-transform active:scale-[0.98] disabled:opacity-30';
   const styles =
     variant === 'solid'
-      ? { backgroundColor: INK, color: '#fff' }
+      ? { backgroundColor: ACCENT, color: ACCENT_INK }
       : variant === 'outline'
-      ? { border: `1px solid ${INK}`, color: INK, backgroundColor: 'transparent' }
+      ? { border: `1px solid ${ACCENT}`, color: ACCENT, backgroundColor: 'transparent' }
       : { border: `1px solid ${BORDER}`, color: INK_SOFT, backgroundColor: CARD };
   return (
     <button onClick={onClick} disabled={disabled} className={`${base} ${className}`} style={{ fontFamily: F_DISPLAY, ...styles, ...style }} {...rest}>
@@ -3223,6 +3250,24 @@ function PassphraseModal({ mode, error, onSubmit, onClose }) {
 /* ==================== Application ==================== */
 function AbaApp() {
   useFonts();
+  /* Thème clair/sombre. Posé une première fois par le script bloquant de
+     index.html (attribut data-theme sur <html>, avant le premier rendu) ;
+     l'état ici ne fait que le lire et le faire suivre au bouton du tiroir.
+     Préférence non sensible : clé aba: en clair, hors du chiffrement. */
+  const [theme, setThemeState] = useState(() => {
+    if (typeof document === 'undefined') return 'light';
+    return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  });
+  const basculerTheme = () => {
+    setThemeState((t) => {
+      const suivant = t === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', suivant);
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', suivant === 'dark' ? '#0A1120' : '#F3F6FB');
+      try { window.localStorage.setItem('aba:theme', suivant); } catch (e) {}
+      return suivant;
+    });
+  };
   /* L'application s'ouvre sur Session : c'est l'écran utilisé à chaque prise
      de poste, alors que la gestion ne sert qu'épisodiquement. */
   const [tab, setTab] = useState('session');
@@ -4651,7 +4696,7 @@ function AbaApp() {
                   key={c.id}
                   onClick={() => setActiveCrisisId(c.id)}
                   className="rounded-2xl px-3 py-2 text-white flex items-center gap-1.5 shadow-lg text-sm"
-                  style={{ backgroundColor: c.kind === 'abc' ? '#B07A2E' : CRISIS, fontFamily: F_DISPLAY }}
+                  style={{ backgroundColor: c.kind === 'abc' ? COLOR_ABC : CRISIS, fontFamily: F_DISPLAY }}
                 >
                   {c.kind === 'abc' ? <ClipboardList size={14} /> : <AlertTriangle size={14} />}
                   <span>{st ? st.initials : c.kind === 'abc' ? 'Observation' : 'Crise'}</span>
@@ -4671,7 +4716,7 @@ function AbaApp() {
           <button
             onClick={openObservation}
             className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 shrink-0 active:scale-[0.96] transition-transform"
-            style={{ backgroundColor: CARD, borderColor: '#B07A2E', color: '#B07A2E' }}
+            style={{ backgroundColor: CARD, borderColor: COLOR_ABC, color: COLOR_ABC }}
             title="Observation ABC, hors crise"
             aria-label="Observation ABC"
           >
@@ -4693,8 +4738,8 @@ function AbaApp() {
                   className="rounded-full px-4 py-2.5 text-sm font-medium flex items-center justify-center gap-1.5"
                   style={{
                     fontFamily: F_DISPLAY,
-                    backgroundColor: on ? INK : 'transparent',
-                    color: on ? '#fff' : INK_SOFT,
+                    backgroundColor: on ? ACCENT : 'transparent',
+                    color: on ? ACCENT_INK : INK_SOFT,
                   }}
                   aria-label={t.label}
                 >
@@ -4741,14 +4786,25 @@ function AbaApp() {
           >
             <div className="px-4 flex items-center justify-between mb-4">
               <span className="font-semibold text-lg" style={{ fontFamily: F_DISPLAY }}>Menu</span>
-              <button
-                onClick={() => setTiroir(false)}
-                className="w-9 h-9 rounded-full flex items-center justify-center"
-                style={{ backgroundColor: PAPER, color: INK_SOFT }}
-                aria-label="Fermer le menu"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={basculerTheme}
+                  className="w-9 h-9 rounded-full flex items-center justify-center"
+                  style={{ backgroundColor: PAPER, color: INK_SOFT }}
+                  aria-label={theme === 'dark' ? 'Passer au thème clair' : 'Passer au thème sombre'}
+                  title={theme === 'dark' ? 'Thème clair' : 'Thème sombre'}
+                >
+                  {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+                </button>
+                <button
+                  onClick={() => setTiroir(false)}
+                  className="w-9 h-9 rounded-full flex items-center justify-center"
+                  style={{ backgroundColor: PAPER, color: INK_SOFT }}
+                  aria-label="Fermer le menu"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
             <div className="px-2 space-y-0.5">
@@ -4913,7 +4969,7 @@ function AbaApp() {
       )}
 
       {toast && (
-        <div className="fixed left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 rounded-xl text-sm text-white shadow-lg" style={{ backgroundColor: INK, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8rem)' }}>
+        <div className="fixed left-1/2 -translate-x-1/2 z-40 px-4 py-2.5 rounded-xl text-sm shadow-lg" style={{ backgroundColor: ACCENT, color: ACCENT_INK, bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8rem)' }}>
           {toast}
         </div>
       )}
@@ -4973,7 +5029,7 @@ function ChangePinModal({ security, onSave, onClose }) {
             <div className="flex gap-2 mb-4">
               {[4, 6].map((n) => (
                 <button key={n} onClick={() => setNewDigits(n)} className="flex-1 rounded-xl py-3 border text-sm font-medium"
-                  style={{ fontFamily: F_DISPLAY, borderColor: newDigits === n ? INK : BORDER, backgroundColor: newDigits === n ? INK : 'transparent', color: newDigits === n ? '#fff' : INK_SOFT }}>
+                  style={{ fontFamily: F_DISPLAY, borderColor: newDigits === n ? ACCENT : BORDER, backgroundColor: newDigits === n ? ACCENT : 'transparent', color: newDigits === n ? ACCENT_INK : INK_SOFT }}>
                   {n} chiffres
                 </button>
               ))}
@@ -5213,8 +5269,8 @@ function PanneauEmploiDuTemps({
                                       </button>
                                       {on && (
                                         <button onClick={() => onToggleFavori(a.id, o.id)} className="shrink-0"
-                                          style={{ color: favAtelier ? '#D69A2D' : INK_SOFT }} title="Prioritaire pour cet atelier">
-                                          <Star size={15} fill={favAtelier ? '#D69A2D' : 'none'} />
+                                          style={{ color: favAtelier ? CAT_AMBER : INK_SOFT }} title="Prioritaire pour cet atelier">
+                                          <Star size={15} fill={favAtelier ? CAT_AMBER : 'none'} />
                                         </button>
                                       )}
                                     </div>
@@ -5454,8 +5510,8 @@ function PanneauGuidances({ guidances, onAdd, onRemove, onToggleIndependent, onR
               </span>
               <span className="text-sm flex-1 min-w-0 truncate">{g.label}</span>
               <button onClick={() => onToggleIndependent(g.code)} title="Réussite autonome par défaut"
-                style={{ color: g.independent ? '#D69A2D' : INK_SOFT }}>
-                <Star size={15} fill={g.independent ? '#D69A2D' : 'none'} />
+                style={{ color: g.independent ? CAT_AMBER : INK_SOFT }}>
+                <Star size={15} fill={g.independent ? CAT_AMBER : 'none'} />
               </button>
               <button onClick={() => onRemove(g.code)} style={{ color: INK_SOFT }} title="Supprimer">
                 <X size={15} />
@@ -5481,8 +5537,8 @@ function PanneauGuidances({ guidances, onAdd, onRemove, onToggleIndependent, onR
                   style={{ backgroundColor: c, borderColor: gColor === c ? INK : 'transparent' }} />
               ))}
             </div>
-            <button onClick={() => setGIndep((v) => !v)} className="flex items-center gap-1.5 text-xs" style={{ color: gIndep ? '#D69A2D' : INK_SOFT }}>
-              <Star size={14} fill={gIndep ? '#D69A2D' : 'none'} /> Compte comme réussite autonome
+            <button onClick={() => setGIndep((v) => !v)} className="flex items-center gap-1.5 text-xs" style={{ color: gIndep ? CAT_AMBER : INK_SOFT }}>
+              <Star size={14} fill={gIndep ? CAT_AMBER : 'none'} /> Compte comme réussite autonome
             </button>
             <div className="flex gap-2">
               <Btn
@@ -5777,7 +5833,7 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
             const on = retentionMonths === o.v;
             return (
               <button key={o.v} onClick={() => onSetRetention(o.v)} className="rounded-lg px-3 py-2 text-xs border"
-                style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+                style={{ borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}>
                 {o.l}
               </button>
             );
@@ -5909,7 +5965,7 @@ function PanneauPersonnes({
           <Card>
             <button className="w-full flex items-center justify-between" onClick={() => setOpenId(openId === s.id ? null : s.id)}>
               <span className="flex items-center gap-3">
-                <span className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white" style={{ backgroundColor: INK, fontFamily: F_DISPLAY }}>
+                <span className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold" style={{ backgroundColor: ACCENT, color: ACCENT_INK, fontFamily: F_DISPLAY }}>
                   {s.initials.replace(/\./g, '').slice(0, 3)}
                 </span>
                 <span className="text-left">
@@ -6007,8 +6063,8 @@ function PanneauPersonnes({
                             </div>
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
-                            <button onClick={() => toggleFavorite(s.id, o.id)} style={{ color: o.favorite ? '#D69A2D' : INK_SOFT }} title="Objectif prioritaire">
-                              <Star size={15} fill={o.favorite ? '#D69A2D' : 'none'} />
+                            <button onClick={() => toggleFavorite(s.id, o.id)} style={{ color: o.favorite ? CAT_AMBER : INK_SOFT }} title="Objectif prioritaire">
+                              <Star size={15} fill={o.favorite ? CAT_AMBER : 'none'} />
                             </button>
                             <button
                               onClick={() => { if (window.confirm(`Enregistrer « ${o.name} » comme modèle réutilisable ?`)) onSaveTemplate(o); }}
@@ -6329,7 +6385,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
           <div className="flex gap-1.5 flex-wrap">
             {DEFAULT_PHASES.map((ph) => (
               <button key={ph} onClick={() => setPhaseName(ph)} className="rounded-lg px-3 py-2 text-xs border"
-                style={{ borderColor: phaseName === ph ? INK : BORDER, backgroundColor: phaseName === ph ? INK : 'transparent', color: phaseName === ph ? '#fff' : INK_SOFT }}>
+                style={{ borderColor: phaseName === ph ? ACCENT : BORDER, backgroundColor: phaseName === ph ? ACCENT : 'transparent', color: phaseName === ph ? ACCENT_INK : INK_SOFT }}>
                 {ph}
               </button>
             ))}
@@ -6365,12 +6421,12 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
           </div>
           <div className="flex gap-1.5 flex-wrap items-center">
             <button onClick={() => setTrialCount(0)} className="rounded-lg px-3 py-2 text-xs border"
-              style={{ borderColor: !trialCount ? INK : BORDER, backgroundColor: !trialCount ? INK : 'transparent', color: !trialCount ? '#fff' : INK_SOFT }}>
+              style={{ borderColor: !trialCount ? ACCENT : BORDER, backgroundColor: !trialCount ? ACCENT : 'transparent', color: !trialCount ? ACCENT_INK : INK_SOFT }}>
               Sans limite
             </button>
             {[3, 5, 8, 10, 20].map((n) => (
               <button key={n} onClick={() => setTrialCount(n)} className="rounded-lg px-3.5 py-2 text-sm border"
-                style={{ borderColor: trialCount === n ? INK : BORDER, backgroundColor: trialCount === n ? INK : 'transparent', color: trialCount === n ? '#fff' : INK_SOFT, fontFamily: F_MONO }}>
+                style={{ borderColor: trialCount === n ? ACCENT : BORDER, backgroundColor: trialCount === n ? ACCENT : 'transparent', color: trialCount === n ? ACCENT_INK : INK_SOFT, fontFamily: F_MONO }}>
                 {n}
               </button>
             ))}
@@ -6398,7 +6454,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
                 const on = intervalMode === m.k;
                 return (
                   <button key={m.k} onClick={() => setIntervalMode(m.k)} className="w-full rounded-lg px-3 py-2 text-left border"
-                    style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK }}>
+                    style={{ borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK }}>
                     <div className="text-sm">{m.label}</div>
                     <div className="text-xs" style={{ opacity: 0.75 }}>{m.hint}</div>
                   </button>
@@ -6416,7 +6472,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
                 return (
                   <button key={total} onClick={() => { setIntervalMin(m); setIntervalSec(sec); }}
                     className="rounded-lg px-3 py-2 text-sm border"
-                    style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT, fontFamily: F_MONO }}>
+                    style={{ borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT, fontFamily: F_MONO }}>
                     {m ? `${m} min` : ''}{sec ? `${m ? ' ' : ''}${sec} s` : ''}
                   </button>
                 );
@@ -6466,7 +6522,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
               <div className="flex flex-wrap gap-1.5">
                 {levels.map((l) => (
                   <button key={l.id} onClick={() => setTargetLevelId(l.id)} className="rounded-lg px-3 py-2 text-xs border"
-                    style={{ borderColor: targetLevelId === l.id ? INK : BORDER, backgroundColor: targetLevelId === l.id ? INK : 'transparent', color: targetLevelId === l.id ? '#fff' : INK_SOFT }}>
+                    style={{ borderColor: targetLevelId === l.id ? ACCENT : BORDER, backgroundColor: targetLevelId === l.id ? ACCENT : 'transparent', color: targetLevelId === l.id ? ACCENT_INK : INK_SOFT }}>
                     {l.name}
                   </button>
                 ))}
@@ -6534,10 +6590,10 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
                     <span className="text-sm flex-1 min-w-0 truncate">{g.label}</span>
                     <button
                       onClick={() => setGuidanceSet((cur) => cur.map((x) => (x.code === g.code ? { ...x, independent: !x.independent } : x)))}
-                      style={{ color: g.independent ? '#D69A2D' : INK_SOFT }}
+                      style={{ color: g.independent ? CAT_AMBER : INK_SOFT }}
                       title="Compte comme réussite autonome"
                     >
-                      <Star size={15} fill={g.independent ? '#D69A2D' : 'none'} />
+                      <Star size={15} fill={g.independent ? CAT_AMBER : 'none'} />
                     </button>
                     <button
                       onClick={() => setGuidanceSet((cur) => (cur.length > 1 ? cur.filter((x) => x.code !== g.code) : cur))}
@@ -6586,8 +6642,8 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
                         style={{ backgroundColor: c, borderColor: rColor === c ? INK : 'transparent' }} />
                     ))}
                   </div>
-                  <button onClick={() => setRIndep((v) => !v)} className="flex items-center gap-1.5 text-xs" style={{ color: rIndep ? '#D69A2D' : INK_SOFT }}>
-                    <Star size={14} fill={rIndep ? '#D69A2D' : 'none'} /> Compte comme réussite autonome
+                  <button onClick={() => setRIndep((v) => !v)} className="flex items-center gap-1.5 text-xs" style={{ color: rIndep ? CAT_AMBER : INK_SOFT }}>
+                    <Star size={14} fill={rIndep ? CAT_AMBER : 'none'} /> Compte comme réussite autonome
                   </button>
                   <div className="flex gap-2">
                     <Btn
@@ -6627,7 +6683,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
             <div className="flex gap-1.5 mb-2">
               {[{ k: 'max', l: 'Au plus' }, { k: 'min', l: 'Au moins' }].map((s) => (
                 <button key={s.k} onClick={() => setMasterySens(s.k)} className="rounded-lg px-3 py-2 text-xs border"
-                  style={{ borderColor: masterySens === s.k ? INK : BORDER, backgroundColor: masterySens === s.k ? INK : 'transparent', color: masterySens === s.k ? '#fff' : INK_SOFT }}>
+                  style={{ borderColor: masterySens === s.k ? ACCENT : BORDER, backgroundColor: masterySens === s.k ? ACCENT : 'transparent', color: masterySens === s.k ? ACCENT_INK : INK_SOFT }}>
                   {s.l}
                 </button>
               ))}
@@ -6659,7 +6715,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
             <div className="flex gap-1">
               {[{ k: 'sessions', l: 'séances' }, { k: 'days', l: 'jours' }].map((u) => (
                 <button key={u.k} onClick={() => setMasteryUnit(u.k)} className="rounded-lg px-3 py-2 text-xs border"
-                  style={{ borderColor: masteryUnit === u.k ? INK : BORDER, backgroundColor: masteryUnit === u.k ? INK : 'transparent', color: masteryUnit === u.k ? '#fff' : INK_SOFT }}>
+                  style={{ borderColor: masteryUnit === u.k ? ACCENT : BORDER, backgroundColor: masteryUnit === u.k ? ACCENT : 'transparent', color: masteryUnit === u.k ? ACCENT_INK : INK_SOFT }}>
                   {u.l}
                 </button>
               ))}
@@ -6707,8 +6763,8 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
                 </span>
                 <span className="text-sm flex-1 min-w-0 break-words">{o.label}</span>
                 <button onClick={() => setBalanceSet((cur) => cur.map((x) => (x.k === o.k ? { ...x, reussite: !x.reussite, exclu: false } : x)))}
-                  style={{ color: o.reussite ? '#D69A2D' : INK_SOFT }} title="Compte comme réussite">
-                  <Star size={15} fill={o.reussite ? '#D69A2D' : 'none'} />
+                  style={{ color: o.reussite ? CAT_AMBER : INK_SOFT }} title="Compte comme réussite">
+                  <Star size={15} fill={o.reussite ? CAT_AMBER : 'none'} />
                 </button>
                 <button onClick={() => setBalanceSet((cur) => cur.map((x) => (x.k === o.k ? { ...x, exclu: !x.exclu, reussite: false } : x)))}
                   style={{ color: o.exclu ? INK : INK_SOFT }} title="Exclue du calcul">
@@ -6737,8 +6793,8 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
                 ))}
               </div>
               <div className="flex gap-3">
-                <button onClick={() => { setOReussite((v) => !v); setOExclu(false); }} className="flex items-center gap-1.5 text-xs" style={{ color: oReussite ? '#D69A2D' : INK_SOFT }}>
-                  <Star size={14} fill={oReussite ? '#D69A2D' : 'none'} /> Réussite
+                <button onClick={() => { setOReussite((v) => !v); setOExclu(false); }} className="flex items-center gap-1.5 text-xs" style={{ color: oReussite ? CAT_AMBER : INK_SOFT }}>
+                  <Star size={14} fill={oReussite ? CAT_AMBER : 'none'} /> Réussite
                 </button>
                 <button onClick={() => { setOExclu((v) => !v); setOReussite(false); }} className="flex items-center gap-1.5 text-xs" style={{ color: oExclu ? INK : INK_SOFT }}>
                   <EyeOff size={14} /> Exclue du calcul
@@ -6808,14 +6864,14 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
           {type !== 'occurrence' && (
             <div>
               <button onClick={() => setAvecCompteur((v) => !v)} className="flex items-center gap-1.5 text-sm">
-                <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecCompteur ? INK : BORDER }}>
+                <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecCompteur ? ACCENT : BORDER }}>
                   <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecCompteur ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
                 </span>
                 Compteur
               </button>
               {avecCompteur && parEssaiPossible && (
                 <button onClick={() => setCompteurParEssai((v) => !v)} className="flex items-center gap-1.5 text-xs mt-2 ml-1" style={{ color: INK_SOFT }}>
-                  <span className="w-7 h-4 rounded-full relative shrink-0" style={{ backgroundColor: compteurParEssai ? INK : BORDER }}>
+                  <span className="w-7 h-4 rounded-full relative shrink-0" style={{ backgroundColor: compteurParEssai ? ACCENT : BORDER }}>
                     <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white" style={{ left: compteurParEssai ? '0.875rem' : '0.125rem', transition: 'left .15s' }} />
                   </span>
                   Relancer à chaque essai
@@ -6825,7 +6881,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
           )}
           <div>
             <button onClick={() => setAvecChrono((v) => !v)} className="flex items-center gap-1.5 text-sm">
-              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecChrono ? INK : BORDER }}>
+              <span className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: avecChrono ? ACCENT : BORDER }}>
                 <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: avecChrono ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
               </span>
               Chronomètre
@@ -6835,7 +6891,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
                 <div className="flex gap-1.5">
                   {[{ k: 'chrono', l: 'Chronomètre' }, { k: 'countdown', l: 'Temps limite' }].map((m) => (
                     <button key={m.k} onClick={() => setChronoMode(m.k)} className="flex-1 rounded-lg py-2 text-xs border"
-                      style={{ borderColor: chronoMode === m.k ? INK : BORDER, backgroundColor: chronoMode === m.k ? INK : 'transparent', color: chronoMode === m.k ? '#fff' : INK_SOFT }}>
+                      style={{ borderColor: chronoMode === m.k ? ACCENT : BORDER, backgroundColor: chronoMode === m.k ? ACCENT : 'transparent', color: chronoMode === m.k ? ACCENT_INK : INK_SOFT }}>
                       {m.l}
                     </button>
                   ))}
@@ -6861,7 +6917,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
                 )}
                 {parEssaiPossible && (
                   <button onClick={() => setChronoParEssai((v) => !v)} className="flex items-center gap-1.5 text-xs" style={{ color: INK_SOFT }}>
-                    <span className="w-7 h-4 rounded-full relative shrink-0" style={{ backgroundColor: chronoParEssai ? INK : BORDER }}>
+                    <span className="w-7 h-4 rounded-full relative shrink-0" style={{ backgroundColor: chronoParEssai ? ACCENT : BORDER }}>
                       <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white" style={{ left: chronoParEssai ? '0.875rem' : '0.125rem', transition: 'left .15s' }} />
                     </span>
                     Relancer à chaque essai
@@ -6989,7 +7045,7 @@ function AtelierLancement({
               const on = intervenantId === i.id;
               return (
                 <button key={i.id} onClick={() => setIntervenantId(on ? null : i.id)} className="rounded-xl px-4 py-2.5 border text-sm"
-                  style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+                  style={{ borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}>
                   {i.name}
                 </button>
               );
@@ -7022,7 +7078,7 @@ function AtelierLancement({
           const on = studentIds.includes(s.id);
           return (
             <button key={s.id} onClick={() => toggleStudent(s.id)} className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
-              style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+              style={{ fontFamily: F_DISPLAY, borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}>
               {s.initials}
             </button>
           );
@@ -7030,7 +7086,7 @@ function AtelierLancement({
       </div>
 
       <button onClick={() => setDoubleCotation((v) => !v)} className="flex items-start gap-2.5 text-left w-full mb-3">
-        <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: doubleCotation ? INK : BORDER }}>
+        <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: doubleCotation ? ACCENT : BORDER }}>
           <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: doubleCotation ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
         </span>
         <span className="min-w-0">
@@ -7057,7 +7113,7 @@ function AtelierLancement({
         return (
           <Card className="mb-3">
             <div className="flex items-center gap-2 mb-2">
-              <Star size={16} style={{ color: '#D69A2D' }} />
+              <Star size={16} style={{ color: CAT_AMBER }} />
               <span className="font-semibold text-sm" style={{ fontFamily: F_DISPLAY }}>Configuration habituelle appliquée</span>
             </div>
             <div className="text-xs mb-3" style={{ color: INK_SOFT }}>
@@ -7123,7 +7179,7 @@ function AtelierLancement({
                         <span className="flex-1 min-w-0">
                           {o.name}
                           {o.favorite && (
-                            <span className="text-xs ml-1.5" style={{ color: '#D69A2D' }}>prioritaire</span>
+                            <span className="text-xs ml-1.5" style={{ color: CAT_AMBER }}>prioritaire</span>
                           )}
                         </span>
                         {on && <Check size={15} style={{ color: meta.color }} className="shrink-0" />}
@@ -7133,10 +7189,10 @@ function AtelierLancement({
                         <button
                           onClick={() => toggleAtelierFavorite(o.id)}
                           className="shrink-0"
-                          style={{ color: favAtelier ? '#D69A2D' : INK_SOFT }}
+                          style={{ color: favAtelier ? CAT_AMBER : INK_SOFT }}
                           title="Prioritaire pour cet atelier"
                         >
-                          <Star size={15} fill={favAtelier ? '#D69A2D' : 'none'} />
+                          <Star size={15} fill={favAtelier ? CAT_AMBER : 'none'} />
                         </button>
                       )}
                     </div>
@@ -7218,7 +7274,7 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
               const on = intervenantId === i.id;
               return (
                 <button key={i.id} onClick={() => setIntervenantId(on ? null : i.id)} className="rounded-xl px-4 py-2.5 border text-sm"
-                  style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+                  style={{ borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}>
                   {i.name}
                 </button>
               );
@@ -7278,7 +7334,7 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
                         favorites: apercu.favorites, doubleCotation: false, intervenantId,
                       })}
                       className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                      style={{ backgroundColor: INK, color: '#fff' }}
+                      style={{ backgroundColor: ACCENT, color: ACCENT_INK }}
                       title="Lancer directement avec la configuration habituelle"
                     >
                       <Play size={16} />
@@ -7627,7 +7683,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
             <button
               onClick={togglePause}
               className="rounded-xl px-3 py-2.5 border"
-              style={{ borderColor: isPaused ? INK : BORDER, backgroundColor: isPaused ? INK : CARD, color: isPaused ? '#fff' : INK_SOFT }}
+              style={{ borderColor: isPaused ? ACCENT : BORDER, backgroundColor: isPaused ? ACCENT : CARD, color: isPaused ? ACCENT_INK : INK_SOFT }}
               title={isPaused ? 'Reprendre la séance' : 'Mettre en pause'}
             >
               {isPaused ? <Play size={17} /> : <Pause size={17} />}
@@ -7642,7 +7698,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
             >
               <SlidersHorizontal size={17} />
               {nbMasques > 0 && (
-                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center" style={{ backgroundColor: INK, color: '#fff', fontFamily: F_MONO }}>
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center" style={{ backgroundColor: ACCENT, color: ACCENT_INK, fontFamily: F_MONO }}>
                   {nbMasques}
                 </span>
               )}
@@ -7655,7 +7711,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
       </div>
 
       {isPaused && (
-        <div className="rounded-xl px-3 py-2.5 mb-4 flex items-center gap-2 text-sm" style={{ backgroundColor: INK, color: '#fff' }}>
+        <div className="rounded-xl px-3 py-2.5 mb-4 flex items-center gap-2 text-sm" style={{ backgroundColor: ACCENT, color: ACCENT_INK }}>
           <PauseCircle size={16} />
           Séance en pause — le chronomètre et les intervalles sont arrêtés.
         </div>
@@ -7670,7 +7726,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
             style={{
               left: viewMode === 'priority' ? '0.25rem' : 'calc(50% - 0.125rem)',
               width: 'calc(50% - 0.125rem)',
-              backgroundColor: INK,
+              backgroundColor: ACCENT,
               transition: 'left .2s ease-out',
             }}
           />
@@ -7683,7 +7739,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
             return (
               <button key={v.k} onClick={() => setViewMode(v.k)}
                 className="relative flex-1 rounded-full py-2 text-sm font-medium flex items-center justify-center gap-1.5"
-                style={{ fontFamily: F_DISPLAY, color: on ? '#fff' : INK_SOFT, transition: 'color .2s' }}>
+                style={{ fontFamily: F_DISPLAY, color: on ? ACCENT_INK : INK_SOFT, transition: 'color .2s' }}>
                 <Icon size={15} /> {v.label}
               </button>
             );
@@ -7884,9 +7940,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                   style={{
                     fontFamily: F_DISPLAY,
                     opacity: present ? 1 : 0.45,
-                    backgroundColor: on ? INK : CARD,
-                    color: on ? '#fff' : INK_SOFT,
-                    borderColor: on ? INK : BORDER,
+                    backgroundColor: on ? ACCENT : CARD,
+                    color: on ? ACCENT_INK : INK_SOFT,
+                    borderColor: on ? ACCENT : BORDER,
                   }}
                   title={!present ? 'Reparti de l’atelier — appuyer pour faire revenir' : undefined}
                 >
@@ -8061,7 +8117,7 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
               <button
                 key={a.id} onClick={() => choisir(a.id)}
                 className="w-full rounded-xl px-3 py-2.5 text-left border flex items-center gap-2"
-                style={{ borderColor: atelierId === a.id ? INK : BORDER, backgroundColor: atelierId === a.id ? INK : 'transparent', color: atelierId === a.id ? '#fff' : INK }}
+                style={{ borderColor: atelierId === a.id ? ACCENT : BORDER, backgroundColor: atelierId === a.id ? ACCENT : 'transparent', color: atelierId === a.id ? ACCENT_INK : INK }}
               >
                 {idsSuite.has(a.id) && <CalendarDays size={13} className="shrink-0" style={{ opacity: 0.7 }} />}
                 <span className="flex-1 min-w-0 truncate">{a.name}</span>
@@ -8082,7 +8138,7 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
                     key={s.id}
                     onClick={() => setChecked((c) => { const n = new Set(c); if (n.has(s.id)) n.delete(s.id); else n.add(s.id); return n; })}
                     className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
-                    style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}
+                    style={{ fontFamily: F_DISPLAY, borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}
                   >
                     {s.initials}
                   </button>
@@ -8140,7 +8196,7 @@ function FeuilleAjout({ session, students, atelier, onClose, onConfirm }) {
             <button
               key={s.id} onClick={() => choisir(s.id)}
               className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
-              style={{ fontFamily: F_DISPLAY, borderColor: sid === s.id ? INK : BORDER, backgroundColor: sid === s.id ? INK : 'transparent', color: sid === s.id ? '#fff' : INK_SOFT }}
+              style={{ fontFamily: F_DISPLAY, borderColor: sid === s.id ? ACCENT : BORDER, backgroundColor: sid === s.id ? ACCENT : 'transparent', color: sid === s.id ? ACCENT_INK : INK_SOFT }}
             >
               {s.initials}
             </button>
@@ -8260,7 +8316,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
           <button
             onClick={onStudentClick}
             className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold"
-            style={{ fontFamily: F_DISPLAY, backgroundColor: INK, color: '#fff' }}
+            style={{ fontFamily: F_DISPLAY, backgroundColor: ACCENT, color: ACCENT_INK }}
             title="Voir tous les objectifs de cette personne"
           >
             {studentLabel}
@@ -8460,7 +8516,7 @@ function MesuresAuxiliaires({ mesures, avecCompteur, avecChrono, chronoMode, chr
             )}
             <button onClick={basculerChrono}
               className="ml-auto rounded-lg px-4 py-2.5 text-white flex items-center gap-1.5 active:scale-95 transition-transform"
-              style={{ backgroundColor: chrono.running ? '#A8402F' : COLOR_CHRONO, fontFamily: F_DISPLAY }}>
+              style={{ backgroundColor: chrono.running ? CAT_CORAL : COLOR_CHRONO, fontFamily: F_DISPLAY }}>
               {chrono.running ? <><Pause size={15} /> Arrêter</> : <><Play size={15} /> Démarrer</>}
             </button>
             {(chronoAffiche > 0 || chrono.running) && (
@@ -8962,14 +9018,14 @@ function BalanceWidget({ obj, entry, onChange }) {
                 <button
                   onClick={() => setStep(st.id, { demande: !e.demande })}
                   className="flex-1 rounded-lg py-1.5 text-xs border flex items-center justify-center gap-1"
-                  style={{ borderColor: e.demande ? '#2E6E8E' : BORDER, backgroundColor: e.demande ? '#2E6E8E' : 'transparent', color: e.demande ? '#fff' : INK_SOFT }}
+                  style={{ borderColor: e.demande ? CAT_CYAN : BORDER, backgroundColor: e.demande ? CAT_CYAN : 'transparent', color: e.demande ? '#fff' : INK_SOFT }}
                 >
                   <MessageSquare size={12} /> Demande
                 </button>
                 <button
                   onClick={() => setStep(st.id, { renforce: !e.renforce })}
                   className="flex-1 rounded-lg py-1.5 text-xs border flex items-center justify-center gap-1"
-                  style={{ borderColor: e.renforce ? '#D69A2D' : BORDER, backgroundColor: e.renforce ? '#D69A2D' : 'transparent', color: e.renforce ? '#fff' : INK_SOFT }}
+                  style={{ borderColor: e.renforce ? CAT_AMBER : BORDER, backgroundColor: e.renforce ? CAT_AMBER : 'transparent', color: e.renforce ? '#fff' : INK_SOFT }}
                 >
                   <Gift size={12} /> Renforcé
                 </button>
@@ -9263,7 +9319,7 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
             <Card key={s.id}>
               <button className="w-full flex items-center justify-between" onClick={() => setOpenId(open ? null : s.id)}>
                 <span className="flex items-center gap-3">
-                  <span className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold text-white" style={{ backgroundColor: INK, fontFamily: F_DISPLAY }}>
+                  <span className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold" style={{ backgroundColor: ACCENT, color: ACCENT_INK, fontFamily: F_DISPLAY }}>
                     {s.initials.replace(/\./g, '').slice(0, 3)}
                   </span>
                   <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{s.initials}</span>
@@ -9359,9 +9415,9 @@ function ResumeObjectifs({ students, sessions, guidances, onVoirGraphique }) {
   const g = resumerObjectifs(students, sessions, guidances);
 
   const blocs = [
-    { k: 'acquis', label: 'Acquis', couleur: '#0F8B6C', aide: 'Le critère est atteint.', rendu: (l) => `${l.streak}/${l.needed}` },
-    { k: 'bientot', label: 'Bientôt acquis', couleur: '#3F9E7C', aide: 'Une séance de plus au seuil suffit.', rendu: (l) => `${l.streak}/${l.needed} · ${l.valeur} %` },
-    { k: 'plateau', label: 'En plateau', couleur: '#D69A2D', aide: 'Proche du seuil depuis plusieurs séances, sans l\'atteindre.', rendu: (l) => `${l.moyenne} % · seuil ${l.threshold} %` },
+    { k: 'acquis', label: 'Acquis', couleur: CAT_TEAL, aide: 'Le critère est atteint.', rendu: (l) => `${l.streak}/${l.needed}` },
+    { k: 'bientot', label: 'Bientôt acquis', couleur: CAT_TEAL, aide: 'Une séance de plus au seuil suffit.', rendu: (l) => `${l.streak}/${l.needed} · ${l.valeur} %` },
+    { k: 'plateau', label: 'En plateau', couleur: CAT_AMBER, aide: 'Proche du seuil depuis plusieurs séances, sans l\'atteindre.', rendu: (l) => `${l.moyenne} % · seuil ${l.threshold} %` },
     { k: 'manque', label: 'Manque de données', couleur: INK_SOFT, aide: 'Pas encore de quoi se prononcer.', rendu: (l) => l.raison },
   ];
 
@@ -9447,7 +9503,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
           <span
             className="shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium flex items-center gap-1"
             style={{
-              backgroundColor: mastery.mastered ? '#0F8B6C' : PAPER,
+              backgroundColor: mastery.mastered ? CAT_TEAL : PAPER,
               color: mastery.mastered ? '#fff' : INK_SOFT,
               fontFamily: F_DISPLAY,
             }}
@@ -9467,8 +9523,8 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
             return (
               <span key={t.id} className="text-xs rounded-lg px-2 py-1 flex items-center gap-1"
                 style={{
-                  backgroundColor: done ? '#0F8B6C' : active ? INK : PAPER,
-                  color: done || active ? '#fff' : INK_SOFT,
+                  backgroundColor: done ? CAT_TEAL : active ? ACCENT : PAPER,
+                  color: done ? '#fff' : active ? ACCENT_INK : INK_SOFT,
                 }}>
                 {done && <Check size={11} />} {t.name}
               </span>
@@ -9500,7 +9556,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
                 labelFormatter={(l) => `Séance du ${l}`}
               />
               {mastery && (
-                <ReferenceLine y={mastery.threshold} stroke="#0F8B6C" strokeDasharray="4 4" strokeWidth={1.5} />
+                <ReferenceLine y={mastery.threshold} stroke={CAT_TEAL} strokeDasharray="4 4" strokeWidth={1.5} />
               )}
               {phases.map((ph) => {
                 const pt = points.find((x) => new Date(x.date) >= new Date(ph.date));
@@ -9672,8 +9728,8 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
       onClick={onToggle}
       className="shrink-0 rounded-lg px-2 py-1 text-xs flex items-center gap-1 border"
       style={{
-        borderColor: sent ? '#0F8B6C' : BORDER,
-        backgroundColor: sent ? '#0F8B6C' : 'transparent',
+        borderColor: sent ? CAT_TEAL : BORDER,
+        backgroundColor: sent ? CAT_TEAL : 'transparent',
         color: sent ? '#fff' : INK_SOFT,
       }}
       title="Appuyer pour changer le statut manuellement"
@@ -9685,8 +9741,8 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
   const caseACocher = (on, onToggle) => (
     <button onClick={onToggle}
       className="w-6 h-6 rounded-md border flex items-center justify-center shrink-0"
-      style={{ borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent' }}>
-      {on && <Check size={14} color="#fff" />}
+      style={{ borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent' }}>
+      {on && <Check size={14} color={ACCENT_INK} />}
     </button>
   );
 
@@ -9695,7 +9751,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     const basculer = () => setPicked((p) => (on ? p.filter((x) => x !== s.id) : [...p, s.id]));
     return (
       <div key={s.id} className="w-full rounded-xl px-3.5 py-3 flex items-center gap-2.5 border"
-        style={{ borderColor: on && !byStudent ? INK : BORDER, backgroundColor: on && !byStudent ? INK + '0d' : CARD }}>
+        style={{ borderColor: on && !byStudent ? ACCENT : BORDER, backgroundColor: on && !byStudent ? ACCENT_WASH : CARD }}>
         <button className="flex-1 text-left min-w-0" onClick={byStudent ? () => onEditSession(s) : basculer}>
           <div className="text-sm font-medium truncate">{sessionLabel(s)}</div>
           <div className="text-xs" style={{ color: INK_SOFT }}>
@@ -9725,19 +9781,19 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     const basculer = () => setPickedCrises((p) => (on ? p.filter((x) => x !== c.id) : [...p, c.id]));
     return (
       <div key={c.id} className="w-full rounded-2xl border p-3.5 flex items-center gap-2.5"
-        style={{ borderColor: on && !byStudent ? INK : BORDER, backgroundColor: on && !byStudent ? INK + '0d' : PAPER }}>
+        style={{ borderColor: on && !byStudent ? ACCENT : BORDER, backgroundColor: on && !byStudent ? ACCENT_WASH : PAPER }}>
         <button onClick={() => onEditCrisis(c)} className="flex-1 text-left min-w-0">
           <div className="flex items-center justify-between gap-2 mb-1">
             <span className="text-sm font-semibold min-w-0 truncate" style={{ fontFamily: F_DISPLAY }}>{st ? st.initials : 'Personne non renseignée'}</span>
             <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5"
-              style={{ backgroundColor: c.kind === 'abc' ? '#B07A2E' : CRISIS, color: '#fff' }}>
+              style={{ backgroundColor: c.kind === 'abc' ? COLOR_ABC : CRISIS, color: '#fff' }}>
               {c.kind === 'abc' ? 'Observation' : 'Crise'}
             </span>
             {/* Fiche ouverte depuis un relevé de suivi continu : elle attend une
                 relecture — ABC, intensité, commentaire. L'indicateur existait
                 depuis toujours sans que rien ne l'affiche. */}
             {c.aCompleter && (
-              <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5" style={{ backgroundColor: '#D69A2D', color: '#fff' }}>
+              <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5" style={{ backgroundColor: CAT_AMBER, color: '#fff' }}>
                 à compléter
               </span>
             )}
@@ -9782,7 +9838,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     const notes = j.releves.filter((r) => !r.fin).length;
     return (
       <div key={j.cle} className="w-full rounded-xl px-3.5 py-3 flex items-center gap-2.5 border"
-        style={{ borderColor: on && !byStudent ? INK : BORDER, backgroundColor: on && !byStudent ? INK + '0d' : CARD }}>
+        style={{ borderColor: on && !byStudent ? ACCENT : BORDER, backgroundColor: on && !byStudent ? ACCENT_WASH : CARD }}>
         <button className="flex-1 text-left min-w-0" onClick={() => onOuvrirJournee(j)}>
           <div className="text-sm font-medium truncate">
             <span style={{ fontFamily: F_DISPLAY }}>{j.initials}</span> · {j.nomAxe}
@@ -9850,7 +9906,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
           return (
             <button key={m.k} onClick={() => setMode(m.k)}
               className="flex-1 rounded-xl py-3 text-sm font-medium flex items-center justify-center gap-1.5 border"
-              style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+              style={{ fontFamily: F_DISPLAY, borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}>
               <Icon size={15} /> {m.label}
             </button>
           );
@@ -9869,7 +9925,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                 <button key={st.id}
                   onClick={() => setPickedStudents((cur) => (on ? cur.filter((x) => x !== st.id) : [...cur, st.id]))}
                   className="rounded-xl px-4 py-2.5 border font-semibold text-sm"
-                  style={{ fontFamily: F_DISPLAY, borderColor: on ? INK : BORDER, backgroundColor: on ? INK : 'transparent', color: on ? '#fff' : INK_SOFT }}>
+                  style={{ fontFamily: F_DISPLAY, borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}>
                   {st.initials}
                 </button>
               );
@@ -10046,7 +10102,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
       <div
         ref={enTeteRef}
         className="sticky top-0 px-4 pb-4 text-white"
-        style={{ backgroundColor: estObservation ? '#B07A2E' : CRISIS, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+        style={{ backgroundColor: estObservation ? COLOR_ABC : CRISIS, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
       >
         <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -10152,7 +10208,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
             avecCompteur
             avecChrono
             now={now}
-            couleur={estObservation ? '#B07A2E' : CRISIS}
+            couleur={estObservation ? COLOR_ABC : CRISIS}
             onChange={(mesures) => set({ mesures })}
           />
         </div>
@@ -10329,7 +10385,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
             se partagent la ligne suivante. Sur trois boutons côte à côte, le
             dernier débordait de l'écran. */}
         <div className="pt-1">
-          <Btn onClick={() => onSave(crisis)} className="w-full mb-2" style={{ backgroundColor: estObservation ? '#B07A2E' : CRISIS }}>
+          <Btn onClick={() => onSave(crisis)} className="w-full mb-2" style={{ backgroundColor: estObservation ? COLOR_ABC : CRISIS }}>
             {isNew
               ? (estObservation ? <><Save size={16} /> Enregistrer</> : <><Square size={16} /> Terminer et enregistrer</>)
               : <><Save size={16} /> Enregistrer les modifications</>}
