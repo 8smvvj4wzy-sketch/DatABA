@@ -3603,6 +3603,13 @@ function AbaApp() {
      personne. C'est lui qui filtre l'écran Suivi (personnesVisibles) : vide,
      rien n'est filtré. Choisi dans PanneauDonnees. */
   const [groupeAppareil, setGroupeAppareil] = useState('');
+  /* Intervenant en poste : { intervenantId, jour } — n'attribue les relevés
+     pris hors séance qu'à condition d'être encore valide pour aujourd'hui
+     (posteValide). Choisi dans PanneauDonnees, périmé au changement de jour
+     local plutôt que reconduit d'un jour sur l'autre. */
+  const [poste, setPoste] = useState(null);
+  const choisirPosteIntervenant = (intervenantId) =>
+    setPoste(intervenantId ? { intervenantId, jour: jourLocal(Date.now()) } : null);
   const [sessions, setSessions] = useState([]);
   const [crises, setCrises] = useState([]);
   /* Relevés de suivi continu : un tableau à part, indépendant des séances, sur
@@ -3871,6 +3878,9 @@ function AbaApp() {
     const act = await store.get('aba:active');
     if (act) { try { setActiveSession(JSON.parse(act)); } catch (e) {} }
 
+    const pos = await store.get('aba:poste');
+    if (pos) { try { setPoste(JSON.parse(pos)); } catch (e) {} }
+
     /* Tablette neuve : rien à coter, on ouvre directement sur la configuration
        des personnes accompagnées. Dès qu'une personne existe, l'application
        reprend son comportement normal et démarre sur Session. */
@@ -3881,7 +3891,7 @@ function AbaApp() {
 
   /* Toutes les clés contenant des données, mois par mois compris. */
   async function clesDonnees() {
-    const base = ['aba:config', 'aba:sessions', 'aba:crises', 'aba:suivi', 'aba:stabilite', 'aba:active', SESSIONS_INDEX];
+    const base = ['aba:config', 'aba:sessions', 'aba:crises', 'aba:suivi', 'aba:stabilite', 'aba:active', 'aba:poste', SESSIONS_INDEX];
     const idx = await store.getRaw(SESSIONS_INDEX);
     if (!idx) return base;
     try {
@@ -3975,6 +3985,7 @@ function AbaApp() {
       await store.setRaw('aba:stabilite', '');
     }
     await store.set('aba:active', JSON.stringify(activeSession));
+    await store.set('aba:poste', JSON.stringify(poste));
   }
 
   async function changePin(pinHash, pinSalt, pinDigits, pin, mode) {
@@ -4094,6 +4105,10 @@ function AbaApp() {
     if (!loaded) return;
     store.set('aba:active', JSON.stringify(activeSession));
   }, [activeSession, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    store.set('aba:poste', JSON.stringify(poste));
+  }, [poste, loaded]);
 
   function notify(msg) {
     const jeton = ++toastToken.current;
@@ -4849,6 +4864,8 @@ function AbaApp() {
         return (
           <PanneauDonnees
             appareil={appareil} onSetAppareil={setAppareil}
+            groupes={groupes} groupeAppareil={groupeAppareil} onSetGroupeAppareil={setGroupeAppareil}
+            intervenants={intervenants} poste={poste} onChoisirPoste={choisirPosteIntervenant}
             retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
             onExportConfig={exportConfig} onExportBackup={exportBackup} onImportBackup={importBackup}
           />
@@ -6217,7 +6234,7 @@ function PanneauMotsDePasse({ security, onChangePin, onDisableProtection }) {
 /* Les deux exports existaient déjà, mais sous deux boutons aux libellés
    proches. Ils sont présentés ici comme un seul choix explicite : avec ou sans
    données personnelles. */
-function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup }) {
+function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSetGroupeAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup }) {
   const fileRef = useRef(null);
   const [nom, setNom] = useState(appareil || '');
   useEffect(() => { setNom(appareil || ''); }, [appareil]);
@@ -6241,6 +6258,51 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
             <Check size={18} />
           </Btn>
         </div>
+      </Card>
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <School size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Groupe de cette tablette</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Filtre l'écran Suivi sur ce groupe : les personnes d'un autre groupe restent cotables ici,
+          mais leur suivi ne s'affiche que sur la tablette de leur propre groupe. Tant qu'aucun groupe
+          n'est choisi, l'écran Suivi montre tout le monde.
+        </p>
+        <select
+          value={groupeAppareil || ''}
+          onChange={(ev) => onSetGroupeAppareil(ev.target.value)}
+          className="w-full rounded-lg px-2.5 py-2 text-sm border"
+          style={{ borderColor: BORDER, backgroundColor: CARD }}
+        >
+          <option value="">Aucun (tout afficher)</option>
+          {groupeAppareil && !groupes.some((g) => g.id === groupeAppareil) && (
+            <option value={groupeAppareil}>{nomGroupe(groupes, groupeAppareil)}</option>
+          )}
+          {groupes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+      </Card>
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <UserCog size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Intervenant en poste</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Attribue les relevés de suivi pris hors séance — une pastille appuyée en dehors d'une
+          cotation n'a pas d'autre moyen de savoir qui l'a saisie. Remis à zéro chaque jour : à
+          rechoisir en arrivant, jamais reconduit du jour précédent.
+        </p>
+        <select
+          value={posteValide(poste, Date.now()) ? poste.intervenantId : ''}
+          onChange={(ev) => onChoisirPoste(ev.target.value || null)}
+          className="w-full rounded-lg px-2.5 py-2 text-sm border"
+          style={{ borderColor: BORDER, backgroundColor: CARD }}
+        >
+          <option value="">Aucun</option>
+          {intervenants.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+        </select>
       </Card>
 
       <input
