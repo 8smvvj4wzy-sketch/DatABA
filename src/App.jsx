@@ -4889,9 +4889,14 @@ function AbaApp() {
       case 'suivicontinu':
         return <PanneauSuiviContinu axes={axesSuivi} students={students} onSetAxes={majAxesSuivi} onToggleAxeSuivi={toggleAxeSuivi} focus={focusEcran} />;
       case 'suivi':
+        /* Seul point de filtrage : une personne d'un autre groupe reste
+           cotable partout ailleurs (Session, Export, Personnes), mais ne
+           s'affiche pas ici — cette tablette a produit sa donnée, elle ne
+           la lit pas. personnesVisibles réplique en tout point sans
+           rattachement ni personne sans groupe encore configuré. */
         return (
           <SuiviScreen
-            students={students} sessions={sessions} guidances={guidances}
+            students={personnesVisibles(students, groupeAppareil)} sessions={sessions} guidances={guidances}
             releves={releves} axesSuivi={axesSuivi}
             onResetTracking={resetTracking} onOuvrirMenu={ouvrirMenu}
             onChangePhase={changePhase}
