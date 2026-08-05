@@ -4104,9 +4104,12 @@ function AbaApp() {
   }
 
   /* --- gestion --- */
-  const addStudent = (initials) => setStudents((s) => [...s, { id: uid(), initials, objectives: [] }]);
+  const addStudent = (initials, groupeId = null) => setStudents((s) => [...s, { id: uid(), initials, groupeId, objectives: [] }]);
   const removeStudent = (id) => setStudents((s) => s.filter((x) => x.id !== id));
   const renameStudent = (id, initials) => setStudents((s) => s.map((x) => (x.id === id ? { ...x, initials } : x)));
+  /* Distinct de renameStudent : le groupe conditionne l'écran Suivi
+     (personnesVisibles), pas juste l'affichage d'une fiche. */
+  const setStudentGroupe = (id, groupeId) => setStudents((s) => s.map((x) => (x.id === id ? { ...x, groupeId } : x)));
   const addAtelier = (name) => setAteliers((a) => [...a, { id: uid(), name }]);
   const removeAtelier = (id) => {
     setAteliers((a) => a.filter((x) => x.id !== id));
@@ -4817,6 +4820,7 @@ function AbaApp() {
             students={students} guidances={guidances} templates={objectiveTemplates} focus={focusEcran}
             premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
+            groupes={groupes} onSetGroupe={setStudentGroupe}
             axesSuivi={axesSuivi} onToggleAxeSuivi={toggleAxeSuivi}
             onCreerSuivi={creerSuiviPour}
             onAjouterCompteur={ajouterCompteur} onRenommerCompteur={renommerCompteur} onSupprimerCompteur={supprimerCompteur}
@@ -6366,7 +6370,7 @@ function BoutonPhase({ obj, onChange }) {
    distance, une carte dans Gestion et une carte dans Personnes. */
 function PanneauPersonnes({
   students, guidances, templates, premiereConfiguration, focus,
-  addStudent, removeStudent, renameStudent, axesSuivi, onToggleAxeSuivi, onCreerSuivi,
+  addStudent, removeStudent, renameStudent, groupes, onSetGroupe, axesSuivi, onToggleAxeSuivi, onCreerSuivi,
   onAjouterCompteur, onRenommerCompteur, onSupprimerCompteur,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
   onOuvrirGuidances, onOuvrirModeles, onOuvrirAteliers, onOuvrirIntervenants,
@@ -6478,6 +6482,28 @@ function PanneauPersonnes({
                       if (window.confirm(`Supprimer ${s.initials} et ses ${s.objectives.length} objectif(s) ?`)) removeStudent(s.id);
                     }}
                   />
+                  {/* Le groupe distingue deux personnes aux mêmes initiales et
+                      décide, tablette par tablette, de qui apparaît sur l'écran
+                      Suivi (personnesVisibles). Sans groupe, une personne reste
+                      visible partout — ce n'est jamais un état bloquant. */}
+                  <div className="mt-2.5">
+                    <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Groupe</div>
+                    <select
+                      value={s.groupeId || ''}
+                      onChange={(ev) => onSetGroupe(s.id, ev.target.value || null)}
+                      className="w-full rounded-lg px-2.5 py-2 text-sm border"
+                      style={{ borderColor: BORDER, backgroundColor: CARD }}
+                    >
+                      <option value="">Sans groupe</option>
+                      {/* Un groupe supprimé reste proposé sur la personne qui le
+                          porte : sans ça, ouvrir la fiche le réécrirait en
+                          silence vers « Sans groupe ». */}
+                      {s.groupeId && !groupes.some((g) => g.id === s.groupeId) && (
+                        <option value={s.groupeId}>{nomGroupe(groupes, s.groupeId)}</option>
+                      )}
+                      {groupes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                    </select>
+                  </div>
                   {/* Seuls les suivis actifs de cette personne figurent ici.
                       La bibliothèque étant illimitée, tous les lister en
                       interrupteurs faisait grossir la fiche sans fin : le choix
