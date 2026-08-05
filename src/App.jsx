@@ -1831,6 +1831,49 @@ function nomGroupe(groupes, id) {
   return g ? g.name : '';
 }
 
+/* Personnes exportées vers une autre tablette : filtre STRICT, à l'inverse de
+   personnesVisibles qui garde une personne sans groupe partout. Ici l'absence
+   de groupe ne doit jamais faire partir une personne dans « mes profils » —
+   l'ambiguïté de propriété serait pire qu'une omission. Un `groupeId` vide en
+   argument (tablette pas encore rattachée) renvoie donc toujours une liste
+   vide, même si des personnes locales partagent ce même « aucun groupe » —
+   « exporter les profils de mon groupe » n'a pas de sens sans groupe. */
+function profilsDuGroupe(students, groupeId) {
+  if (!groupeId) return [];
+  return (students || []).filter((s) => s.groupeId === groupeId);
+}
+
+/* Les seuls axes de suivi continu réellement référencés par les personnes
+   exportées — pas tout le référentiel de la tablette source, qui peut porter
+   des axes propres à d'autres groupes. */
+function axesUtilises(students, axesSuivi) {
+  const ids = new Set();
+  (students || []).forEach((s) => (s.suivisActifs || []).forEach((id) => ids.add(id)));
+  return (axesSuivi || []).filter((a) => a && ids.has(a.id));
+}
+
+/* Fichier destiné à une autre tablette : les profils (personnes + objectifs)
+   d'un groupe, ou le référentiel complet lors d'une rediffusion depuis la
+   tablette centrale (`portee: 'complet'`). La liste COMPLÈTE des groupes
+   voyage toujours, quelle que soit la portée : c'est elle qui permet de
+   résoudre un groupe importé par son nom plutôt que par un id qui n'a aucun
+   sens sur la tablette qui reçoit (voir resoudreGroupeImporte). Ni ateliers,
+   ni emploi du temps, ni les listes d'objectifs propres à un atelier — hors
+   périmètre d'un profil de personne, déjà exclues d'exportConfig pour la
+   même raison. */
+function payloadProfils({ students, groupes, axesSuivi, appareil, portee, maintenant }) {
+  return {
+    format: 'aba-profils',
+    version: 1,
+    exportedAt: new Date(maintenant).toISOString(),
+    appareil,
+    portee,
+    groupes,
+    students,
+    axesSuivi,
+  };
+}
+
 /* Compteur d'occurrence d'une personne, par id — repli explicite pour un
    compteur supprimé, même principe que CRITERE_INCONNU. */
 const COMPTEUR_INCONNU = { id: null, nom: 'Compteur retiré' };
