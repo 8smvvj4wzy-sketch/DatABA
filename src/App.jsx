@@ -6653,7 +6653,11 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
 
       <div>
         <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Mode de cotation</div>
-        <div className="grid grid-cols-2 gap-1.5">
+        {/* Flex plutôt qu'une grille à colonnes fixes : TYPES compte cinq
+            entrées, un nombre impair qui laisserait toujours la dernière
+            case orpheline sur deux colonnes. Le grow fait remonter ce reste
+            à la largeur de la ligne au lieu de le laisser vide à côté. */}
+        <div className="flex flex-wrap gap-1.5">
           {Object.entries(TYPES).map(([k, m]) => {
             const Icon = m.icon;
             const on = type === k;
@@ -6662,7 +6666,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
                 key={k}
                 onClick={() => setType(k)}
                 className="rounded-xl px-2.5 py-2.5 text-xs flex items-center gap-1.5 border text-left"
-                style={{ borderColor: on ? m.color : BORDER, backgroundColor: on ? m.color + '18' : 'transparent', color: on ? m.color : INK_SOFT }}
+                style={{ flex: '1 1 calc(50% - 0.375rem)', borderColor: on ? m.color : BORDER, backgroundColor: on ? m.color + '18' : 'transparent', color: on ? m.color : INK_SOFT }}
               >
                 <Icon size={14} /> {m.label}
               </button>
@@ -7734,11 +7738,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      laissé libre est repris par l'objectif suivant, même s'il appartient à
      une autre personne. Le nombre de colonnes suit la largeur disponible,
      donc la densité choisie. */
-  const gridStyle = {
-    zoom,
-    columnWidth: '280px',
-    columnGap: '0.75rem',
-  };
   const gridItemStyle = {
     breakInside: 'avoid',
     WebkitColumnBreakInside: 'avoid',
@@ -7747,6 +7746,17 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     width: '100%',
     marginBottom: '0.75rem',
   };
+  /* Les colonnes CSS ne répartissent vraiment les fiches sur plusieurs
+     colonnes qu'à partir de trois : avec une ou deux — le cas le plus
+     courant en début de suivi, quand une personne n'a encore qu'un ou deux
+     objectifs — le navigateur les empile dans la première colonne et laisse
+     le reste de la largeur inoccupé, quelle que soit la place disponible.
+     En dessous de ce seuil, une rangée flex n'a pas ce défaut. */
+  const packStyle = (count, colWidth) => (
+    count >= 3
+      ? { style: { zoom, columnWidth: `${colWidth}px`, columnGap: '0.75rem' }, itemStyle: gridItemStyle }
+      : { style: { zoom, display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }, itemStyle: { flex: `1 1 ${colWidth}px`, minWidth: 0 } }
+  );
   const cotationRef = useRef(null);
 
   /* Personnes dont les cotations sont à l'écran. Une personne repartie sort de
@@ -8119,13 +8129,14 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
               /* Sans Équilibre, un flux unique suffit. */
               if (balanceKeys.length === 0) {
+                const pack = packStyle(priorityItems.length, 280);
                 return (
                   <ReorderList
                     items={priorityItems}
                     keyOf={(k) => k}
                     onReorder={reorderPriority}
-                    style={gridStyle}
-                    itemStyle={gridItemStyle}
+                    style={pack.style}
+                    itemStyle={pack.itemStyle}
                     renderItem={carte}
                   />
                 );
@@ -8133,13 +8144,12 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
               /* Avec Équilibre : il occupe la zone principale, les autres
                  objectifs prioritaires passent sur le côté. Deux Équilibre ou plus
-                 se placent côte à côte dans cette zone. */
-              const styleBalance = {
-                zoom,
-                columnWidth: balanceKeys.length > 1 ? '340px' : '100%',
-                columnGap: '0.75rem',
-              };
-              const styleCote = { zoom, columnWidth: '260px', columnGap: '0.75rem' };
+                 se placent côte à côte dans cette zone — un seul reste étalé sur
+                 toute la largeur, cas que packStyle ne couvre pas. */
+              const packBalance = balanceKeys.length > 1
+                ? packStyle(balanceKeys.length, 340)
+                : { style: { zoom, columnWidth: '100%', columnGap: '0.75rem' }, itemStyle: gridItemStyle };
+              const packCote = packStyle(autresKeys.length, 260);
 
               return (
                 <div className="flex flex-col landscape:flex-row gap-3 items-start">
@@ -8148,8 +8158,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       items={balanceKeys}
                       keyOf={(k) => k}
                       onReorder={reorderPriority}
-                      style={styleBalance}
-                      itemStyle={gridItemStyle}
+                      style={packBalance.style}
+                      itemStyle={packBalance.itemStyle}
                       renderItem={carte}
                     />
                   </div>
@@ -8160,8 +8170,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                         items={autresKeys}
                         keyOf={(k) => k}
                         onReorder={reorderPriority}
-                        style={styleCote}
-                        itemStyle={gridItemStyle}
+                        style={packCote.style}
+                        itemStyle={packCote.itemStyle}
                         renderItem={carte}
                       />
                     </div>
@@ -8179,8 +8189,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 items={objIds}
                 keyOf={(oid) => oid}
                 onReorder={(next) => reorderObjectives(currentId, next)}
-                style={gridStyle}
-                itemStyle={gridItemStyle}
+                style={packStyle(objIds.length, 280).style}
+                itemStyle={packStyle(objIds.length, 280).itemStyle}
                 renderItem={(oid) => {
                   const obj = session.objectiveSnapshot[oid];
                   if (!obj) return null;
