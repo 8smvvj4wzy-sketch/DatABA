@@ -178,9 +178,9 @@ function isIndependentCode(guidances, code) {
 }
 
 const TYPES = {
-  trials: { label: 'Essai par essai', short: 'Essais', icon: ListChecks, color: CAT_VIOLET },
-  occurrence: { label: 'Par occurrence', short: 'Occurrence', icon: Hash, color: CAT_TEAL },
-  interval: { label: 'Niveau par intervalle', short: 'Intervalle', icon: LayoutGrid, color: CAT_LILAC },
+  trials: { label: 'Essais', short: 'Essais', icon: ListChecks, color: CAT_VIOLET },
+  occurrence: { label: 'Occurrence', short: 'Occurrence', icon: Hash, color: CAT_TEAL },
+  interval: { label: 'Intervalles', short: 'Intervalles', icon: LayoutGrid, color: CAT_LILAC },
   chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: CAT_CYAN },
   balance: { label: 'Équilibre', short: 'Équilibre', icon: Route, color: CAT_INDIGO },
 };
@@ -2309,7 +2309,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
             const g = guidanceByCode(gl, code);
             const ms = trialMs(t);
             rows.push([
-              ...b, 'Essai par essai', i + 1, '', g ? g.label : code,
+              ...b, 'Essais', i + 1, '', g ? g.label : code,
               isIndependentCode(gl, code) ? 1 : 0, '', '',
               ms == null ? '' : Math.round(ms / 100) / 10,
               ...mesureEssaiCells(entry, i),
@@ -2352,11 +2352,11 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
           const levels = obj.config.levels || [];
           Object.entries(entry.marks || {}).forEach(([n, lid]) => {
             const lv = levels.find((l) => l.id === lid);
-            if (lv) rows.push([...b, 'Intervalle', Number(n), '', lv.name, '', '', '', '', '', '']);
+            if (lv) rows.push([...b, 'Intervalles', Number(n), '', lv.name, '', '', '', '', '', '']);
           });
           (entry.segments || []).forEach((seg) => {
             const lv = levels.find((l) => l.id === seg.levelId);
-            if (lv) rows.push([...b, 'Intervalle (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '', segmentSeconds(seg), '', '']);
+            if (lv) rows.push([...b, 'Intervalles (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '', segmentSeconds(seg), '', '']);
           });
         }
       });
@@ -4915,7 +4915,8 @@ function AbaApp() {
           // CRISE (désormais hors flux, voir plus bas) et le bord de l'écran.
           // Ce padding doit rester assez grand pour contenir ces libellés :
           // ils ne comptent plus dans la hauteur de la rangée qui les porte.
-          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.25rem)',
+          // Gardé au-dessus de 0 pour laisser une marge visible avec le bord.
+          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.75rem)',
           display: saisieEnCours ? 'none' : undefined,
         }}
       >
