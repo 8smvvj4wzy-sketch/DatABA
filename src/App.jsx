@@ -2679,7 +2679,7 @@ function Chip({ label, on, onClick, color = ACCENT }) {
      un chip sélectionné qui l'utilisait comme remplissage devenait blanc sur
      blanc. Le remplissage par défaut est l'accent, avec son texte apparié —
      exactement le motif documenté pour les chips sélectionnés. */
-  const texte = color === ACCENT ? ACCENT_INK : '#fff';
+  const texte = color === ACCENT ? ACCENT_INK : texteLisibleSur(color);
   return (
     <button
       onClick={onClick}
@@ -4957,7 +4957,7 @@ function AbaApp() {
                       className={unAxe ? 'px-2.5 py-1.5 flex items-center' : 'w-3 self-stretch'}
                       style={{
                         backgroundColor: b.meta ? b.meta.color : BORDER,
-                        color: '#fff',
+                        color: b.meta ? texteLisibleSur(b.meta.color) : '#fff',
                       }}
                     >
                       {unAxe ? (b.meta ? b.meta.l : 'à noter') : ''}
@@ -9186,7 +9186,7 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
                 style={{
                   fontFamily: F_MONO,
                   backgroundColor: color || CARD,
-                  color: color ? '#fff' : INK_SOFT,
+                  color: color ? texteLisibleSur(color) : INK_SOFT,
                   borderColor: hasCrisis ? CRISIS : color || BORDER,
                   boxShadow: n === current ? `0 0 0 2px ${TYPES.interval.color}55` : 'none',
                 }}>
@@ -9220,7 +9220,7 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
                 onChange({ marks });
               }}
               className="rounded-xl py-3 px-2.5 text-sm border-2 text-left leading-tight break-words hyphens-auto active:scale-95 transition-transform"
-              style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? '#fff' : color, fontFamily: F_DISPLAY, overflowWrap: 'anywhere' }}>
+              style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? texteLisibleSur(color) : color, fontFamily: F_DISPLAY, overflowWrap: 'anywhere' }}>
               {l.name}
             </button>
           );
@@ -9286,7 +9286,7 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
                 return (
                   <button key={l.id} onClick={() => setLevelId(l.id)}
                     className="rounded-lg px-2.5 py-2 text-xs border leading-tight break-words"
-                    style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? '#fff' : color, overflowWrap: 'anywhere' }}>
+                    style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? texteLisibleSur(color) : color, overflowWrap: 'anywhere' }}>
                     {l.name}
                   </button>
                 );
@@ -9352,7 +9352,7 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
                   return (
                     <button key={g.code} onClick={() => setStep(s.id, g.code)}
                       className="flex-1 min-w-[56px] rounded-lg py-2 text-xs font-semibold border active:scale-95 transition-transform"
-                      style={{ fontFamily: F_DISPLAY, borderColor: on ? g.color : BORDER, backgroundColor: on ? g.color : 'transparent', color: on ? '#fff' : INK_SOFT }}
+                      style={{ fontFamily: F_DISPLAY, borderColor: on ? g.color : BORDER, backgroundColor: on ? g.color : 'transparent', color: on ? texteLisibleSur(g.color) : INK_SOFT }}
                       title={g.label}>
                       {g.code}
                     </button>
@@ -9437,7 +9437,7 @@ function BalanceWidget({ obj, entry, onChange }) {
                 fontFamily: F_MONO,
                 borderColor: on ? TYPES.balance.color : BORDER,
                 backgroundColor: on ? TYPES.balance.color : coded ? PAPER : 'transparent',
-                color: on ? '#fff' : INK_SOFT,
+                color: on ? texteLisibleSur(TYPES.balance.color) : INK_SOFT,
               }}
             >
               E{i + 1}
@@ -9466,7 +9466,7 @@ function BalanceWidget({ obj, entry, onChange }) {
                       key={o.k}
                       onClick={() => setStep(st.id, { outcome: on ? null : o.k })}
                       className="flex-1 min-w-[44px] rounded-lg py-2 text-xs font-semibold border active:scale-95 transition-transform"
-                      style={{ fontFamily: F_DISPLAY, borderColor: on ? o.color : BORDER, backgroundColor: on ? o.color : 'transparent', color: on ? '#fff' : INK_SOFT }}
+                      style={{ fontFamily: F_DISPLAY, borderColor: on ? o.color : BORDER, backgroundColor: on ? o.color : 'transparent', color: on ? texteLisibleSur(o.color) : INK_SOFT }}
                       title={o.label}
                     >
                       {o.short}
@@ -9478,14 +9478,14 @@ function BalanceWidget({ obj, entry, onChange }) {
                 <button
                   onClick={() => setStep(st.id, { demande: !e.demande })}
                   className="flex-1 rounded-lg py-1.5 text-xs border flex items-center justify-center gap-1"
-                  style={{ borderColor: e.demande ? CAT_CYAN : BORDER, backgroundColor: e.demande ? CAT_CYAN : 'transparent', color: e.demande ? '#fff' : INK_SOFT }}
+                  style={{ borderColor: e.demande ? CAT_CYAN : BORDER, backgroundColor: e.demande ? CAT_CYAN : 'transparent', color: e.demande ? texteLisibleSur(CAT_CYAN) : INK_SOFT }}
                 >
                   <MessageSquare size={12} /> Demande
                 </button>
                 <button
                   onClick={() => setStep(st.id, { renforce: !e.renforce })}
                   className="flex-1 rounded-lg py-1.5 text-xs border flex items-center justify-center gap-1"
-                  style={{ borderColor: e.renforce ? CAT_AMBER : BORDER, backgroundColor: e.renforce ? CAT_AMBER : 'transparent', color: e.renforce ? '#fff' : INK_SOFT }}
+                  style={{ borderColor: e.renforce ? CAT_AMBER : BORDER, backgroundColor: e.renforce ? CAT_AMBER : 'transparent', color: e.renforce ? texteLisibleSur(CAT_AMBER) : INK_SOFT }}
                 >
                   <Gift size={12} /> Renforcé
                 </button>
@@ -10073,7 +10073,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
             className="shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium flex items-center gap-1"
             style={{
               backgroundColor: mastery.mastered ? CAT_TEAL : PAPER,
-              color: mastery.mastered ? '#fff' : INK_SOFT,
+              color: mastery.mastered ? texteLisibleSur(CAT_TEAL) : INK_SOFT,
               fontFamily: F_DISPLAY,
             }}
           >
@@ -10093,7 +10093,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
               <span key={t.id} className="text-xs rounded-lg px-2 py-1 flex items-center gap-1"
                 style={{
                   backgroundColor: done ? CAT_TEAL : active ? ACCENT : PAPER,
-                  color: done ? '#fff' : active ? ACCENT_INK : INK_SOFT,
+                  color: done ? texteLisibleSur(CAT_TEAL) : active ? ACCENT_INK : INK_SOFT,
                 }}>
                 {done && <Check size={11} />} {t.name}
               </span>
@@ -10298,7 +10298,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
       style={{
         borderColor: sent ? CAT_TEAL : BORDER,
         backgroundColor: sent ? CAT_TEAL : 'transparent',
-        color: sent ? '#fff' : INK_SOFT,
+        color: sent ? texteLisibleSur(CAT_TEAL) : INK_SOFT,
       }}
       title="Appuyer pour changer le statut manuellement"
     >
@@ -10361,7 +10361,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
                 relecture — ABC, intensité, commentaire. L'indicateur existait
                 depuis toujours sans que rien ne l'affiche. */}
             {c.aCompleter && (
-              <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5" style={{ backgroundColor: CAT_AMBER, color: '#fff' }}>
+              <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5" style={{ backgroundColor: CAT_AMBER, color: texteLisibleSur(CAT_AMBER) }}>
                 à compléter
               </span>
             )}
@@ -10377,7 +10377,10 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
             )}
             {c.intensite && (
               <span className="text-xs shrink-0 rounded-md px-1.5 py-0.5"
-                style={{ backgroundColor: (CRISIS_INTENSITES.find((x) => x.n === c.intensite) || {}).color, color: '#fff' }}>
+                style={{
+                  backgroundColor: (CRISIS_INTENSITES.find((x) => x.n === c.intensite) || {}).color,
+                  color: texteLisibleSur((CRISIS_INTENSITES.find((x) => x.n === c.intensite) || {}).color || '#000'),
+                }}>
                 {c.intensite}
               </span>
             )}
