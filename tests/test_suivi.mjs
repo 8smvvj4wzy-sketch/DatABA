@@ -53,8 +53,9 @@ const NOMS = [
   'migrerReleves', 'migrerStudentsSuivi', 'migrerAxesSuivi',
   'jourLocal', 'dureeReleve', 'journeesSuivi', 'migrerEnvoisCrises',
   'grouperParJour', 'libelleJour', 'segmentAppareil', 'nomFichier', 'timeShort',
+  'compteurDe', 'nomAxe', 'nomCompteur',
 ];
-const code = `const CRISIS = '#B3261E';\nconst CAT_TEAL = ${extraireLigne('CAT_TEAL')};\nconst CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};\nconst CAT_AMBER = ${extraireLigne('CAT_AMBER')};\nconst CAT_CORAL = ${extraireLigne('CAT_CORAL')};\nconst CAT_VIOLET = ${extraireLigne('CAT_VIOLET')};\nconst CAT_CYAN = ${extraireLigne('CAT_CYAN')};\nconst CAT_LILAC = ${extraireLigne('CAT_LILAC')};\nconst CAT_SLATE = ${extraireLigne('CAT_SLATE')};\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
+const code = `const CRISIS = '#B3261E';\nconst CAT_TEAL = ${extraireLigne('CAT_TEAL')};\nconst CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};\nconst CAT_AMBER = ${extraireLigne('CAT_AMBER')};\nconst CAT_CORAL = ${extraireLigne('CAT_CORAL')};\nconst CAT_VIOLET = ${extraireLigne('CAT_VIOLET')};\nconst CAT_CYAN = ${extraireLigne('CAT_CYAN')};\nconst CAT_LILAC = ${extraireLigne('CAT_LILAC')};\nconst CAT_SLATE = ${extraireLigne('CAT_SLATE')};\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\nconst COMPTEUR_INCONNU = ${extraireLigne('COMPTEUR_INCONNU')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
 // eslint-disable-next-line no-new-func
 const {
   DEFAULT_CRITERES_SUIVI, CRITERE_INCONNU, DEFAULT_SUIVIS,
@@ -63,6 +64,7 @@ const {
   migrerReleves, migrerStudentsSuivi, migrerAxesSuivi,
   jourLocal, dureeReleve, journeesSuivi, migrerEnvoisCrises,
   grouperParJour, libelleJour, segmentAppareil, nomFichier, timeShort, PASTILLE_PAVES_MAX,
+  compteurDe, nomAxe, nomCompteur,
 } = new Function(code)();
 
 /* Le nombre d'axes n'est plus borné : seule la pastille de la barre du bas
@@ -72,6 +74,11 @@ t('migrerAxesSuivi replie sur les axes par défaut si rien n\'est stocké', migr
 t('migrerAxesSuivi replie sur les axes par défaut si la liste est vide', migrerAxesSuivi([]), DEFAULT_SUIVIS);
 t('migrerAxesSuivi complète un axe sans critères', migrerAxesSuivi([{ id: 'x', nom: 'Test' }]), [{ id: 'x', nom: 'Test', criteres: [] }]);
 t('migrerAxesSuivi écarte un critère sans clé', migrerAxesSuivi([{ id: 'x', nom: 'Test', criteres: [{ l: 'Sans clé' }, { k: 'ok', l: 'Ok', color: '#000000' }] }])[0].criteres.map((c) => c.k), ['ok']);
+/* Un axe créé mais pas encore renommé porte un nom vide (champ à placeholder,
+   pas de valeur à effacer) : la migration ne doit pas le confondre avec un
+   axe stocké sans le champ du tout, sous peine de le re-remplir à chaque
+   rechargement. */
+t('migrerAxesSuivi préserve un nom volontairement vide', migrerAxesSuivi([{ id: 'x', nom: '', criteres: [] }])[0].nom, '');
 
 /* ==================== Critères par défaut ==================== */
 t('quatre critères par défaut, et pas un de plus', DEFAULT_CRITERES_SUIVI.map((c) => c.k), ['stable', 'pre-crise', 'crise', 'post-crise']);

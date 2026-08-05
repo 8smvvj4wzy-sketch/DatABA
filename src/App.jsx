@@ -6,8 +6,8 @@ import {
   Timer as TimerIcon, LayoutGrid, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
-  ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, Share2, Vibrate, GripVertical, CalendarClock, CalendarDays, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
-  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon,
+  ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, GripVertical, CalendarClock, CalendarDays, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
+  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon, Info,
 } from 'lucide-react';
 
 /* ==================== Design tokens ====================
@@ -289,10 +289,12 @@ const CRISIS_FUNCTIONS = [
   { k: 'indetermine', label: 'Indéterminée', color: CAT_SLATE },
 ];
 
+/* Trois lignes vides à la création — le placeholder porte le numéro, pas de
+   texte à effacer avant de saisir. */
 const DEFAULT_CHAIN_STEPS = [
-  { id: 'st1', name: 'Étape 1' },
-  { id: 'st2', name: 'Étape 2' },
-  { id: 'st3', name: 'Étape 3' },
+  { id: 'st1', name: '' },
+  { id: 'st2', name: '' },
+  { id: 'st3', name: '' },
 ];
 
 const DEFAULT_INTERVAL_LEVELS = [
@@ -1626,7 +1628,7 @@ function journeesSuivi(releves, students, suivis, studentFilter) {
         jour,
         date: new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString(),
         initials: (st || {}).initials || '?',
-        nomAxe: estCompteur ? compteurDe(st, r.compteurId).nom : (axeDe(suivis, r.suiviId) || {}).nom || 'Suivi retiré',
+        nomAxe: estCompteur ? nomCompteur(compteurDe(st, r.compteurId)) : (axeDe(suivis, r.suiviId) ? nomAxe(axeDe(suivis, r.suiviId)) : 'Suivi retiré'),
         releves: [],
       };
       ordre.push(index[cle]);
@@ -1681,7 +1683,7 @@ function lignesSuiviExport(releves, students, suivis, studentFilter) {
         timeShort(r.timestamp),
         libelleJour(d),
         st ? st.initials : '?',
-        compteurDe(st, r.compteurId).nom,
+        nomCompteur(compteurDe(st, r.compteurId)),
         'occurrence',
         '',
       ];
@@ -1703,7 +1705,7 @@ function lignesSuiviExport(releves, students, suivis, studentFilter) {
       timeShort(r.timestamp),
       libelleJour(d),
       st ? st.initials : '?',
-      axe ? axe.nom : 'Suivi retiré',
+      axe ? nomAxe(axe) : 'Suivi retiré',
       critereLabel,
       duree,
     ];
@@ -1757,6 +1759,17 @@ function compteurDe(student, compteurId) {
   return ((student && student.compteurs) || []).find((c) => c.id === compteurId) || COMPTEUR_INCONNU;
 }
 
+/* Nom affichable d'un axe de suivi continu ou d'un compteur d'occurrence : ils
+   naissent sans nom (champ vide à placeholder, pas de valeur à effacer), donc
+   tant qu'ils ne sont pas renommés, ce repli évite une ligne muette dans la
+   frise, la fiche d'une personne ou l'export. */
+function nomAxe(axe) {
+  return (axe && axe.nom && axe.nom.trim()) || 'Suivi sans nom';
+}
+function nomCompteur(c) {
+  return (c && c.nom && c.nom.trim()) || 'Compteur sans nom';
+}
+
 /* Repli sur la configuration par défaut si aucun axe n'a encore été
    enregistré, et filtrage défensif des entrées mal formées — un axe stocké
    sans liste de critères, ou un critère sans clé, ne doit pas faire planter
@@ -1769,9 +1782,13 @@ function migrerAxesSuivi(stocke) {
       // L'axe historique (id « principal ») portait le nom de la
       // fonctionnalité elle-même ; les tablettes déjà en service le portent
       // encore. Un nom personnalisé, sur cet axe ou un autre, n'est jamais
-      // écrasé.
+      // écrasé — y compris un nom volontairement vide (axe créé mais pas
+      // encore renommé) : `typeof` distingue ce cas de l'absence totale du
+      // champ, seule situation où le nom par défaut s'applique.
       const nomParDefaut = a.id === 'principal' ? 'Suivi de stabilité' : 'Suivi continu';
-      const nom = a.id === 'principal' && a.nom === 'Suivi continu' ? 'Suivi de stabilité' : (a.nom || nomParDefaut);
+      const nom = a.id === 'principal' && a.nom === 'Suivi continu'
+        ? 'Suivi de stabilité'
+        : typeof a.nom === 'string' ? a.nom : nomParDefaut;
       return { id: a.id, nom, criteres: (a.criteres || []).filter((c) => c && c.k) };
     });
 }
@@ -2578,19 +2595,22 @@ function downloadBlob(blob, filename) {
    « Enregistrer dans Fichiers » vers un dossier OneDrive/SharePoint synchronisé
    si configuré sur la tablette. Plus de repli par mail : si le partage natif
    n'est pas disponible, le fichier est simplement téléchargé, à déposer
-   manuellement dans le dossier voulu. */
+   manuellement dans le dossier voulu. Renvoie `false` seulement quand
+   l'utilisateur a annulé la feuille de partage — les appelants s'en servent
+   pour ne pas archiver un envoi qui n'est jamais parti. */
 async function shareReport({ blob, name, title, notify }) {
   try {
     const file = new File([blob], name, { type: blob.type });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({ files: [file], title });
-      return;
+      return true;
     }
   } catch (e) {
-    if (e && e.name === 'AbortError') return;
+    if (e && e.name === 'AbortError') return false;
   }
   downloadBlob(blob, name);
   if (notify) notify('Fichier téléchargé — à déposer dans le dossier SharePoint');
+  return true;
 }
 
 /* ==================== Composants UI de base ==================== */
@@ -2668,6 +2688,20 @@ function Chip({ label, on, onClick, color = ACCENT }) {
     >
       {label}
     </button>
+  );
+}
+
+/* Porteur d'identité d'une personne accompagnée : une pilule, ses initiales
+   en entier (ponctuation retirée). Unique porteur du nom dans une ligne de
+   liste — pas de titre texte à côté, ça ferait doublon. */
+function PastillePersonne({ initials, taille = 40 }) {
+  return (
+    <span
+      className="rounded-full flex items-center justify-center text-sm font-semibold shrink-0"
+      style={{ minWidth: taille, height: taille, padding: '0 0.6rem', backgroundColor: ACCENT, color: ACCENT_INK, fontFamily: F_DISPLAY }}
+    >
+      {initials.replace(/\./g, '')}
+    </span>
   );
 }
 
@@ -2923,6 +2957,40 @@ function Modale({ titre, onClose, children, className }) {
         {children}
       </div>
     </div>
+  );
+}
+
+/* Icône d'aide qui ouvre une bulle d'information au tap — le seul mécanisme
+   d'aide contextuelle de l'app jusqu'ici était l'attribut natif `title`,
+   inopérant au tactile. Se referme au second tap sur l'icône, au tap sur la
+   bulle elle-même, ou au tap ailleurs dans l'écran. */
+function BulleInfo({ titre, children }) {
+  const [ouvert, setOuvert] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!ouvert) return;
+    const surExterieur = (ev) => { if (ref.current && !ref.current.contains(ev.target)) setOuvert(false); };
+    document.addEventListener('pointerdown', surExterieur);
+    return () => document.removeEventListener('pointerdown', surExterieur);
+  }, [ouvert]);
+
+  return (
+    <span className="relative inline-flex" ref={ref}>
+      <button onClick={() => setOuvert((v) => !v)} style={{ color: INK_SOFT }} aria-label={titre || "Plus d'information"}>
+        <Info size={14} />
+      </button>
+      {ouvert && (
+        <div
+          onClick={() => setOuvert(false)}
+          className="absolute z-30 top-full right-0 mt-2 rounded-xl p-3 text-xs shadow-lg"
+          style={{ backgroundColor: CARD, border: `1px solid ${BORDER}`, color: INK_SOFT, maxWidth: '17rem', width: '17rem' }}
+        >
+          {titre && <div className="font-semibold mb-1" style={{ color: INK, fontFamily: F_DISPLAY }}>{titre}</div>}
+          {children}
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -4114,15 +4182,22 @@ function AbaApp() {
     };
   }
 
-  function exportManager(seancesRetenues, chiffre) {
+  /* Même boîte de dialogue que l'export Excel — partage natif, ou
+     téléchargement si le partage n'est pas disponible — et même règle
+     d'archivage : `apresExport` (la fonction qui marque les séances comme
+     transmises) n'est appelée que si le fichier est réellement parti. Pour le
+     chemin chiffré, la continuation attend la validation de la passphrase :
+     voir confirmExport. */
+  async function exportManager(seancesRetenues, chiffre, apresExport) {
     const payload = payloadManager(seancesRetenues);
     const nom = nomFichier('pour-manager', appareil, 'json');
     if (!chiffre) {
-      downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), nom);
-      notify('Fichier Manager exporté sans chiffrement');
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const ok = await shareReport({ blob, name: nom, title: nom, notify });
+      if (ok && apresExport) apresExport();
       return;
     }
-    setBackupPrompt({ mode: 'export', managerPayload: payload, managerNom: nom });
+    setBackupPrompt({ mode: 'export', managerPayload: payload, managerNom: nom, apresExport });
   }
 
   /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
@@ -4139,9 +4214,11 @@ function AbaApp() {
   async function confirmExport(passphrase) {
     if (backupPrompt && backupPrompt.managerPayload) {
       const enveloppe = await encryptJSON(backupPrompt.managerPayload, passphrase);
-      downloadBlob(new Blob([JSON.stringify(enveloppe)], { type: 'application/json' }), backupPrompt.managerNom);
+      const blob = new Blob([JSON.stringify(enveloppe)], { type: 'application/json' });
+      const ok = await shareReport({ blob, name: backupPrompt.managerNom, title: backupPrompt.managerNom, notify });
+      const apresExport = backupPrompt.apresExport;
       setBackupPrompt(null);
-      notify('Fichier Manager chiffré exporté');
+      if (ok && apresExport) apresExport();
       return;
     }
     const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, emploiDuTemps, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
@@ -4385,7 +4462,7 @@ function AbaApp() {
      bibliothèque, il est activé pour elle, et son panneau s'ouvre dessus pour
      qu'on en définisse les critères dans la foulée. */
   const creerSuiviPour = (studentId) => {
-    const axe = { id: uid(), nom: 'Nouveau suivi', criteres: [] };
+    const axe = { id: uid(), nom: '', criteres: [] };
     setAxesSuivi((l) => [...l, axe]);
     setStudents((l) => l.map((s) => (s.id === studentId ? { ...s, suivisActifs: [...(s.suivisActifs || []), axe.id] } : s)));
     ouvrirEcran('suivicontinu', { axe: axe.id });
@@ -4404,7 +4481,7 @@ function AbaApp() {
      propre fiche. Le seul lien avec la bibliothèque de suivi continu est le
      stockage des relevés — même tableau, même export. */
   const ajouterCompteur = (studentId) =>
-    setStudents((l) => l.map((s) => (s.id === studentId ? { ...s, compteurs: [...(s.compteurs || []), { id: uid(), nom: 'Nouveau compteur' }] } : s)));
+    setStudents((l) => l.map((s) => (s.id === studentId ? { ...s, compteurs: [...(s.compteurs || []), { id: uid(), nom: '' }] } : s)));
 
   const renommerCompteur = (studentId, compteurId, nom) =>
     setStudents((l) => l.map((s) => (s.id === studentId
@@ -4636,6 +4713,7 @@ function AbaApp() {
             onResetTracking={resetTracking} onOuvrirMenu={ouvrirMenu}
             onChangePhase={changePhase}
             onOuvrirObjectif={(sid, oid) => ouvrirEcran('personnes', { personne: sid, objectif: oid })}
+            onAjouterObjectif={(sid) => ouvrirEcran('personnes', { personne: sid, nouveau: true })}
             onOuvrirSuivi={(sid) => setChoixSuivi(sid)}
           />
         );
@@ -4644,7 +4722,8 @@ function AbaApp() {
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
             crises={crises} guidances={guidances}
-            onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => setEcran('personnes')}
+            onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => ouvrirEcran('personnes')}
+            onProgrammerEquilibre={(sid) => ouvrirEcran('personnes', { personne: sid, nouveau: 'balance' })}
             onOuvrirMenu={ouvrirMenu} planDuJour={planDuJour}
             activeSession={activeSession} setActiveSession={setActiveSession}
             onAnnulerCorrection={() => allerA('export')}
@@ -4823,7 +4902,7 @@ function AbaApp() {
                   {visibles.map((b) => (
                     <span
                       key={b.axe.id}
-                      title={`${b.axe.nom} — ${b.meta ? b.meta.l : 'non démarré'}`}
+                      title={`${nomAxe(b.axe)} — ${b.meta ? b.meta.l : 'non démarré'}`}
                       className={unAxe ? 'px-2.5 py-1.5 flex items-center' : 'w-3 self-stretch'}
                       style={{
                         backgroundColor: b.meta ? b.meta.color : BORDER,
@@ -5033,7 +5112,7 @@ function AbaApp() {
                 const courant = critereCourant(releves, st.id, axe.id, Date.now());
                 return (
                   <div key={axe.id} className="mb-5 last:mb-0">
-                    <div className="text-sm font-semibold mb-1" style={{ fontFamily: F_DISPLAY }}>{axe.nom}</div>
+                    <div className="text-sm font-semibold mb-1" style={{ fontFamily: F_DISPLAY }}>{nomAxe(axe)}</div>
                     <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
                       {courant
                         ? `${metaCritere(axe.criteres, courant.critere).l} depuis ${timeShort(courant.timestamp)}`
@@ -5082,7 +5161,7 @@ function AbaApp() {
                 const total = comptesCompteurJour(releves, st.id, c.id, Date.now());
                 return (
                   <div key={c.id} className="mb-5 last:mb-0">
-                    <div className="text-sm font-semibold mb-1" style={{ fontFamily: F_DISPLAY }}>{c.nom}</div>
+                    <div className="text-sm font-semibold mb-1" style={{ fontFamily: F_DISPLAY }}>{nomCompteur(c)}</div>
                     <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
                       <span style={{ fontFamily: F_MONO }}>{total}</span> occurrence{total !== 1 ? 's' : ''} aujourd'hui.
                     </p>
@@ -5824,13 +5903,13 @@ function PanneauSuiviContinu({ axes, students, onSetAxes, onToggleAxeSuivi, focu
 
   const actifPour = (axe) => (students || []).filter((s) => (s.suivisActifs || []).includes(axe.id));
 
-  const ajouterAxe = () => onSetAxes([...axes, { id: uid(), nom: 'Nouveau suivi', criteres: [] }]);
+  const ajouterAxe = () => onSetAxes([...axes, { id: uid(), nom: '', criteres: [] }]);
   const supprimerAxe = (axe) => {
     const utilise = actifPour(axe);
     const avertissement = utilise.length
       ? `\n\nIl est actif pour ${utilise.map((s) => s.initials).join(', ')} : il y sera désactivé.`
       : '';
-    if (!window.confirm(`Supprimer le suivi « ${axe.nom} » ?${avertissement}\n\nLes relevés déjà notés restent dans l'historique et l'export, marqués comme un suivi retiré.`)) return;
+    if (!window.confirm(`Supprimer le suivi « ${nomAxe(axe)} » ?${avertissement}\n\nLes relevés déjà notés restent dans l'historique et l'export, marqués comme un suivi retiré.`)) return;
     onSetAxes(axes.filter((a) => a.id !== axe.id));
   };
   return (
@@ -6116,6 +6195,10 @@ function PanneauPersonnes({
   const [initials, setInitials] = useState('');
   /* Personne pour laquelle on choisit un suivi à ajouter. */
   const [ajoutSuivi, setAjoutSuivi] = useState(null);
+  /* Personne pour laquelle un nouvel objectif s'ouvre déjà déplié, et le type
+     à préremplir (ex. 'balance' depuis Session/Équilibre). */
+  const [creationPour, setCreationPour] = useState(null);
+  const [typeNouveau, setTypeNouveau] = useState(null);
   const studentRefs = useRef({});
 
   const ajouter = () => {
@@ -6127,11 +6210,16 @@ function PanneauPersonnes({
 
   /* Lien croisé : ouvrir ce panneau déjà déplié sur une personne, et son
      objectif en édition le cas échéant — depuis le Suivi ou depuis un
-     atelier, plutôt que de retomber sur la liste entière. */
+     atelier, plutôt que de retomber sur la liste entière. `nouveau` ouvre
+     directement le formulaire de création plutôt qu'un objectif existant. */
   useEffect(() => {
     if (!focus || !focus.personne) return;
     setOpenId(focus.personne);
     if (focus.objectif) setEditingObj(focus.objectif);
+    if (focus.nouveau) {
+      setCreationPour(focus.personne);
+      setTypeNouveau(focus.nouveau === true ? null : focus.nouveau);
+    }
     const node = studentRefs.current[focus.personne];
     if (node) node.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [focus]);
@@ -6187,16 +6275,11 @@ function PanneauPersonnes({
           <Card>
             <button className="w-full flex items-center justify-between" onClick={() => setOpenId(openId === s.id ? null : s.id)}>
               <span className="flex items-center gap-3">
-                <span className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold" style={{ backgroundColor: ACCENT, color: ACCENT_INK, fontFamily: F_DISPLAY }}>
-                  {s.initials.replace(/\./g, '').slice(0, 3)}
-                </span>
-                <span className="text-left">
-                  <span className="block font-semibold" style={{ fontFamily: F_DISPLAY }}>{s.initials}</span>
-                  <span className="block text-xs" style={{ color: INK_SOFT }}>
-                    {s.objectives.length} objectif{s.objectives.length !== 1 ? 's' : ''}
-                    {(s.suivisActifs || []).length > 0 &&
-                      ` · ${(s.suivisActifs || []).map((id) => (axeDe(axesSuivi, id) || {}).nom).filter(Boolean).join(', ')}`}
-                  </span>
+                <PastillePersonne initials={s.initials} />
+                <span className="text-left block text-xs" style={{ color: INK_SOFT }}>
+                  {s.objectives.length} objectif{s.objectives.length !== 1 ? 's' : ''}
+                  {(s.suivisActifs || []).length > 0 &&
+                    ` · ${(s.suivisActifs || []).map((id) => axeDe(axesSuivi, id)).filter(Boolean).map(nomAxe).join(', ')}`}
                 </span>
               </span>
               <ChevronRight size={18} style={{ color: INK_SOFT, transform: openId === s.id ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
@@ -6229,7 +6312,7 @@ function PanneauPersonnes({
                             <div key={axe.id} className="rounded-xl px-2.5 py-2 flex items-start gap-2" style={{ backgroundColor: CARD }}>
                               <Activity size={14} style={{ color: INK_SOFT, marginTop: 2 }} className="shrink-0" />
                               <span className="min-w-0 flex-1">
-                                <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{axe.nom}</span>
+                                <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{nomAxe(axe)}</span>
                                 <span className="block text-xs" style={{ color: INK_SOFT }}>
                                   {axe.criteres.map((c) => c.l).join(', ') || 'aucun critère défini'}
                                 </span>
@@ -6266,7 +6349,7 @@ function PanneauPersonnes({
                             </div>
                             <button
                               onClick={() => {
-                                if (window.confirm(`Supprimer le compteur « ${c.nom} » ?\n\nLes occurrences déjà notées restent dans l'historique et l'export, marquées comme un compteur retiré.`)) onSupprimerCompteur(s.id, c.id);
+                                if (window.confirm(`Supprimer le compteur « ${nomCompteur(c)} » ?\n\nLes occurrences déjà notées restent dans l'historique et l'export, marquées comme un compteur retiré.`)) onSupprimerCompteur(s.id, c.id);
                               }}
                               style={{ color: INK_SOFT }}
                               className="shrink-0"
@@ -6373,6 +6456,7 @@ function PanneauPersonnes({
                 <ObjectiveEditor
                   guidances={guidances} templates={templates} onAdd={(o) => addObjective(s.id, o)}
                   onOuvrirGuidances={onOuvrirGuidances} onOuvrirModeles={onOuvrirModeles}
+                  ouvrir={creationPour === s.id} typeInitial={typeNouveau}
                 />
               </div>
             )}
@@ -6426,7 +6510,7 @@ function FeuilleAjoutSuivi({ student, axes, onChoisir, onCreer, onClose }) {
                 className="w-full rounded-xl px-3 py-2.5 text-left border"
                 style={{ borderColor: BORDER }}
               >
-                <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{axe.nom}</span>
+                <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>{nomAxe(axe)}</span>
                 <span className="block text-xs" style={{ color: INK_SOFT }}>
                   {axe.criteres.map((c) => c.l).join(', ') || 'aucun critère défini'}
                 </span>
@@ -6443,10 +6527,18 @@ function FeuilleAjoutSuivi({ student, axes, onChoisir, onCreer, onClose }) {
   );
 }
 
-function ObjectiveEditor({ guidances, templates, onAdd, onOuvrirGuidances, onOuvrirModeles }) {
+function ObjectiveEditor({ guidances, templates, onAdd, onOuvrirGuidances, onOuvrirModeles, ouvrir, typeInitial }) {
   const [open, setOpen] = useState(false);
   const [depuisModele, setDepuisModele] = useState(false);
   const [base, setBase] = useState(null);
+
+  /* Ouverture pilotée depuis l'extérieur (lien croisé Suivi/Session) :
+     directement le formulaire, préempli d'un type si fourni (ex. Équilibre). */
+  useEffect(() => {
+    if (!ouvrir) return;
+    setBase(typeInitial ? { type: typeInitial } : null);
+    setOpen(true);
+  }, [ouvrir, typeInitial]);
 
   if (!open) {
     return (
@@ -6588,7 +6680,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
       config.levels = levels;
       config.targetLevelId = levels.some((l) => l.id === targetLevelId) ? targetLevelId : levels[0].id;
     }
-    if (type === 'chaining' || type === 'balance') config.steps = steps;
+    if (type === 'chaining' || type === 'balance') config.steps = steps.filter((s) => s.name.trim());
     if (type === 'balance' && balanceSet.length) config.balanceOutcomes = balanceSet;
     if (avecCompteur && type !== 'occurrence') {
       config.avecCompteur = true;
@@ -6804,6 +6896,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
                 <input
                   value={st.name}
                   onChange={(e) => setSteps((ls) => ls.map((x) => (x.id === st.id ? { ...x, name: e.target.value } : x)))}
+                  placeholder={`Étape ${i + 1}`}
                   className="text-sm flex-1 min-w-0 bg-transparent border-b"
                   style={{ borderColor: BORDER, color: INK, fontFamily: F_BODY }}
                 />
@@ -7192,7 +7285,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
       </div>
 
       <div className="flex gap-2">
-        <Btn onClick={submit} disabled={!name.trim() || (type === 'interval' && levels.length === 0) || ((type === 'chaining' || type === 'balance') && steps.length === 0)} className="flex-1 text-sm">
+        <Btn onClick={submit} disabled={!name.trim() || (type === 'interval' && levels.length === 0) || ((type === 'chaining' || type === 'balance') && !steps.some((s) => s.name.trim()))} className="flex-1 text-sm">
           {libelleValidation || (initial ? 'Enregistrer les modifications' : "Ajouter l'objectif")}
         </Btn>
         <Btn variant="ghost" onClick={onCancel} className="text-sm">Annuler</Btn>
@@ -7202,7 +7295,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, crises, guidances, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish, onAnnulerCorrection }) {
+function SessionScreen({ students, ateliers, intervenants, crises, guidances, onSetAtelierGroup, notify, onOuvrirConfiguration, onProgrammerEquilibre, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish, onAnnulerCorrection }) {
   if (activeSession) {
     return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} notify={notify} onFinish={onFinish} onAnnulerCorrection={onAnnulerCorrection} suiteDuJour={planDuJour && planDuJour.restants} />;
   }
@@ -7210,6 +7303,7 @@ function SessionScreen({ students, ateliers, intervenants, crises, guidances, on
     <SessionSetup
       students={students} ateliers={ateliers} intervenants={intervenants}
       onSetAtelierGroup={onSetAtelierGroup} notify={notify} onOuvrirConfiguration={onOuvrirConfiguration}
+      onProgrammerEquilibre={onProgrammerEquilibre}
       onOuvrirMenu={onOuvrirMenu} planDuJour={planDuJour}
       onStart={setActiveSession}
     />
@@ -7217,13 +7311,14 @@ function SessionScreen({ students, ateliers, intervenants, crises, guidances, on
 }
 
 /* Tout le réglage d'un atelier avant lancement — personnes présentes,
-   intervenant (facultatif : la carte du haut couvre déjà la proposition du
-   jour), objectifs et options — dans un seul bloc réutilisé pour la
-   proposition du jour comme pour n'importe quel autre atelier déplié.
-   Chaque instance a son propre état local : deux ateliers ouverts à la fois
-   ne doivent pas se marcher dessus. */
+   objectifs et options — dans un seul bloc réutilisé pour la proposition du
+   jour comme pour n'importe quel autre atelier déplié. Chaque instance a son
+   propre état local pour les personnes et objectifs : deux ateliers ouverts à
+   la fois ne doivent pas se marcher dessus. L'intervenant, lui, est contrôlé
+   par l'écran parent (`SessionSetup`) — un seul sélecteur, quel que soit le
+   mode, pour qu'un choix fait avant de basculer d'onglet ne se perde pas. */
 function AtelierLancement({
-  students, atelier, mode, jour, intervenants, intervenantIdParDefaut, avecIntervenant,
+  students, atelier, mode, jour, intervenants, intervenantId, onChangeIntervenant,
   notify, onSetAtelierGroup, onLancer, banniere, titre,
 }) {
   const initial = React.useMemo(() => configurerAtelier(students, atelier, jour, mode), []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -7233,7 +7328,6 @@ function AtelierLancement({
   const [doubleCotation, setDoubleCotation] = useState(false);
   const [depuisMemoire, setDepuisMemoire] = useState(!!atelier && initial.studentIds.length > 0);
   const [detailObjectifs, setDetailObjectifs] = useState(false);
-  const [intervenantId, setIntervenantId] = useState(intervenantIdParDefaut ?? null);
 
   useEffect(() => {
     const nbNouveaux = Object.values(initial.nouveautes).reduce((n, l) => n + l.length, 0);
@@ -7243,7 +7337,6 @@ function AtelierLancement({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleObjectives = (st) => (mode === 'balance' ? st.objectives.filter((o) => o.type === 'balance') : st.objectives);
-  const intervenantActif = avecIntervenant ? intervenantId : intervenantIdParDefaut;
 
   const toggleStudent = (id) => {
     setStudentIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
@@ -7285,7 +7378,7 @@ function AtelierLancement({
   const ready = studentIds.length > 0 && studentIds.every((id) => (selected[id] || []).length > 0);
   const lancer = () => onLancer({
     mode, atelierId: atelier ? atelier.id : null, studentIds, selected,
-    favorites: atelierFavorites, doubleCotation, intervenantId: intervenantActif,
+    favorites: atelierFavorites, doubleCotation, intervenantId,
   });
 
   return (
@@ -7309,22 +7402,39 @@ function AtelierLancement({
         </p>
       )}
 
-      {avecIntervenant && intervenants.length > 0 && (
-        <Card className="mb-3">
-          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Intervenant qui cote</div>
-          <div className="flex flex-wrap gap-2">
-            {intervenants.map((i) => {
-              const on = intervenantId === i.id;
-              return (
-                <button key={i.id} onClick={() => setIntervenantId(on ? null : i.id)} className="rounded-xl px-4 py-2.5 border text-sm"
-                  style={{ borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}>
-                  {i.name}
-                </button>
-              );
-            })}
-          </div>
-        </Card>
-      )}
+      {/* Tout ce qui concerne « qui cote » regroupé en une seule zone :
+          l'intervenant est réglé une fois pour l'écran entier (voir
+          SessionSetup), la double cotation reste propre à ce lancement. */}
+      <div className="mb-3">
+        {intervenants.length > 0 && (
+          <>
+            <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Qui cote</div>
+            <div className="flex flex-wrap gap-2 mb-2.5">
+              {intervenants.map((i) => {
+                const on = intervenantId === i.id;
+                return (
+                  <button key={i.id} onClick={() => onChangeIntervenant(on ? null : i.id)} className="rounded-xl px-4 py-2.5 border text-sm"
+                    style={{ borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}>
+                    {i.name}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+        <div className="flex items-center gap-2.5">
+          <button onClick={() => setDoubleCotation((v) => !v)} className="w-9 h-5 rounded-full relative shrink-0" style={{ backgroundColor: doubleCotation ? ACCENT : BORDER }} aria-label="Deux observateurs en parallèle">
+            <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: doubleCotation ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
+          </button>
+          <button onClick={() => setDoubleCotation((v) => !v)} className="text-sm font-medium text-left" style={{ fontFamily: F_DISPLAY }}>
+            Deux observateurs en parallèle
+          </button>
+          <BulleInfo titre="Accord inter-observateurs">
+            À cocher par chacun des deux intervenants qui cotent cette même séance, chacun sur son
+            appareil. DatABA Manager repérera ensuite les deux relevés pour mesurer leur accord.
+          </BulleInfo>
+        </div>
+      </div>
 
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs" style={{ color: INK_SOFT }}>Personnes présentes</span>
@@ -7356,19 +7466,6 @@ function AtelierLancement({
           );
         })}
       </div>
-
-      <button onClick={() => setDoubleCotation((v) => !v)} className="flex items-start gap-2.5 text-left w-full mb-3">
-        <span className="w-9 h-5 rounded-full relative shrink-0 mt-0.5" style={{ backgroundColor: doubleCotation ? ACCENT : BORDER }}>
-          <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white" style={{ left: doubleCotation ? '1.25rem' : '0.125rem', transition: 'left .15s' }} />
-        </span>
-        <span className="min-w-0">
-          <span className="block text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>Deux observateurs en parallèle</span>
-          <span className="block text-xs" style={{ color: INK_SOFT }}>
-            À cocher par chacun des deux intervenants qui cotent cette même séance, chacun sur son
-            appareil. DatABA Manager repérera ensuite les deux relevés pour mesurer leur accord.
-          </span>
-        </span>
-      </button>
 
       {/* Configuration mémorisée appliquée : on ne montre que ce qui diffère de
           l'habituel, plutôt que de redérouler toute la liste à revérifier. */}
@@ -7498,13 +7595,14 @@ const SELECTIONS_SESSION = [
   { k: 'libre', label: 'Libre' },
 ];
 
-function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, notify, onOuvrirConfiguration, onOuvrirMenu, planDuJour, onStart }) {
+function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, notify, onOuvrirConfiguration, onProgrammerEquilibre, onOuvrirMenu, planDuJour, onStart }) {
   const proposition = planDuJour && planDuJour.restants && planDuJour.restants[0];
   const [selection, setSelection] = useState('atelier');
   const [intervenantId, setIntervenantId] = useState(null);
   const [autresOuverts, setAutresOuverts] = useState(() => !proposition);
   const [ouvertId, setOuvertId] = useState(null);
   const studentsEquilibre = React.useMemo(() => personnesAvecEquilibre(students), [students]);
+  const sansEquilibre = React.useMemo(() => students.filter((s) => !studentsEquilibre.includes(s)), [students, studentsEquilibre]);
 
   const jour = planDuJour ? planDuJour.jour : new Date().getDay();
   const autresAteliers = ordonnerPropositions(ateliers, planDuJour && planDuJour.restants, proposition ? proposition.id : null);
@@ -7571,23 +7669,6 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
         })}
       </div>
 
-      {intervenants.length > 0 && (
-        <Card className="mb-4">
-          <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Intervenant qui cote</div>
-          <div className="flex flex-wrap gap-2">
-            {intervenants.map((i) => {
-              const on = intervenantId === i.id;
-              return (
-                <button key={i.id} onClick={() => setIntervenantId(on ? null : i.id)} className="rounded-xl px-4 py-2.5 border text-sm"
-                  style={{ borderColor: on ? ACCENT : BORDER, backgroundColor: on ? ACCENT : 'transparent', color: on ? ACCENT_INK : INK_SOFT }}>
-                  {i.name}
-                </button>
-              );
-            })}
-          </div>
-        </Card>
-      )}
-
       {selection === 'atelier' && (
         <>
           {proposition ? (
@@ -7595,7 +7676,7 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
               <AtelierLancement
                 key={proposition.id}
                 students={students} atelier={proposition} mode="atelier" jour={jour}
-                intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant={false}
+                intervenants={intervenants} intervenantId={intervenantId} onChangeIntervenant={setIntervenantId}
                 notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
                 titre={proposition.name}
                 banniere={
@@ -7656,7 +7737,7 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
                         <AtelierLancement
                           key={`${a.id}-ouvert`}
                           students={students} atelier={a} mode="atelier" jour={jour}
-                          intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant
+                          intervenants={intervenants} intervenantId={intervenantId} onChangeIntervenant={setIntervenantId}
                           notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
                         />
                       </div>
@@ -7677,10 +7758,25 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
             <AtelierLancement
               key="equilibre"
               students={studentsEquilibre} atelier={null} mode="balance" jour={jour}
-              intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant
+              intervenants={intervenants} intervenantId={intervenantId} onChangeIntervenant={setIntervenantId}
               notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
               titre="Équilibre"
             />
+          )}
+          {/* Un Équilibre n'est pas une entité à part : c'est un objectif de
+              type balance. Programmer le premier bascule directement sur la
+              fiche de la personne, formulaire déjà ouvert dans ce mode. */}
+          {sansEquilibre.length > 0 && onProgrammerEquilibre && (
+            <div className={studentsEquilibre.length > 0 ? 'mt-4 pt-4 border-t' : ''} style={studentsEquilibre.length > 0 ? { borderColor: BORDER } : undefined}>
+              <div className="text-xs mb-2" style={{ color: INK_SOFT }}>Programmer un Équilibre pour</div>
+              <div className="flex flex-wrap gap-2">
+                {sansEquilibre.map((s) => (
+                  <button key={s.id} onClick={() => onProgrammerEquilibre(s.id)} title={`Créer un Équilibre pour ${s.initials}`}>
+                    <PastillePersonne initials={s.initials} taille={36} />
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
         </Card>
       )}
@@ -7690,7 +7786,7 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
           <AtelierLancement
             key="libre"
             students={students} atelier={null} mode="atelier" jour={jour}
-            intervenants={intervenants} intervenantIdParDefaut={intervenantId} avecIntervenant
+            intervenants={intervenants} intervenantId={intervenantId} onChangeIntervenant={setIntervenantId}
             notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
             titre="Séance libre"
           />
@@ -7711,9 +7807,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const stepsRef = useRef({});
   const [expanded, setExpanded] = useState(null); // { sid, oid } de l'objectif agrandi
 
-  /* Feuilles de commande, une seule ouverte à la fois : 'reglages' (ce qui a
-     quitté la barre du haut), 'atelier' (passage à l'atelier suivant),
-     'ajout' (arrivée d'une personne), ou { personne: sid }. */
+  /* Feuilles de commande, une seule ouverte à la fois : 'atelier' (passage à
+     l'atelier suivant), 'ajout' (arrivée d'une personne), ou { personne: sid }. */
   const [feuille, setFeuille] = useState(null);
 
   /* Densité d'affichage. Réduire la taille agrandit d'autant la largeur
@@ -7974,10 +8069,21 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     onFinish(close, next);
   }
 
+  const alerteActive = soundOn || vibrateOn;
+  function toggleAlerte() {
+    const next = !alerteActive;
+    setSoundOn(next);
+    setVibrateOn(next);
+    if (next) {
+      primeAudio(); beep();
+      try { navigator.vibrate([200, 100, 200]); } catch (e) {}
+    }
+  }
+
   return (
     <div>
       <div className="mb-3">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           {isEdit ? (
             <h1 className="text-xl font-semibold truncate min-w-0" style={{ fontFamily: F_DISPLAY }}>
               {atelier ? atelier.name : session.mode === 'balance' ? 'Équilibre' : 'Séance libre'}
@@ -7990,57 +8096,52 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               <ChevronDown size={16} style={{ color: INK_SOFT }} className="shrink-0" />
             </button>
           )}
-          <div className="flex flex-wrap gap-2 shrink-0">
+          <div className="flex flex-wrap gap-1.5 shrink-0">
             {isEdit && (
-              <Btn variant="ghost" onClick={() => { setSession(null); if (onAnnulerCorrection) onAnnulerCorrection(); }} className="text-sm py-2.5">Annuler</Btn>
+              <Btn variant="ghost" onClick={() => { setSession(null); if (onAnnulerCorrection) onAnnulerCorrection(); }} className="text-sm py-2">Annuler</Btn>
             )}
             {!isEdit && (
               <button
                 onClick={togglePause}
-                className="rounded-xl px-3 py-2.5 border"
+                className="rounded-xl px-2.5 py-2 border"
                 style={{ borderColor: isPaused ? ACCENT : BORDER, backgroundColor: isPaused ? ACCENT : CARD, color: isPaused ? ACCENT_INK : INK_SOFT }}
                 title={isPaused ? 'Reprendre la séance' : 'Mettre en pause'}
               >
-                {isPaused ? <Play size={17} /> : <Pause size={17} />}
+                {isPaused ? <Play size={15} /> : <Pause size={15} />}
               </button>
             )}
             {!isEdit && (
               <button
                 onClick={cycleZoom}
-                className="rounded-xl px-3 py-2.5 border"
+                className="rounded-xl px-2.5 py-2 border"
                 style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
                 title={`Densité d'affichage : ${(ZOOM_LEVELS.find((z) => z.v === zoom) || ZOOM_LEVELS[0]).l}`}
               >
-                <LayoutGrid size={17} />
+                <LayoutGrid size={15} />
               </button>
             )}
-            {!isEdit && (
+            {!isEdit && hasInterval && (
               <button
-                onClick={() => setFeuille('reglages')}
-                className="rounded-xl px-3 py-2.5 border relative"
+                onClick={toggleAlerte}
+                className="rounded-xl px-2.5 py-2 border"
                 style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-                title="Réglages de la séance"
+                title={alerteActive ? 'Couper alerte sonore et vibration' : 'Activer alerte sonore et vibration'}
               >
-                <SlidersHorizontal size={17} />
-                {nbMasques > 0 && (
-                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center" style={{ backgroundColor: ACCENT, color: ACCENT_INK, fontFamily: F_MONO }}>
-                    {nbMasques}
-                  </span>
-                )}
+                {alerteActive ? <Volume2 size={15} /> : <VolumeX size={15} />}
               </button>
             )}
             {!isEdit && (
               <button
                 onClick={abandonner}
-                className="rounded-xl px-3 py-2.5 border"
+                className="rounded-xl px-2.5 py-2 border"
                 style={{ borderColor: CRISIS, color: CRISIS, backgroundColor: CARD }}
                 title="Abandonner la séance"
               >
-                <X size={17} />
+                <X size={15} />
               </button>
             )}
-            <Btn variant="outline" onClick={() => onFinish(finalizeSession(session))} className="text-sm py-2.5" title={isEdit ? 'Valider' : 'Enregistrer'}>
-              <Save size={16} />
+            <Btn variant="outline" onClick={() => onFinish(finalizeSession(session))} className="text-sm py-2" title={isEdit ? 'Valider' : 'Enregistrer'}>
+              <Save size={15} />
             </Btn>
           </div>
         </div>
@@ -8050,6 +8151,17 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           {!isEdit && wakeOk && <> · <Sun size={12} className="inline" /> écran maintenu</>}
         </p>
       </div>
+
+      {nbMasques > 0 && (
+        <div className="rounded-xl px-3 py-2.5 mb-4 flex items-center justify-between gap-2 text-sm" style={{ backgroundColor: PAPER, border: `1px solid ${BORDER}` }}>
+          <span className="flex items-center gap-2" style={{ color: INK_SOFT }}>
+            <EyeOff size={15} /> {nbMasques} objectif{nbMasques > 1 ? 's' : ''} masqué{nbMasques > 1 ? 's' : ''}
+          </span>
+          <button onClick={() => setSession((s0) => ({ ...s0, hidden: {} }))} className="text-xs font-medium flex items-center gap-1" style={{ color: ACCENT }}>
+            <Eye size={13} /> Tout réafficher
+          </button>
+        </div>
+      )}
 
       {isPaused && (
         <div className="rounded-xl px-3 py-2.5 mb-4 flex items-center gap-2 text-sm" style={{ backgroundColor: ACCENT, color: ACCENT_INK }}>
@@ -8310,17 +8422,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
         </div>
       </div>
 
-      {feuille === 'reglages' && (
-        <FeuilleReglages
-          hasInterval={hasInterval}
-          soundOn={soundOn} setSoundOn={setSoundOn}
-          vibrateOn={vibrateOn} setVibrateOn={setVibrateOn}
-          hiddenCount={nbMasques}
-          onReafficher={() => { setSession((s0) => ({ ...s0, hidden: {} })); setFeuille(null); }}
-          onClose={() => setFeuille(null)}
-        />
-      )}
-
       {feuille === 'atelier' && (
         <FeuilleAtelier
           session={session} ateliers={ateliers} students={students} aCoter={aCoter}
@@ -8358,43 +8459,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
    Composants à part entière (et non des fonctions imbriquées) pour que leurs
    propres useState ne soient montés que le temps où la feuille est ouverte. */
 
-function FeuilleReglages({ hasInterval, soundOn, setSoundOn, vibrateOn, setVibrateOn, hiddenCount, onReafficher, onClose }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
-      <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
-        <div className="flex items-center justify-between mb-3">
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Réglages de la séance</span>
-          <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
-        </div>
-        <div className="space-y-1.5">
-          {hasInterval && (
-            <button
-              onClick={() => { const next = !soundOn; setSoundOn(next); if (next) { primeAudio(); beep(); } }}
-              className="w-full rounded-xl px-3 py-2.5 flex items-center justify-between border text-sm" style={{ borderColor: BORDER }}
-            >
-              <span className="flex items-center gap-2">{soundOn ? <Volume2 size={16} /> : <VolumeX size={16} />} Alerte sonore</span>
-              <span style={{ color: INK_SOFT }}>{soundOn ? 'Activée' : 'Coupée'}</span>
-            </button>
-          )}
-          {hasInterval && vibrateSupported() && (
-            <button
-              onClick={() => { const next = !vibrateOn; setVibrateOn(next); if (next) { try { navigator.vibrate([200, 100, 200]); } catch (e) {} } }}
-              className="w-full rounded-xl px-3 py-2.5 flex items-center justify-between border text-sm" style={{ borderColor: BORDER }}
-            >
-              <span className="flex items-center gap-2"><Vibrate size={16} /> Vibration</span>
-              <span style={{ color: INK_SOFT }}>{vibrateOn ? 'Activée' : 'Coupée'}</span>
-            </button>
-          )}
-          {hiddenCount > 0 && (
-            <button onClick={onReafficher} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm" style={{ borderColor: BORDER }}>
-              <Eye size={16} /> {hiddenCount} objectif{hiddenCount > 1 ? 's' : ''} masqué{hiddenCount > 1 ? 's' : ''} — tout réafficher
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* Passage à l'atelier suivant : la séance en cours est enregistrée telle
    quelle, une nouvelle démarre sur l'atelier choisi. Précoché par défaut :
@@ -9434,7 +9498,7 @@ function FriseJournee({ students, axesSuivi, releves, onOuvrirSuivi }) {
       </SectionTitle>
       <div className="space-y-4">
         {lignes.map(({ st, axe, segments }) => {
-          const label = `${st.initials} — ${axe.nom}`;
+          const label = `${st.initials} — ${nomAxe(axe)}`;
           if (segments.length === 0) {
             return (
               <button key={`${st.id}-${axe.id}`} className="w-full text-left" onClick={() => onOuvrirSuivi(st.id)} title="Noter le critère de ce jour">
@@ -9497,7 +9561,7 @@ function FriseJournee({ students, axesSuivi, releves, onOuvrirSuivi }) {
               onClick={() => onOuvrirSuivi(st.id)}
               title="Compter une occurrence de plus"
             >
-              <span style={{ color: INK_SOFT }}>{st.initials} — {compteur.nom}</span>
+              <span style={{ color: INK_SOFT }}>{st.initials} — {nomCompteur(compteur)}</span>
               <span style={{ fontFamily: F_MONO }}>{total}</span>
             </button>
           ))}
@@ -9553,13 +9617,13 @@ function FeuilleJourneeSuivi({ cible, releves, students, axesSuivi, onAjouter, o
   };
 
   if (estCompteur) {
-    const nomCompteur = compteurDe(st, cible.compteurId).nom;
+    const libelleCompteur = nomCompteur(compteurDe(st, cible.compteurId));
     return (
       <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={onClose}>
         <div className="rounded-2xl p-5 max-w-md w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
           <div className="flex items-start justify-between gap-2 mb-1">
             <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>
-              {st ? st.initials : '?'} — {nomCompteur}
+              {st ? st.initials : '?'} — {libelleCompteur}
             </span>
             <button onClick={onClose} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
           </div>
@@ -9616,7 +9680,7 @@ function FeuilleJourneeSuivi({ cible, releves, students, axesSuivi, onAjouter, o
       <div className="rounded-2xl p-5 max-w-md w-full max-h-[85vh] overflow-y-auto" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
         <div className="flex items-start justify-between gap-2 mb-1">
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>
-            {st ? st.initials : '?'} — {axe ? axe.nom : 'Suivi retiré'}
+            {st ? st.initials : '?'} — {axe ? nomAxe(axe) : 'Suivi retiré'}
           </span>
           <button onClick={onClose} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
         </div>
@@ -9710,7 +9774,7 @@ function FeuilleJourneeSuivi({ cible, releves, students, axesSuivi, onAjouter, o
   );
 }
 
-function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onOuvrirSuivi, onChangePhase }) {
+function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onAjouterObjectif, onOuvrirSuivi, onChangePhase }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
   /* Une ligne du résumé mène à la courbe de l'objectif, dans ce même écran :
      c'est là qu'on voit où il en est. L'édition reste derrière « Modifier
@@ -9763,17 +9827,25 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
             <Card key={s.id}>
               <button className="w-full flex items-center justify-between" onClick={() => setOpenId(open ? null : s.id)}>
                 <span className="flex items-center gap-3">
-                  <span className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold" style={{ backgroundColor: ACCENT, color: ACCENT_INK, fontFamily: F_DISPLAY }}>
-                    {s.initials.replace(/\./g, '').slice(0, 3)}
-                  </span>
-                  <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>{s.initials}</span>
+                  <PastillePersonne initials={s.initials} />
                 </span>
                 <ChevronRight size={18} style={{ color: INK_SOFT, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
               </button>
 
               {open && (
                 <div className="mt-4 space-y-5">
-                  {s.objectives.length === 0 && <Empty>Aucun objectif défini.</Empty>}
+                  {s.objectives.length === 0 && (
+                    <Empty>
+                      Aucun objectif défini.
+                      {onAjouterObjectif && (
+                        <div className="mt-3">
+                          <Btn variant="ghost" onClick={() => onAjouterObjectif(s.id)} className="text-sm">
+                            <Plus size={16} /> Ajouter un objectif
+                          </Btn>
+                        </div>
+                      )}
+                    </Empty>
+                  )}
                   {s.objectives.map((o) => (
                     <div key={o.id} ref={(n) => { graphRefs.current[`${s.id}:${o.id}`] = n; }}>
                       <ObjectiveChart
@@ -10146,19 +10218,11 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
     onMarkRelevesSent(chosenReleves.map((r) => r.id));
   }
 
-  function download() {
-    if (!confirmIfNeeded()) return;
-    const { blob, name } = makeFile();
-    downloadBlob(blob, name);
-    marquerEnvoye();
-    notify('Fichier Excel téléchargé');
-  }
-
   async function shareSelection() {
     if (!confirmIfNeeded()) return;
     const { blob, name } = makeFile();
-    await shareReport({ blob, name, title: name, notify });
-    marquerEnvoye();
+    const ok = await shareReport({ blob, name, title: name, notify });
+    if (ok) marquerEnvoye();
   }
 
   const canExport = byStudent
@@ -10432,14 +10496,9 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
         <div className="text-xs uppercase tracking-wide mb-2" style={{ color: INK_SOFT }}>
           Rapport Excel — à lire, imprimer ou déposer sur le dossier partagé
         </div>
-        <div className="flex gap-2">
-          <Btn variant="outline" onClick={download} disabled={!canExport} className="flex-1">
-            <FileSpreadsheet size={17} /> Télécharger
-          </Btn>
-          <Btn onClick={shareSelection} disabled={!canExport} className="flex-1">
-            <Share2 size={17} /> Partager
-          </Btn>
-        </div>
+        <Btn onClick={shareSelection} disabled={!canExport} className="w-full">
+          <FileSpreadsheet size={17} /> Exporter
+        </Btn>
       </Card>
 
       <Card className="mb-3">
@@ -10451,15 +10510,16 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
           les emporte : c'est lui que le cadre pédagogique charge dans DatABA Manager.
         </p>
         <div className="flex gap-2">
-          <Btn variant="outline" onClick={() => onExportManager(chosen, true)} disabled={!canExport} className="flex-1">
+          <Btn variant="outline" onClick={() => { if (confirmIfNeeded()) onExportManager(chosen, true, marquerEnvoye); }} disabled={!canExport} className="flex-1">
             <Lock size={16} /> Chiffré
           </Btn>
           <Btn
             variant="ghost"
             onClick={() => {
+              if (!confirmIfNeeded()) return;
               if (window.confirm(
                 "Exporter sans chiffrement ?\n\nLe fichier sera lisible par quiconque y a accès. À réserver à un dépôt dans un dossier déjà restreint."
-              )) onExportManager(chosen, false);
+              )) onExportManager(chosen, false, marquerEnvoye);
             }}
             disabled={!canExport}
             className="flex-1"
