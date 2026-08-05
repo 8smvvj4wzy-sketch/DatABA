@@ -2666,8 +2666,8 @@ function BoutonMenu({ onClick }) {
   return (
     <button
       onClick={onClick}
-      className="flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm shrink-0"
-      style={{ borderColor: BORDER, backgroundColor: CARD, color: INK_SOFT }}
+      className="flex items-center gap-1.5 px-2 py-2 text-sm shrink-0"
+      style={{ color: INK_SOFT }}
     >
       <Menu size={16} /> Menu
     </button>
@@ -10002,10 +10002,9 @@ function ResumeObjectifs({ students, sessions, guidances, onVoirGraphique }) {
           const on = ouvert === b.k;
           return (
             <button key={b.k} onClick={() => setOuvert(on ? null : b.k)} disabled={!n}
-              className="flex-1 min-w-[110px] rounded-xl px-3 py-2.5 border text-left disabled:opacity-50"
-              style={{ borderColor: on ? b.couleur : BORDER, backgroundColor: on ? b.couleur + '14' : 'transparent' }}>
+              className="flex-1 min-w-[110px] px-1 py-1 text-left disabled:opacity-50">
               <div className="text-2xl font-semibold" style={{ fontFamily: F_MONO, color: b.couleur }}>{n}</div>
-              <div className="text-xs" style={{ color: INK_SOFT }}>{b.label}</div>
+              <div className="text-xs" style={{ color: on ? INK : INK_SOFT, fontWeight: on ? 600 : 400 }}>{b.label}</div>
             </button>
           );
         })}
