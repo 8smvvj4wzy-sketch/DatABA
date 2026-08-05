@@ -53,9 +53,13 @@ const NOMS = [
   'migrerReleves', 'migrerStudentsSuivi', 'migrerAxesSuivi',
   'jourLocal', 'dureeReleve', 'journeesSuivi', 'migrerEnvoisCrises',
   'grouperParJour', 'libelleJour', 'segmentAppareil', 'nomFichier', 'timeShort',
-  'compteurDe', 'nomAxe', 'nomCompteur',
+  'compteurDe', 'nomAxe', 'nomCompteur', 'groupeDe', 'nomGroupe',
 ];
-const code = `const CRISIS = '#B3261E';\nconst CAT_TEAL = ${extraireLigne('CAT_TEAL')};\nconst CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};\nconst CAT_AMBER = ${extraireLigne('CAT_AMBER')};\nconst CAT_CORAL = ${extraireLigne('CAT_CORAL')};\nconst CAT_VIOLET = ${extraireLigne('CAT_VIOLET')};\nconst CAT_CYAN = ${extraireLigne('CAT_CYAN')};\nconst CAT_LILAC = ${extraireLigne('CAT_LILAC')};\nconst CAT_SLATE = ${extraireLigne('CAT_SLATE')};\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\nconst COMPTEUR_INCONNU = ${extraireLigne('COMPTEUR_INCONNU')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
+// lignesSuiviExport lit désormais le groupe de la personne, et migrerReleves
+// pose des champs de traçabilité par défaut : GROUPE_INCONNU et
+// TRACABILITE_RELEVE_PAR_DEFAUT sont des constantes sur une seule ligne,
+// comme COMPTEUR_INCONNU ci-dessous — même raison de passer par extraireLigne.
+const code = `const CRISIS = '#B3261E';\nconst CAT_TEAL = ${extraireLigne('CAT_TEAL')};\nconst CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};\nconst CAT_AMBER = ${extraireLigne('CAT_AMBER')};\nconst CAT_CORAL = ${extraireLigne('CAT_CORAL')};\nconst CAT_VIOLET = ${extraireLigne('CAT_VIOLET')};\nconst CAT_CYAN = ${extraireLigne('CAT_CYAN')};\nconst CAT_LILAC = ${extraireLigne('CAT_LILAC')};\nconst CAT_SLATE = ${extraireLigne('CAT_SLATE')};\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\nconst COMPTEUR_INCONNU = ${extraireLigne('COMPTEUR_INCONNU')};\nconst GROUPE_INCONNU = ${extraireLigne('GROUPE_INCONNU')};\nconst TRACABILITE_RELEVE_PAR_DEFAUT = ${extraireLigne('TRACABILITE_RELEVE_PAR_DEFAUT')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
 // eslint-disable-next-line no-new-func
 const {
   DEFAULT_CRITERES_SUIVI, CRITERE_INCONNU, DEFAULT_SUIVIS,
@@ -108,6 +112,10 @@ t('changement de mois détecté', memeJour(new Date(2026, 6, 31), new Date(2026,
    le dernier relevé restait affiché quel que soit son âge. */
 const R = (studentId, timestamp, critere, extra) => ({ id: `${studentId}-${timestamp}-${critere}`, studentId, suiviId: 'principal', timestamp, critere, source: 'pastille', ...extra });
 const CLOTURE = (studentId, timestamp) => ({ id: `${studentId}-${timestamp}-fin`, studentId, suiviId: 'principal', timestamp, critere: null, fin: true, source: 'cloture' });
+// Un relevé passé par migrerReleves gagne quatre champs de traçabilité à
+// `null` : les mêmes clés, dans le même ordre que la fonction les pose,
+// pour que la comparaison JSON.stringify des tests ci-dessous tienne.
+const conTracabilite = (r) => ({ intervenantId: null, sessionId: null, atelierId: null, appareilOrigine: null, ...r });
 
 const refAujourdhui = new Date('2026-08-03T14:00:00.000Z');
 
@@ -189,11 +197,29 @@ const critereSupprime = [R('a', '2026-08-01T09:00:00.000Z', 'disparu')];
 const ligneRetire = lignesSuiviExport(critereSupprime, students, suivis, null);
 t('un critère supprimé reste traçable avec sa clé brute', ligneRetire[0][5], 'Critère retiré (disparu)');
 
+/* Colonnes Groupe / Intervenant / Atelier, en bout de ligne. */
+const listeGroupes = [{ id: 'g1', name: 'Classe 1' }];
+const listeIntervenants = [{ id: 'i1', name: 'Sophie' }];
+const listeAteliers = [{ id: 'at1', name: 'Motricité' }];
+const studentsGroupe = [{ id: 'a', initials: 'A.B.', groupeId: 'g1' }, { id: 'b', initials: 'C.D.' }];
+const relevesTraces = [
+  R('a', '2026-08-01T09:00:00.000Z', 'stable', { intervenantId: 'i1', atelierId: 'at1' }),
+  R('b', '2026-08-01T09:00:00.000Z', 'stable'),
+];
+const lignesTracees = lignesSuiviExport(relevesTraces, studentsGroupe, suivis, null, listeGroupes, listeIntervenants, listeAteliers);
+t('le groupe de la personne apparaît en fin de ligne', lignesTracees[0].slice(-3), ['Classe 1', 'Sophie', 'Motricité']);
+t('sans groupe ni traçabilité, les colonnes restent vides plutôt qu\'un tiret inventé', lignesTracees[1].slice(-3), ['', '', '']);
+const ligneCompteurTracee = lignesSuiviExport([{ id: 'k1', studentId: 'a', timestamp: '2026-08-01T09:00:00.000Z', kind: 'compteur', compteurId: 'zzz' }], studentsGroupe, suivis, null, listeGroupes, listeIntervenants, listeAteliers);
+t('un relevé de compteur porte aussi ses colonnes de contexte', ligneCompteurTracee[0].slice(-3), ['Classe 1', '', '']);
+t('sans listes de référence, aucune colonne ne plante', lignesSuiviExport(relevesTraces, studentsGroupe, suivis, null)[1].slice(-3), ['', '', '']);
+
 /* ==================== Migrations ==================== */
-t('un relevé ancien format gagne suiviId et critere', migrerReleves([{ id: 'x', studentId: 'a', timestamp: 't', etat: 'stable', source: 'pastille' }]), [{ id: 'x', studentId: 'a', suiviId: 'principal', timestamp: 't', critere: 'stable', source: 'pastille' }]);
-t('un relevé déjà au nouveau format n\'est pas altéré', migrerReleves([R('a', 't', 'stable')]), [R('a', 't', 'stable')]);
+t('un relevé ancien format gagne suiviId et critere', migrerReleves([{ id: 'x', studentId: 'a', timestamp: 't', etat: 'stable', source: 'pastille' }]), [conTracabilite({ id: 'x', studentId: 'a', suiviId: 'principal', timestamp: 't', critere: 'stable', source: 'pastille' })]);
+t('un relevé déjà au nouveau format n\'est pas altéré', migrerReleves([R('a', 't', 'stable')]), [conTracabilite(R('a', 't', 'stable'))]);
 t('migration idempotente', migrerReleves(migrerReleves([{ id: 'x', studentId: 'a', timestamp: 't', etat: 'stable' }])), migrerReleves([{ id: 'x', studentId: 'a', timestamp: 't', etat: 'stable' }]));
-t('un relevé nul ou sans personne est écarté', migrerReleves([null, { timestamp: 't' }, R('a', 't', 'stable')]), [R('a', 't', 'stable')]);
+t('un relevé nul ou sans personne est écarté', migrerReleves([null, { timestamp: 't' }, R('a', 't', 'stable')]), [conTracabilite(R('a', 't', 'stable'))]);
+t('un relevé de compteur gagne aussi la traçabilité, sans autre transformation', migrerReleves([{ id: 'c1', studentId: 'a', timestamp: 't', kind: 'compteur', compteurId: 'k', source: 'pastille' }]), [conTracabilite({ id: 'c1', studentId: 'a', timestamp: 't', kind: 'compteur', compteurId: 'k', source: 'pastille' })]);
+t('la traçabilité déjà présente n\'est pas écrasée', migrerReleves([{ ...R('a', 't', 'stable'), intervenantId: 'i1' }])[0].intervenantId, 'i1');
 t('tableau absent : pas de plantage', migrerReleves(undefined), []);
 
 t('suiviStabilite=true devient axesSuivi=[principal]', migrerStudentsSuivi([{ id: 'a', initials: 'A.', suiviStabilite: true }]), [{ id: 'a', initials: 'A.', suivisActifs: ['principal'] }]);

@@ -1577,6 +1577,33 @@ function jourLocal(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/* L'intervenant en poste n'est valable que pour le jour où il a été choisi :
+   périmé dès que la date locale change, il redevient vide et se redemande
+   plutôt que d'attribuer silencieusement les relevés du lendemain à
+   quelqu'un qui n'est peut-être plus là. */
+function posteValide(poste, maintenant) {
+  return !!(poste && poste.intervenantId && poste.jour === jourLocal(maintenant));
+}
+
+/* Contexte de traçabilité attaché à un relevé au moment de sa création : en
+   séance, l'intervenant, la séance et l'atelier en cours ; hors séance, seul
+   l'intervenant en poste est connu, à condition d'être encore valide pour
+   aujourd'hui — jamais de séance ni d'atelier devinés hors cotation. */
+function contexteReleve(activeSession, poste, maintenant) {
+  if (activeSession) {
+    return {
+      intervenantId: activeSession.intervenantId || null,
+      sessionId: activeSession.id || null,
+      atelierId: activeSession.atelierId || null,
+    };
+  }
+  return {
+    intervenantId: posteValide(poste, maintenant) ? poste.intervenantId : null,
+    sessionId: null,
+    atelierId: null,
+  };
+}
+
 /* Durée d'un relevé, en ms, jusqu'au relevé suivant du même couple
    personne/axe — une clôture borne le segment comme n'importe quel successeur.
    `null` tant qu'aucun successeur n'existe : on ne devine pas une durée qui n'a
@@ -1665,8 +1692,16 @@ function migrerEnvoisCrises(crises, sessions) {
    le même jour — même principe que les étapes manquées de « Détail par
    essai », qui restent vides plutôt qu'à zéro pour ne pas fausser les
    moyennes. */
-function lignesSuiviExport(releves, students, suivis, studentFilter) {
+/* Trois colonnes ajoutées en bout de ligne, communes aux deux formes de
+   relevé : le groupe de la personne (pas celui de la tablette qui exporte —
+   une personne cotée hors de son groupe garde le sien), et le contexte du
+   geste tel qu'enregistré par `contexteReleve`. Un relevé plus ancien que la
+   traçabilité, ou pris hors séance, laisse ces cases vides plutôt que de
+   deviner. */
+function lignesSuiviExport(releves, students, suivis, studentFilter, groupes, intervenants, ateliers) {
   const keep = (sid) => !studentFilter || studentFilter.includes(sid);
+  const intervenantName = (id) => (id && ((intervenants || []).find((i) => i.id === id) || {}).name) || '';
+  const atelierName = (id) => (id && ((ateliers || []).find((a) => a.id === id) || {}).name) || '';
   const tries = (releves || [])
     .filter((r) => r && keep(r.studentId))
     .slice()
@@ -1674,6 +1709,7 @@ function lignesSuiviExport(releves, students, suivis, studentFilter) {
   return tries.map((r, i) => {
     const st = (students || []).find((s) => s.id === r.studentId);
     const d = new Date(r.timestamp);
+    const contexte = [nomGroupe(groupes, st && st.groupeId), intervenantName(r.intervenantId), atelierName(r.atelierId)];
     // Un compteur n'a ni durée (chaque appui est ponctuel) ni critère : une
     // ligne à part, plutôt que de forcer sa forme dans celle d'un relevé de
     // suivi continu.
@@ -1686,6 +1722,7 @@ function lignesSuiviExport(releves, students, suivis, studentFilter) {
         nomCompteur(compteurDe(st, r.compteurId)),
         'occurrence',
         '',
+        ...contexte,
       ];
     }
     const axe = axeDe(suivis, r.suiviId);
@@ -1708,6 +1745,7 @@ function lignesSuiviExport(releves, students, suivis, studentFilter) {
       axe ? nomAxe(axe) : 'Suivi retiré',
       critereLabel,
       duree,
+      ...contexte,
     ];
   });
 }
@@ -1724,10 +1762,18 @@ function releverAliasStabilite(releves) {
     .map((r) => ({ id: r.id, studentId: r.studentId, timestamp: r.timestamp, etat: r.critere, source: r.source || 'pastille' }));
 }
 
+/* Champs de traçabilité d'un relevé : absents des tablettes déjà en service,
+   jamais devinés — un relevé ancien n'a ni intervenant ni contexte connus,
+   et le rester est plus honnête qu'une valeur inventée. */
+const TRACABILITE_RELEVE_PAR_DEFAUT = { intervenantId: null, sessionId: null, atelierId: null, appareilOrigine: null };
+
 /* Migration depuis l'ancien format de relevé (`etat`, sans axe) : `etat`
    devient `critere`, chaque relevé gagne son `suiviId`. Idempotente — un
    relevé déjà au nouveau format traverse inchangé — pour pouvoir tourner à
-   chaque chargement sans jamais avoir besoin d'un drapeau « déjà migré ». */
+   chaque chargement sans jamais avoir besoin d'un drapeau « déjà migré ».
+   Gagne aussi ses champs de traçabilité s'il ne les a pas déjà : un relevé
+   de compteur n'a jamais eu d'autre format à migrer, mais peut tout de même
+   en manquer. */
 function migrerReleves(releves) {
   return (releves || [])
     .filter((r) => r && r.studentId && r.timestamp)
@@ -1735,10 +1781,10 @@ function migrerReleves(releves) {
       // Un relevé de compteur n'a jamais eu d'autre format : rien à migrer,
       // et surtout pas lui donner un `suiviId` — il se confondrait avec un
       // relevé de suivi continu dans tout ce qui filtre dessus.
-      if (r.kind === 'compteur') return r;
+      if (r.kind === 'compteur') return { ...TRACABILITE_RELEVE_PAR_DEFAUT, ...r };
       const suiviId = r.suiviId || 'principal';
-      if (r.critere !== undefined) return { ...r, suiviId };
-      return { id: r.id, studentId: r.studentId, suiviId, timestamp: r.timestamp, critere: r.etat, source: r.source || 'pastille' };
+      if (r.critere !== undefined) return { ...TRACABILITE_RELEVE_PAR_DEFAUT, ...r, suiviId };
+      return { ...TRACABILITE_RELEVE_PAR_DEFAUT, id: r.id, studentId: r.studentId, suiviId, timestamp: r.timestamp, critere: r.etat, source: r.source || 'pastille' };
     });
 }
 
@@ -1750,6 +1796,39 @@ function migrerStudentsSuivi(students) {
     const { suiviStabilite, ...rest } = s;
     return { ...rest, suivisActifs: suiviStabilite ? ['principal'] : [] };
   });
+}
+
+/* `student.groupeId` : absent des tablettes déjà en service, ajouté à `null`
+   plutôt que deviné — c'est cette valeur qui garde une personne visible sur
+   toutes les tablettes tant que son groupe n'est pas renseigné. Idempotente,
+   même principe que migrerStudentsSuivi. */
+function migrerStudentsGroupe(students) {
+  return (students || []).map((s) => ('groupeId' in s ? s : { ...s, groupeId: null }));
+}
+
+/* Personnes affichées sur l'écran Suivi de cette tablette. Deux replis
+   volontaires, sans lesquels la mise à jour viderait l'écran le jour de sa
+   mise en ligne : une tablette pas encore rattachée à un groupe voit tout le
+   monde, et une personne sans groupe reste visible partout tant qu'elle n'est
+   pas rangée. Le filtre ne se referme donc qu'à mesure que les groupes sont
+   réellement configurés — jamais d'un coup, jamais par défaut. */
+function personnesVisibles(students, groupeAppareil) {
+  if (!groupeAppareil) return students || [];
+  return (students || []).filter((s) => !s.groupeId || s.groupeId === groupeAppareil);
+}
+
+/* Repli pour un groupe supprimé alors que des personnes le portent encore :
+   jamais de suppression en cascade, même principe que CRITERE_INCONNU. Un
+   `groupeId` absent (aucun groupe assigné) est distinct d'un groupe
+   supprimé — seul le second replie sur GROUPE_INCONNU. */
+const GROUPE_INCONNU = { id: null, name: 'Groupe retiré' };
+function groupeDe(groupes, id) {
+  if (!id) return null;
+  return (groupes || []).find((g) => g && g.id === id) || GROUPE_INCONNU;
+}
+function nomGroupe(groupes, id) {
+  const g = groupeDe(groupes, id);
+  return g ? g.name : '';
 }
 
 /* Compteur d'occurrence d'une personne, par id — repli explicite pour un
