@@ -2960,6 +2960,57 @@ function Modale({ titre, onClose, children, className }) {
   );
 }
 
+/* Sélecteur multiple au doigt : un <select multiple> natif est illisible sur
+   tablette (appui long / ctrl pour choisir plusieurs options). On affiche à la
+   place un bouton au style d'un <select> qui déplie une liste de lignes
+   cochables — même geste que les tags A/B/C de la fiche crise. */
+function ChoixMultiple({ placeholder, options, values, onToggle }) {
+  const [ouvert, setOuvert] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!ouvert) return;
+    const surExterieur = (ev) => { if (ref.current && !ref.current.contains(ev.target)) setOuvert(false); };
+    document.addEventListener('pointerdown', surExterieur);
+    return () => document.removeEventListener('pointerdown', surExterieur);
+  }, [ouvert]);
+
+  const noms = options.filter((o) => values.includes(o.id)).map((o) => o.name);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOuvert((v) => !v)}
+        className="w-full rounded-lg px-3 py-2.5 text-sm border flex items-center justify-between gap-2"
+        style={{ borderColor: BORDER, backgroundColor: PAPER, color: noms.length ? INK : INK_SOFT }}
+      >
+        <span className="truncate text-left">{noms.length ? noms.join(', ') : placeholder}</span>
+        <ChevronDown size={16} style={{ color: INK_SOFT, transform: ouvert ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} className="shrink-0" />
+      </button>
+      {ouvert && (
+        <div className="absolute z-10 mt-1 w-full rounded-lg border overflow-hidden max-h-56 overflow-y-auto" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+          {options.map((o) => {
+            const on = values.includes(o.id);
+            return (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => onToggle(o.id)}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-sm text-left"
+                style={{ backgroundColor: on ? PAPER : 'transparent', color: INK }}
+              >
+                <span className="truncate">{o.name}</span>
+                {on && <Check size={15} className="shrink-0" style={{ color: ACCENT }} />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* Icône d'aide qui ouvre une bulle d'information au tap — le seul mécanisme
    d'aide contextuelle de l'app jusqu'ici était l'attribut natif `title`,
    inopérant au tactile. Se referme au second tap sur l'icône, au tap sur la
@@ -4923,7 +4974,7 @@ function AbaApp() {
                   {p.totalCompteurs > 0 && (
                     <span className="px-2.5 py-1.5 flex items-center gap-1" style={{ backgroundColor: PAPER, color: INK_SOFT, fontFamily: F_MONO }}
                       title="Total des compteurs aujourd'hui">
-                      <Hash size={11} />Σ{p.totalCompteurs}
+                      <Hash size={11} />{p.totalCompteurs}
                     </span>
                   )}
                 </button>
@@ -5162,16 +5213,16 @@ function AbaApp() {
                 return (
                   <div key={c.id} className="mb-5 last:mb-0">
                     <div className="text-sm font-semibold mb-1" style={{ fontFamily: F_DISPLAY }}>{nomCompteur(c)}</div>
-                    <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-                      <span style={{ fontFamily: F_MONO }}>{total}</span> occurrence{total !== 1 ? 's' : ''} aujourd'hui.
-                    </p>
                     <button
                       onClick={() => noterCompteur(st.id, c.id)}
                       className="w-full rounded-2xl py-4 text-sm font-semibold text-white active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
                       style={{ backgroundColor: CAT_INDIGO, fontFamily: F_DISPLAY }}
                     >
-                      <Hash size={16} /> +1 occurrence
+                      <Hash size={16} />
+                      <span className="text-2xl" style={{ fontFamily: F_MONO }}>{total}</span>
+                      occurrence{total !== 1 ? 's' : ''}
                     </button>
+                    <p className="text-xs text-center mt-1" style={{ color: INK_SOFT }}>aujourd'hui</p>
                     <div className="flex items-center gap-2 mt-2">
                       <button
                         onClick={() => annulerDernierCompteur(st.id, c.id)}
@@ -7599,10 +7650,23 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
   const proposition = planDuJour && planDuJour.restants && planDuJour.restants[0];
   const [selection, setSelection] = useState('atelier');
   const [intervenantId, setIntervenantId] = useState(null);
-  const [autresOuverts, setAutresOuverts] = useState(() => !proposition);
-  const [ouvertId, setOuvertId] = useState(null);
+  const [lancementId, setLancementId] = useState(null);
   const studentsEquilibre = React.useMemo(() => personnesAvecEquilibre(students), [students]);
   const sansEquilibre = React.useMemo(() => students.filter((s) => !studentsEquilibre.includes(s)), [students, studentsEquilibre]);
+
+  /* Balayage entre Atelier / Équilibre / Libre — même geste que la bascule
+     prioritaires/par personne en cotation, data-no-swipe + ignoreNoSwipe pour
+     ne pas déclencher le changement d'onglet. */
+  const selectionRef = useRef(null);
+  const selectionSuivante = React.useCallback(() => {
+    const i = SELECTIONS_SESSION.findIndex((s) => s.k === selection);
+    if (i < SELECTIONS_SESSION.length - 1) setSelection(SELECTIONS_SESSION[i + 1].k);
+  }, [selection]);
+  const selectionPrecedente = React.useCallback(() => {
+    const i = SELECTIONS_SESSION.findIndex((s) => s.k === selection);
+    if (i > 0) setSelection(SELECTIONS_SESSION[i - 1].k);
+  }, [selection]);
+  const selectionSwipe = useHorizontalSwipe(selectionRef, { onLeft: selectionSuivante, onRight: selectionPrecedente, ignoreNoSwipe: true });
 
   const jour = planDuJour ? planDuJour.jour : new Date().getDay();
   const autresAteliers = ordonnerPropositions(ateliers, planDuJour && planDuJour.restants, proposition ? proposition.id : null);
@@ -7669,6 +7733,14 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
         })}
       </div>
 
+      <div
+        ref={selectionRef}
+        data-no-swipe
+        style={{
+          transform: selectionSwipe.offset ? `translateX(${selectionSwipe.offset}px)` : 'none',
+          transition: selectionSwipe.dragging ? 'none' : 'transform .2s ease-out',
+        }}
+      >
       {selection === 'atelier' && (
         <>
           {proposition ? (
@@ -7696,56 +7768,39 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
             </Card>
           )}
 
-          {!autresOuverts ? (
-            <Btn variant="ghost" onClick={() => setAutresOuverts(true)} className="w-full">
-              <ChevronDown size={16} /> Lancer un autre atelier
-            </Btn>
-          ) : (
-            <div className="space-y-2">
-              <div className="text-xs uppercase tracking-wide" style={{ color: INK_SOFT }}>Un autre atelier</div>
-              {autresAteliers.map((a) => {
-                const apercu = configurerAtelier(students, a, jour, 'atelier');
-                const open = ouvertId === a.id;
+          {autresAteliers.length > 0 && (
+            <>
+              <select
+                value=""
+                onChange={(e) => { if (e.target.value) setLancementId(e.target.value); }}
+                className="w-full rounded-lg px-3 py-2.5 text-sm border"
+                style={{ borderColor: BORDER, backgroundColor: PAPER, color: INK }}
+              >
+                <option value="">Lancer un autre atelier…</option>
+                {autresAteliers.map((a) => {
+                  const apercu = configurerAtelier(students, a, jour, 'atelier');
+                  return (
+                    <option key={a.id} value={a.id}>
+                      {a.name} — {apercu.studentIds.length} personne{apercu.studentIds.length !== 1 ? 's' : ''} prévue{apercu.studentIds.length !== 1 ? 's' : ''}
+                    </option>
+                  );
+                })}
+              </select>
+              {lancementId && (() => {
+                const atelierLance = autresAteliers.find((a) => a.id === lancementId);
+                if (!atelierLance) return null;
                 return (
-                  <div key={a.id} className="rounded-xl px-3 py-2.5" style={{ backgroundColor: PAPER }}>
-                    <div className="flex items-center gap-2">
-                      <button className="flex-1 text-left min-w-0" onClick={() => setOuvertId(open ? null : a.id)}>
-                        <span className="block font-semibold text-sm truncate" style={{ fontFamily: F_DISPLAY }}>{a.name}</span>
-                        <span className="block text-xs" style={{ color: INK_SOFT }}>
-                          {apercu.studentIds.length} personne{apercu.studentIds.length !== 1 ? 's' : ''} prévue{apercu.studentIds.length !== 1 ? 's' : ''}
-                        </span>
-                      </button>
-                      {apercu.studentIds.length > 0 && (
-                        <button
-                          onClick={() => demarrer({
-                            mode: 'atelier', atelierId: a.id, studentIds: apercu.studentIds, selected: apercu.selected,
-                            favorites: apercu.favorites, doubleCotation: false, intervenantId,
-                          })}
-                          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                          style={{ backgroundColor: ACCENT, color: ACCENT_INK }}
-                          title="Lancer directement avec la configuration habituelle"
-                        >
-                          <Play size={16} />
-                        </button>
-                      )}
-                      <button onClick={() => setOuvertId(open ? null : a.id)} className="shrink-0" style={{ color: INK_SOFT }}>
-                        <ChevronRight size={18} style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
-                      </button>
-                    </div>
-                    {open && (
-                      <div className="mt-3">
-                        <AtelierLancement
-                          key={`${a.id}-ouvert`}
-                          students={students} atelier={a} mode="atelier" jour={jour}
-                          intervenants={intervenants} intervenantId={intervenantId} onChangeIntervenant={setIntervenantId}
-                          notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
-                        />
-                      </div>
-                    )}
-                  </div>
+                  <Modale titre={atelierLance.name} onClose={() => setLancementId(null)}>
+                    <AtelierLancement
+                      key={lancementId}
+                      students={students} atelier={atelierLance} mode="atelier" jour={jour}
+                      intervenants={intervenants} intervenantId={intervenantId} onChangeIntervenant={setIntervenantId}
+                      notify={notify} onSetAtelierGroup={onSetAtelierGroup} onLancer={demarrer}
+                    />
+                  </Modale>
                 );
-              })}
-            </div>
+              })()}
+            </>
           )}
         </>
       )}
@@ -7792,6 +7847,7 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
           />
         </Card>
       )}
+      </div>
     </div>
   );
 }
@@ -8096,7 +8152,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               <ChevronDown size={16} style={{ color: INK_SOFT }} className="shrink-0" />
             </button>
           )}
-          <div className="flex flex-wrap gap-1.5 shrink-0">
+          <div className="flex flex-wrap gap-1.5 shrink-0 ml-auto">
             {isEdit && (
               <Btn variant="ghost" onClick={() => { setSession(null); if (onAnnulerCorrection) onAnnulerCorrection(); }} className="text-sm py-2">Annuler</Btn>
             )}
@@ -10153,6 +10209,13 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
   const [mode, setMode] = useState('sessions');
   const [pickedStudents, setPickedStudents] = useState([]);
 
+  /* Balayage entre les deux modes de composition du rapport — même geste que
+     dans SessionSetup et en cotation. */
+  const modeRef = useRef(null);
+  const toStudentsMode = React.useCallback(() => setMode('students'), []);
+  const toSessionsMode = React.useCallback(() => setMode('sessions'), []);
+  const modeSwipe = useHorizontalSwipe(modeRef, { onLeft: toStudentsMode, onRight: toSessionsMode, ignoreNoSwipe: true });
+
   const byStudent = mode === 'students';
   const studentFilter = byStudent ? pickedStudents : null;
 
@@ -10421,6 +10484,14 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
         })}
       </div>
 
+      <div
+        ref={modeRef}
+        data-no-swipe
+        style={{
+          transform: modeSwipe.offset ? `translateX(${modeSwipe.offset}px)` : 'none',
+          transition: modeSwipe.dragging ? 'none' : 'transform .2s ease-out',
+        }}
+      >
       {byStudent && (
         <div className="mb-4">
           <div className="text-xs mb-2" style={{ color: INK_SOFT }}>
@@ -10557,6 +10628,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
           <Trash2 size={13} /> Supprimer toutes les séances enregistrées
         </button>
       )}
+      </div>
     </div>
   );
 }
@@ -10741,12 +10813,17 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
           {ateliers.length === 0 ? (
             <div className="text-sm" style={{ color: INK_SOFT }}>Aucun atelier enregistré.</div>
           ) : (
-            <div className="flex flex-wrap gap-2">
+            <select
+              value={crisis.atelierId || ''}
+              onChange={(e) => set({ atelierId: e.target.value || null })}
+              className="w-full rounded-lg px-3 py-2.5 text-sm border"
+              style={{ borderColor: BORDER, backgroundColor: PAPER, color: INK }}
+            >
+              <option value="">Aucun atelier</option>
               {ateliers.map((a) => (
-                <Chip key={a.id} label={a.name} color={CRISIS} on={crisis.atelierId === a.id}
-                  onClick={() => set({ atelierId: crisis.atelierId === a.id ? null : a.id })} />
+                <option key={a.id} value={a.id}>{a.name}</option>
               ))}
-            </div>
+            </select>
           )}
         </div>
 
@@ -10755,12 +10832,12 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
           {intervenants.length === 0 ? (
             <div className="text-sm" style={{ color: INK_SOFT }}>Aucun intervenant enregistré.</div>
           ) : (
-            <div className="flex flex-wrap gap-2">
-              {intervenants.map((i) => (
-                <Chip key={i.id} label={i.name} color={CRISIS} on={selectedIntervenants.includes(i.id)}
-                  onClick={() => toggleIntervenant(i.id)} />
-              ))}
-            </div>
+            <ChoixMultiple
+              placeholder="Aucun intervenant"
+              options={intervenants}
+              values={selectedIntervenants}
+              onToggle={toggleIntervenant}
+            />
           )}
         </div>
 
