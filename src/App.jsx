@@ -2320,12 +2320,13 @@ function advanceMasteredTargets(students, sessions, guidances) {
    sa propre ligne. La colonne "Indépendant" vaut 1 ou 0 : une moyenne dessus
    donne directement un pourcentage, sans formule à écrire. Les étapes
    manquées restent hors de cette colonne, comme dans les calculs de l'appli. */
-function buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter) {
+function buildDetailRows(sessions, students, ateliers, intervenants, groupes, guidances, studentFilter) {
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
+  const groupName = (sid) => nomGroupe(groupes, (students.find((s) => s.id === sid) || {}).groupeId) || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)', 'Compteur', 'Chrono (s)']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Groupe', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)', 'Compteur', 'Chrono (s)']];
 
   /* Mesure auxiliaire capturée pour cet essai (relance à chaque essai) — vide
      tant que rien n'a été relancé sous cette clé, jamais un zéro par défaut. */
@@ -2343,6 +2344,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
       sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Équilibre' : 'Séance libre',
       intervenantName(sess.intervenantId),
       studentName(sid),
+      groupName(sid),
       obj.name,
       obj.activeTargetName || '—',
       obj.activePhaseName || currentPhase(obj).name,
@@ -2445,7 +2447,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   return rows;
 }
 
-function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], guidances, studentFilter, releves = [], axesSuivi = []) {
+function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], groupes = [], guidances, studentFilter, releves = [], axesSuivi = []) {
   const keepStudent = (sid) => !studentFilter || studentFilter.includes(sid);
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
@@ -2497,9 +2499,9 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }, { wch: 9 }, { wch: 10 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Cotations');
 
-  const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter);
+  const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, groupes, guidances, studentFilter);
   const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
-  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 11 }];
+  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 14 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 11 }];
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
@@ -2560,15 +2562,15 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   /* Suivi continu : une ligne par relevé, avec son heure et sa durée jusqu'au
      relevé suivant du même couple personne/suivi. Toujours créée, même vide,
      pour que le nombre de feuilles ne varie pas d'un rapport à l'autre. */
-  const suiviRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Suivi', 'Critère', 'Durée (min)']];
-  const lignesSuivi = lignesSuiviExport(releves, students, axesSuivi, studentFilter);
+  const suiviRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Suivi', 'Critère', 'Durée (min)', 'Groupe', 'Intervenant', 'Atelier']];
+  const lignesSuivi = lignesSuiviExport(releves, students, axesSuivi, studentFilter, groupes, intervenants, ateliers);
   if (lignesSuivi.length) {
     lignesSuivi.forEach((l) => suiviRows.push(l));
   } else {
-    suiviRows.push(['', '', '', '', '', 'Aucun relevé de suivi continu sur cette sélection.', '']);
+    suiviRows.push(['', '', '', '', '', 'Aucun relevé de suivi continu sur cette sélection.', '', '', '', '']);
   }
   const ws5 = XLSX.utils.aoa_to_sheet(suiviRows);
-  ws5['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 16 }, { wch: 10 }, { wch: 18 }, { wch: 22 }, { wch: 12 }];
+  ws5['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 16 }, { wch: 10 }, { wch: 18 }, { wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 18 }];
   XLSX.utils.book_append_sheet(wb, ws5, 'Suivi continu');
 
   /* Tableau de bord : une ligne par personne/objectif, une colonne par date.
@@ -4340,10 +4342,15 @@ function AbaApp() {
       version: 4,
       exportedAt: new Date().toISOString(),
       appareil,
+      /* groupeId voyage déjà sur chaque personne (aucun champ retiré) ; sans
+         la liste des groupes ci-dessous, Manager n'aurait qu'un identifiant
+         opaque et ne pourrait pas distinguer deux homonymes de classes
+         différentes — la raison d'être du groupe dans le croisement. */
       students: students.filter((st) => idsConcernes.has(st.id)),
       ateliers,
       emploiDuTemps,
       intervenants,
+      groupes,
       guidances,
       axesSuivi,
       sessions: seancesRetenues,
@@ -4374,7 +4381,7 @@ function AbaApp() {
   /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
      transferts qui restent dans un espace déjà protégé. */
   function exportBackupClair() {
-    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, emploiDuTemps, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
+    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, groupeAppareil, students, ateliers, emploiDuTemps, intervenants, groupes, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
     setBackupPrompt(null);
@@ -4392,7 +4399,7 @@ function AbaApp() {
       if (ok && apresExport) apresExport();
       return;
     }
-    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, emploiDuTemps, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
+    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, groupeAppareil, students, ateliers, emploiDuTemps, intervenants, groupes, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
     const envelope = await encryptJSON(payload, passphrase);
     const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json' });
     downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
@@ -4410,19 +4417,22 @@ function AbaApp() {
       `Restaurer cette sauvegarde ?\n\n${(d.students || []).length} personne(s), ${(d.sessions || []).length} séance(s).\n\nToutes les données actuelles de cette tablette seront remplacées.`
     );
     if (!ok) return;
-    setStudents(migrerStudentsSuivi(d.students || []));
+    setStudents(migrerStudentsGroupe(migrerStudentsSuivi(d.students || [])));
     setAteliers(d.ateliers || []);
     setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
     setIntervenants(d.intervenants || []);
+    setGroupes(d.groupes || []);
     if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
     setSessions(d.sessions || []);
     setCrises(d.crises || []);
     setAxesSuivi(migrerAxesSuivi(d.axesSuivi));
     setReleves(migrerReleves(d.suivi || d.stabilite || []));
-    /* Le nom d'appareil du fichier ne s'impose pas à la tablette qui restaure :
-       elle garde le sien s'il est déjà renseigné, sinon elle reprend celui de
-       la sauvegarde plutôt que de rester anonyme. */
+    /* Le nom d'appareil et le groupe de rattachement du fichier ne s'imposent
+       pas à la tablette qui restaure : elle garde les siens s'ils sont déjà
+       renseignés, sinon elle reprend ceux de la sauvegarde plutôt que de
+       rester anonyme. */
     if (d.appareil && !appareil.trim()) setAppareil(d.appareil);
+    if (d.groupeAppareil && !groupeAppareil.trim()) setGroupeAppareil(d.groupeAppareil);
     notify('Sauvegarde restaurée');
   }
 
@@ -4949,7 +4959,7 @@ function AbaApp() {
            d'onglet, l'appui depuis Export n'aurait aucun effet visible. */
         return (
           <ExportScreen
-            sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants}
+            sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} groupes={groupes}
             guidances={guidances} releves={releves} axesSuivi={axesSuivi} appareil={appareil} notify={notify}
             onEditCrisis={editCrisis} onMarkSent={markSent}
             onMarkCrisesSent={markCrisesSent} onMarkRelevesSent={markRelevesSent}
@@ -10417,7 +10427,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
    dessous, puis une archive dépliante pour ce qui est déjà parti. Tout y est
    corrigeable, avant comme après l'envoi : c'est le seul endroit où l'on relit
    avant de transmettre. */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, releves, axesSuivi, appareil, notify, onEditCrisis, onEditSession, onDeleteSession, onDeleteAllSessions, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onOuvrirMenu }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, groupes, guidances, releves, axesSuivi, appareil, notify, onEditCrisis, onEditSession, onDeleteSession, onDeleteAllSessions, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onOuvrirMenu }) {
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   const journees = React.useMemo(
     () => journeesSuivi(releves, students, axesSuivi, null),
@@ -10482,7 +10492,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
   const sessionLabel = (sess) => (sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Équilibre' : 'Séance libre');
 
   function makeFile() {
-    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, guidances, studentFilter, chosenReleves, axesSuivi);
+    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, groupes, guidances, studentFilter, chosenReleves, axesSuivi);
     const blob = workbookBlob(wb);
     const initials = byStudent
       ? students.filter((s) => pickedStudents.includes(s.id)).map((s) => s.initials.replace(/\./g, '')).join('-')
