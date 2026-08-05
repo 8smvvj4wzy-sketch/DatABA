@@ -9875,7 +9875,6 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
 
       <FriseJournee students={students} axesSuivi={axesSuivi} releves={releves} onOuvrirSuivi={onOuvrirSuivi} />
       <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} onVoirGraphique={voirGraphique} />
-      <>
       <div className="space-y-3">
         {students.map((s) => {
           const open = openId === s.id;
@@ -9918,7 +9917,6 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
           );
         })}
       </div>
-      </>
     </div>
   );
 }
