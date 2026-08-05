@@ -3074,8 +3074,8 @@ const TAB_ORDER = ['suivi', 'session', 'export'];
    dur dans le JSX du tiroir en plus du `switch` de rendu, ce qui obligeait à
    maintenir deux listes en parallèle à chaque ajout ou retrait de panneau. */
 const PANNEAUX = [
-  { k: 'ateliers', label: 'Ateliers et emploi du temps', icon: CalendarDays },
   { k: 'personnes', label: 'Personnes accompagnées', icon: Users },
+  { k: 'ateliers', label: 'Ateliers et emploi du temps', icon: CalendarDays },
   { k: 'intervenants', label: 'Intervenants', icon: UserCog },
   { k: 'modeles', label: "Modèles d'objectifs", icon: BookmarkPlus },
   { k: 'guidances', label: 'Guidances', icon: SlidersHorizontal },
@@ -7976,59 +7976,79 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
   return (
     <div>
-      <div className="flex flex-col gap-2 mb-4 landscape:flex-row landscape:items-start landscape:justify-between">
-        <div className="min-w-0">
+      <div className="mb-3">
+        <div className="flex flex-wrap items-center gap-2">
           {isEdit ? (
-            <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>
+            <h1 className="text-xl font-semibold truncate min-w-0" style={{ fontFamily: F_DISPLAY }}>
               {atelier ? atelier.name : session.mode === 'balance' ? 'Équilibre' : 'Séance libre'}
             </h1>
           ) : (
-            <button onClick={() => setFeuille('atelier')} className="flex items-center gap-1 max-w-full text-left" title="Changer d'atelier">
+            <button onClick={() => setFeuille('atelier')} className="flex items-center gap-1 min-w-0 text-left" title="Changer d'atelier">
               <h1 className="text-xl font-semibold truncate" style={{ fontFamily: F_DISPLAY }}>
                 {atelier ? atelier.name : session.mode === 'balance' ? 'Équilibre' : 'Séance libre'}
               </h1>
               <ChevronDown size={16} style={{ color: INK_SOFT }} className="shrink-0" />
             </button>
           )}
-          <p className="text-sm" style={{ color: INK_SOFT }}>
-            {isEdit ? <>Correction · {new Date(session.date).toLocaleDateString('fr-FR')} {timeShort(session.date)}</> : <span style={{ fontFamily: F_MONO }}>{fmtClock(elapsed)}</span>}
-            {intervenant && <> · {intervenant.name}</>}
-            {!isEdit && wakeOk && <> · <Sun size={12} className="inline" /> écran maintenu</>}
-          </p>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            {isEdit && (
+              <Btn variant="ghost" onClick={() => { setSession(null); if (onAnnulerCorrection) onAnnulerCorrection(); }} className="text-sm py-2.5">Annuler</Btn>
+            )}
+            {!isEdit && (
+              <button
+                onClick={togglePause}
+                className="rounded-xl px-3 py-2.5 border"
+                style={{ borderColor: isPaused ? ACCENT : BORDER, backgroundColor: isPaused ? ACCENT : CARD, color: isPaused ? ACCENT_INK : INK_SOFT }}
+                title={isPaused ? 'Reprendre la séance' : 'Mettre en pause'}
+              >
+                {isPaused ? <Play size={17} /> : <Pause size={17} />}
+              </button>
+            )}
+            {!isEdit && (
+              <button
+                onClick={cycleZoom}
+                className="rounded-xl px-3 py-2.5 border"
+                style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
+                title={`Densité d'affichage : ${(ZOOM_LEVELS.find((z) => z.v === zoom) || ZOOM_LEVELS[0]).l}`}
+              >
+                <LayoutGrid size={17} />
+              </button>
+            )}
+            {!isEdit && (
+              <button
+                onClick={() => setFeuille('reglages')}
+                className="rounded-xl px-3 py-2.5 border relative"
+                style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
+                title="Réglages de la séance"
+              >
+                <SlidersHorizontal size={17} />
+                {nbMasques > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center" style={{ backgroundColor: ACCENT, color: ACCENT_INK, fontFamily: F_MONO }}>
+                    {nbMasques}
+                  </span>
+                )}
+              </button>
+            )}
+            {!isEdit && (
+              <button
+                onClick={abandonner}
+                className="rounded-xl px-3 py-2.5 border"
+                style={{ borderColor: CRISIS, color: CRISIS, backgroundColor: CARD }}
+                title="Abandonner la séance"
+              >
+                <X size={17} />
+              </button>
+            )}
+            <Btn variant="outline" onClick={() => onFinish(finalizeSession(session))} className="text-sm py-2.5" title={isEdit ? 'Valider' : 'Enregistrer'}>
+              <Save size={16} />
+            </Btn>
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2 shrink-0">
-          {isEdit && (
-            <Btn variant="ghost" onClick={() => { setSession(null); if (onAnnulerCorrection) onAnnulerCorrection(); }} className="text-sm py-2.5">Annuler</Btn>
-          )}
-          {!isEdit && (
-            <button
-              onClick={togglePause}
-              className="rounded-xl px-3 py-2.5 border"
-              style={{ borderColor: isPaused ? ACCENT : BORDER, backgroundColor: isPaused ? ACCENT : CARD, color: isPaused ? ACCENT_INK : INK_SOFT }}
-              title={isPaused ? 'Reprendre la séance' : 'Mettre en pause'}
-            >
-              {isPaused ? <Play size={17} /> : <Pause size={17} />}
-            </button>
-          )}
-          {!isEdit && (
-            <button
-              onClick={() => setFeuille('reglages')}
-              className="rounded-xl px-3 py-2.5 border relative"
-              style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-              title="Réglages de la séance"
-            >
-              <SlidersHorizontal size={17} />
-              {nbMasques > 0 && (
-                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[10px] flex items-center justify-center" style={{ backgroundColor: ACCENT, color: ACCENT_INK, fontFamily: F_MONO }}>
-                  {nbMasques}
-                </span>
-              )}
-            </button>
-          )}
-          <Btn variant="outline" onClick={() => onFinish(finalizeSession(session))} className="text-sm py-2.5">
-            <Save size={16} /> {isEdit ? 'Valider' : 'Enregistrer'}
-          </Btn>
-        </div>
+        <p className="text-sm" style={{ color: INK_SOFT }}>
+          {isEdit ? <>Correction · {new Date(session.date).toLocaleDateString('fr-FR')} {timeShort(session.date)}</> : <span style={{ fontFamily: F_MONO }}>{fmtClock(elapsed)}</span>}
+          {intervenant && <> · {intervenant.name}</>}
+          {!isEdit && wakeOk && <> · <Sun size={12} className="inline" /> écran maintenu</>}
+        </p>
       </div>
 
       {isPaused && (
@@ -8040,7 +8060,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
       {/* Mini-curseur : bascule prioritaires / tous les objectifs.
           Réagit aussi au balayage sur la zone de cotation. */}
-      <div className="flex justify-center mb-4">
+      <div className="flex justify-center mb-3">
         <div className="relative flex rounded-full p-1 w-full max-w-xs" style={{ backgroundColor: CARD, border: `1px solid ${BORDER}` }}>
           <div
             className="absolute top-1 bottom-1 rounded-full"
@@ -8295,10 +8315,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           hasInterval={hasInterval}
           soundOn={soundOn} setSoundOn={setSoundOn}
           vibrateOn={vibrateOn} setVibrateOn={setVibrateOn}
-          zoom={zoom} cycleZoom={cycleZoom}
           hiddenCount={nbMasques}
           onReafficher={() => { setSession((s0) => ({ ...s0, hidden: {} })); setFeuille(null); }}
-          onAbandon={() => { setFeuille(null); abandonner(); }}
           onClose={() => setFeuille(null)}
         />
       )}
@@ -8340,7 +8358,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
    Composants à part entière (et non des fonctions imbriquées) pour que leurs
    propres useState ne soient montés que le temps où la feuille est ouverte. */
 
-function FeuilleReglages({ hasInterval, soundOn, setSoundOn, vibrateOn, setVibrateOn, zoom, cycleZoom, hiddenCount, onReafficher, onAbandon, onClose }) {
+function FeuilleReglages({ hasInterval, soundOn, setSoundOn, vibrateOn, setVibrateOn, hiddenCount, onReafficher, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
       <div className="rounded-2xl p-5 max-w-sm w-full" style={{ backgroundColor: CARD }}>
@@ -8349,10 +8367,6 @@ function FeuilleReglages({ hasInterval, soundOn, setSoundOn, vibrateOn, setVibra
           <button onClick={onClose} style={{ color: INK_SOFT }}><X size={18} /></button>
         </div>
         <div className="space-y-1.5">
-          <button onClick={cycleZoom} className="w-full rounded-xl px-3 py-2.5 flex items-center justify-between border text-sm" style={{ borderColor: BORDER }}>
-            <span className="flex items-center gap-2"><SlidersHorizontal size={16} /> Densité d'affichage</span>
-            <span style={{ fontFamily: F_MONO, color: INK_SOFT }}>{(ZOOM_LEVELS.find((z) => z.v === zoom) || ZOOM_LEVELS[0]).l}</span>
-          </button>
           {hasInterval && (
             <button
               onClick={() => { const next = !soundOn; setSoundOn(next); if (next) { primeAudio(); beep(); } }}
@@ -8376,9 +8390,6 @@ function FeuilleReglages({ hasInterval, soundOn, setSoundOn, vibrateOn, setVibra
               <Eye size={16} /> {hiddenCount} objectif{hiddenCount > 1 ? 's' : ''} masqué{hiddenCount > 1 ? 's' : ''} — tout réafficher
             </button>
           )}
-          <button onClick={onAbandon} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 text-sm" style={{ color: CRISIS }}>
-            <X size={16} /> Abandonner la séance
-          </button>
         </div>
       </div>
     </div>
@@ -8433,18 +8444,18 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
         {ordonnes.length === 0 ? (
           <Empty>Aucun autre atelier n'est configuré.</Empty>
         ) : (
-          <div className="space-y-1.5 mb-3">
+          <select
+            value={atelierId || ''}
+            onChange={(e) => choisir(e.target.value)}
+            className="w-full rounded-lg px-3 py-2.5 text-sm border mb-3"
+            style={{ borderColor: BORDER, backgroundColor: PAPER, color: INK }}
+          >
             {ordonnes.map((a) => (
-              <button
-                key={a.id} onClick={() => choisir(a.id)}
-                className="w-full rounded-xl px-3 py-2.5 text-left border flex items-center gap-2"
-                style={{ borderColor: atelierId === a.id ? ACCENT : BORDER, backgroundColor: atelierId === a.id ? ACCENT : 'transparent', color: atelierId === a.id ? ACCENT_INK : INK }}
-              >
-                {idsSuite.has(a.id) && <CalendarDays size={13} className="shrink-0" style={{ opacity: 0.7 }} />}
-                <span className="flex-1 min-w-0 truncate">{a.name}</span>
-              </button>
+              <option key={a.id} value={a.id}>
+                {a.name}{idsSuite.has(a.id) ? ' — prévu aujourd’hui' : ''}
+              </option>
             ))}
-          </div>
+          </select>
         )}
         {atelier && (
           <>
