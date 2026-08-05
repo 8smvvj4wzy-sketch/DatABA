@@ -4421,6 +4421,26 @@ function AbaApp() {
     setBackupPrompt({ mode: 'export', managerPayload: payload, managerNom: nom, apresExport });
   }
 
+  /* Profils (personnes + objectifs) vers une autre tablette : `portee`
+     'groupe' pour « mes profils » (filtré sur groupeAppareil), 'complet' pour
+     la rediffusion depuis une tablette centrale (tout le parc — voir PR7).
+     Toujours chiffré, sans choix clair/chiffré comme pour la sauvegarde
+     complète : ce fichier ne contient que des données d'usagers, jamais de
+     raison de le laisser lisible en clair. */
+  function exportProfils(portee) {
+    const concernes = portee === 'complet' ? students : profilsDuGroupe(students, groupeAppareil);
+    const payload = payloadProfils({
+      students: concernes,
+      groupes,
+      axesSuivi: axesUtilises(concernes, axesSuivi),
+      appareil,
+      portee,
+      maintenant: Date.now(),
+    });
+    const nom = nomFichier(portee === 'complet' ? 'profils-complets' : 'mes-profils', appareil, 'json');
+    setBackupPrompt({ mode: 'export', profilsPayload: payload, profilsNom: nom });
+  }
+
   /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
      transferts qui restent dans un espace déjà protégé. */
   function exportBackupClair() {
@@ -4440,6 +4460,13 @@ function AbaApp() {
       const apresExport = backupPrompt.apresExport;
       setBackupPrompt(null);
       if (ok && apresExport) apresExport();
+      return;
+    }
+    if (backupPrompt && backupPrompt.profilsPayload) {
+      const enveloppe = await encryptJSON(backupPrompt.profilsPayload, passphrase);
+      const blob = new Blob([JSON.stringify(enveloppe)], { type: 'application/json' });
+      await shareReport({ blob, name: backupPrompt.profilsNom, title: backupPrompt.profilsNom, notify });
+      setBackupPrompt(null);
       return;
     }
     const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, groupeAppareil, students, ateliers, emploiDuTemps, intervenants, groupes, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
@@ -4497,6 +4524,11 @@ function AbaApp() {
         setBackupPrompt({ mode: 'import', envelope: d, error: '' });
         return;
       }
+      if (d && d.format === 'aba-profils') {
+        // Même garde que confirmImport, pour un fichier de profils resté en clair.
+        notify('Fichier de profils reçu — l’écran de rapprochement arrive dans une prochaine mise à jour');
+        return;
+      }
       // Ancienne sauvegarde exportée en clair, avant l'ajout du chiffrement : toujours acceptée
       applyRestoredData(d);
     };
@@ -4507,6 +4539,17 @@ function AbaApp() {
     try {
       const d = await decryptJSON(backupPrompt.envelope, passphrase);
       setBackupPrompt(null);
+      /* Un fichier de profils est toujours chiffré (exportProfils) : son
+         format réel n'apparaît qu'ici, après déchiffrement — l'enveloppe vue
+         par importBackup est indistincte d'une sauvegarde complète chiffrée.
+         Ne jamais laisser passer vers applyRestoredData, qui REMPLACE tout :
+         un fichier de profils n'a ni ateliers ni emploi du temps ni séances,
+         les confirmer ferait tout disparaître. */
+      if (d && d.format === 'aba-profils') {
+        // Garde de sécurité en attendant l'écran de rapprochement (prochaine mise à jour).
+        notify('Fichier de profils reçu — l’écran de rapprochement arrive dans une prochaine mise à jour');
+        return;
+      }
       applyRestoredData(d);
     } catch (e) {
       setBackupPrompt({ ...backupPrompt, error: 'Mot de passe incorrect ou fichier corrompu' });
@@ -4928,6 +4971,7 @@ function AbaApp() {
             intervenants={intervenants} poste={poste} onChoisirPoste={choisirPosteIntervenant}
             retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
             onExportConfig={exportConfig} onExportBackup={exportBackup} onImportBackup={importBackup}
+            onExportProfils={() => exportProfils('groupe')}
           />
         );
       case 'guidances':
@@ -6299,7 +6343,7 @@ function PanneauMotsDePasse({ security, onChangePin, onDisableProtection }) {
 /* Les deux exports existaient déjà, mais sous deux boutons aux libellés
    proches. Ils sont présentés ici comme un seul choix explicite : avec ou sans
    données personnelles. */
-function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSetGroupeAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup }) {
+function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSetGroupeAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup, onExportProfils }) {
   const fileRef = useRef(null);
   const [nom, setNom] = useState(appareil || '');
   useEffect(() => { setNom(appareil || ''); }, [appareil]);
@@ -6388,7 +6432,7 @@ function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSe
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Exporter</span>
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Deux fichiers très différents. Le second ne quitte pas l'établissement sans précaution.
+          Trois fichiers différents. Les deux derniers ne quittent pas l'établissement sans précaution.
         </p>
 
         <button
@@ -6406,7 +6450,7 @@ function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSe
 
         <button
           onClick={onExportBackup}
-          className="w-full rounded-2xl border-2 p-3.5 text-left"
+          className="w-full rounded-2xl border-2 p-3.5 mb-2 text-left"
           style={{ borderColor: INK, backgroundColor: CARD }}
         >
           <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Avec les données personnelles</div>
@@ -6414,6 +6458,20 @@ function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSe
             Sauvegarde complète : initiales, objectifs, cotations, crises et relevés de suivi continu.
             C'est le seul moyen de récupérer l'historique après un effacement ou un changement
             d'appareil — et le seul fichier à protéger par mot de passe.
+          </div>
+        </button>
+
+        <button
+          onClick={onExportProfils}
+          disabled={!groupeAppareil}
+          className="w-full rounded-2xl border-2 p-3.5 text-left"
+          style={{ borderColor: ACCENT, backgroundColor: CARD, opacity: groupeAppareil ? 1 : 0.5 }}
+        >
+          <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Mes profils, vers une autre tablette</div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            {groupeAppareil
+              ? "Personnes et objectifs du groupe de cette tablette, à agréger sur une tablette centrale. Toujours chiffré."
+              : 'Configurez d’abord le groupe de cette tablette, ci-dessus.'}
           </div>
         </button>
       </Card>
