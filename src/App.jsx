@@ -7,7 +7,7 @@ import {
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
   ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, GripVertical, CalendarClock, CalendarDays, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
-  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon, Info,
+  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon, Info, School,
 } from 'lucide-react';
 
 /* ==================== Design tokens ====================
@@ -3268,13 +3268,14 @@ const ZOOM_LEVELS = [
    document déjà en place. */
 const TAB_ORDER = ['suivi', 'session', 'export'];
 
-/* Les neuf panneaux du tiroir latéral. Source unique : autrefois écrits en
+/* Les dix panneaux du tiroir latéral. Source unique : autrefois écrits en
    dur dans le JSX du tiroir en plus du `switch` de rendu, ce qui obligeait à
    maintenir deux listes en parallèle à chaque ajout ou retrait de panneau. */
 const PANNEAUX = [
   { k: 'personnes', label: 'Personnes accompagnées', icon: Users },
   { k: 'ateliers', label: 'Ateliers et emploi du temps', icon: CalendarDays },
   { k: 'intervenants', label: 'Intervenants', icon: UserCog },
+  { k: 'groupes', label: 'Groupes', icon: School },
   { k: 'modeles', label: "Modèles d'objectifs", icon: BookmarkPlus },
   { k: 'guidances', label: 'Guidances', icon: SlidersHorizontal },
   { k: 'abc', label: 'Réponses ABC', icon: AlertTriangle },
@@ -3583,6 +3584,11 @@ function AbaApp() {
      ordonnés. Un même atelier peut figurer sur plusieurs jours. */
   const [emploiDuTemps, setEmploiDuTemps] = useState({});
   const [intervenants, setIntervenants] = useState([]);
+  /* Groupes (classes) : ce qui distingue deux personnes aux mêmes initiales
+     dans des classes différentes, et ce qui décide, tablette par tablette, de
+     ce qui s'affiche sur l'écran Suivi. Configuration de premier niveau, comme
+     intervenants et ateliers. */
+  const [groupes, setGroupes] = useState([]);
   const [guidances, setGuidances] = useState(DEFAULT_GUIDANCE);
   const [objectiveTemplates, setObjectiveTemplates] = useState([]);
   const [abcOptions, setAbcOptions] = useState(DEFAULT_ABC);
@@ -3593,6 +3599,10 @@ function AbaApp() {
      dans son nom : sans lui, un dossier de sauvegardes ne dit pas de quelle
      tablette vient quoi. */
   const [appareil, setAppareil] = useState('');
+  /* Groupe auquel CETTE tablette est rattachée — distinct du groupe d'une
+     personne. C'est lui qui filtre l'écran Suivi (personnesVisibles) : vide,
+     rien n'est filtré. Choisi dans PanneauDonnees. */
+  const [groupeAppareil, setGroupeAppareil] = useState('');
   const [sessions, setSessions] = useState([]);
   const [crises, setCrises] = useState([]);
   /* Relevés de suivi continu : un tableau à part, indépendant des séances, sur
@@ -3775,11 +3785,13 @@ function AbaApp() {
       try {
         const d = JSON.parse(config);
         nbPersonnes = (d.students || []).length;
-        setStudents(migrerStudentsSuivi(d.students || []));
+        setStudents(migrerStudentsGroupe(migrerStudentsSuivi(d.students || [])));
         setAteliers(d.ateliers || []);
         setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
         setIntervenants(d.intervenants || []);
+        setGroupes(d.groupes || []);
         setAppareil(d.appareil || '');
+        setGroupeAppareil(d.groupeAppareil || '');
         retention = d.retentionMonths || 0;
         setRetentionMonths(retention);
         if (Array.isArray(d.guidances) && d.guidances.length) {
@@ -3955,7 +3967,7 @@ function AbaApp() {
   /* Réécrit toutes les données avec la clé courante — utilisé après un
      changement de code, puisque l'ancienne clé ne déchiffrerait plus rien. */
   async function persistAll() {
-    await store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil }));
+    await store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, groupes, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, groupeAppareil }));
     moisEcrits.current = {};
     await persistSessions(sessions);
     await store.set('aba:crises', JSON.stringify(crises));
@@ -4030,8 +4042,8 @@ function AbaApp() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil }));
-  }, [students, ateliers, emploiDuTemps, intervenants, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, loaded]);
+    store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, groupes, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, groupeAppareil }));
+  }, [students, ateliers, emploiDuTemps, intervenants, groupes, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, groupeAppareil, loaded]);
   /* Empreinte du dernier enregistrement de chaque mois, pour n'écrire que ce
      qui a réellement changé. */
   const moisEcrits = useRef({});
@@ -4178,6 +4190,13 @@ function AbaApp() {
   const addIntervenant = (name) => setIntervenants((l) => [...l, { id: uid(), name }]);
   const removeIntervenant = (id) => setIntervenants((l) => l.filter((x) => x.id !== id));
   const renameIntervenant = (id, name) => setIntervenants((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
+  /* Suppression jamais en cascade : une personne qui portait ce groupe le
+     garde, affiché en « Groupe retiré » (GROUPE_INCONNU) partout où il est
+     lu — même principe que la suppression d'un intervenant ou d'un axe de
+     suivi. */
+  const addGroupe = (name) => setGroupes((l) => [...l, { id: uid(), name }]);
+  const removeGroupe = (id) => setGroupes((l) => l.filter((x) => x.id !== id));
+  const renameGroupe = (id, name) => setGroupes((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
   const addGuidance = (g) => setGuidances((l) => [...l, g]);
   const removeGuidance = (code) => setGuidances((l) => (l.length > 1 ? l.filter((x) => x.code !== code) : l));
   const toggleIndependent = (code) => setGuidances((l) => l.map((x) => (x.code === code ? { ...x, independent: !x.independent } : x)));
@@ -4205,9 +4224,10 @@ function AbaApp() {
     notify(`Modèle appliqué à ${studentIds.length} personne${studentIds.length !== 1 ? 's' : ''}`);
   };
 
-  /* Export de configuration : ateliers, intervenants, guidances et modèles.
-     Aucune personne, aucune séance, aucune crise — le fichier ne contient donc
-     aucune donnée d'usager et peut circuler librement entre appareils. */
+  /* Export de configuration : ateliers, intervenants, groupes, guidances et
+     modèles. Aucune personne, aucune séance, aucune crise — le fichier ne
+     contient donc aucune donnée d'usager et peut circuler librement entre
+     appareils. */
   function exportConfig() {
     const payload = {
       format: 'aba-config',
@@ -4216,6 +4236,7 @@ function AbaApp() {
       ateliers: ateliers.map(({ usualStudentIds, usualObjectives, favoriteObjectiveIds, knownObjectiveIds, personnesParJour, ...a }) => a),
       emploiDuTemps,
       intervenants,
+      groupes,
       guidances,
       objectiveTemplates,
       abcOptions,
@@ -4230,9 +4251,10 @@ function AbaApp() {
   function importConfig(d) {
     const nbA = (d.ateliers || []).length;
     const nbI = (d.intervenants || []).length;
+    const nbG = (d.groupes || []).length;
     const nbT = (d.objectiveTemplates || []).length;
     if (!window.confirm(
-      `Importer cette configuration ?\n\n${nbA} atelier(s), ${nbI} intervenant(s), ${nbT} modèle(s) d'objectif.\n\nLes éléments existants sont conservés, les nouveaux s'ajoutent.`
+      `Importer cette configuration ?\n\n${nbA} atelier(s), ${nbI} intervenant(s), ${nbG} groupe(s), ${nbT} modèle(s) d'objectif.\n\nLes éléments existants sont conservés, les nouveaux s'ajoutent.`
     )) return;
     /* Un atelier importé dont le nom existe déjà localement est écarté au
        profit de l'atelier existant : son id d'origine doit être remappé vers
@@ -4259,6 +4281,7 @@ function AbaApp() {
       });
     }
     setIntervenants((cur) => [...cur, ...(d.intervenants || []).filter((i) => !cur.some((x) => x.name === i.name))]);
+    setGroupes((cur) => [...cur, ...(d.groupes || []).filter((g) => !cur.some((x) => x.name === g.name))]);
     setGuidances((cur) => [...cur, ...(d.guidances || []).filter((g) => !cur.some((x) => x.code === g.code))]);
     setObjectiveTemplates((cur) => [...cur, ...(d.objectiveTemplates || []).filter((t) => !cur.some((x) => x.name === t.name))]);
     if (d.abcOptions) {
@@ -4806,6 +4829,8 @@ function AbaApp() {
         );
       case 'intervenants':
         return <PanneauIntervenants intervenants={intervenants} onAdd={addIntervenant} onRename={renameIntervenant} onRemove={removeIntervenant} />;
+      case 'groupes':
+        return <PanneauGroupes groupes={groupes} onAdd={addGroupe} onRename={renameGroupe} onRemove={removeGroupe} />;
       case 'modeles':
         return (
           <PanneauModeles
@@ -5792,6 +5817,33 @@ function PanneauIntervenants({ intervenants, onAdd, onRename, onRemove }) {
           <div className="space-y-1.5">
             {intervenants.map((i) => (
               <EditableRow key={i.id} label={i.name} onRename={(v) => onRename(i.id, v)} onRemove={() => onRemove(i.id)} />
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* Calqué sur PanneauIntervenants : même forme, même EditableRow. Un groupe
+   supprimé n'emporte personne avec lui — voir removeGroupe et GROUPE_INCONNU. */
+function PanneauGroupes({ groupes, onAdd, onRename, onRemove }) {
+  const [nom, setNom] = useState('');
+  const ajouter = () => { if (nom.trim()) { onAdd(nom.trim()); setNom(''); } };
+  return (
+    <div>
+      <SectionTitle sub="Les classes de l'établissement : elles distinguent deux personnes aux mêmes initiales et décident, tablette par tablette, de qui apparaît sur l'écran Suivi.">Groupes</SectionTitle>
+      <Card>
+        <div className="flex gap-2 mb-3">
+          <Field value={nom} onChange={setNom} placeholder="Nom du groupe (ex. Classe 1)" onEnter={ajouter} />
+          <Btn onClick={ajouter} className="px-4 shrink-0"><Plus size={18} /></Btn>
+        </div>
+        {groupes.length === 0 ? (
+          <Empty>Aucun groupe enregistré.</Empty>
+        ) : (
+          <div className="space-y-1.5">
+            {groupes.map((g) => (
+              <EditableRow key={g.id} label={g.name} onRename={(v) => onRename(g.id, v)} onRemove={() => onRemove(g.id)} />
             ))}
           </div>
         )}
