@@ -4679,7 +4679,7 @@ function AbaApp() {
   const noterSuivi = (studentId, suiviId, critere) => {
     const maintenant = new Date().toISOString();
     const releveId = uid();
-    setReleves((l) => [...l, { id: releveId, studentId, suiviId, timestamp: maintenant, critere, source: 'pastille' }]);
+    setReleves((l) => [...l, { id: releveId, studentId, suiviId, timestamp: maintenant, critere, source: 'pastille', ...contexteReleve(activeSession, poste, maintenant), appareilOrigine: null }]);
     const st = students.find((s) => s.id === studentId);
     const nom = st ? st.initials : '';
     if (critere === 'crise') {
@@ -4718,7 +4718,8 @@ function AbaApp() {
      principe que noterSuivi mais sans critère ni fin — chaque appui compte
      pour lui-même, rien ne « vaut jusqu'au suivant ». */
   const noterCompteur = (studentId, compteurId) => {
-    setReleves((l) => [...l, { id: uid(), studentId, compteurId, timestamp: new Date().toISOString(), kind: 'compteur', source: 'pastille' }]);
+    const maintenant = new Date().toISOString();
+    setReleves((l) => [...l, { id: uid(), studentId, compteurId, timestamp: maintenant, kind: 'compteur', source: 'pastille', ...contexteReleve(activeSession, poste, maintenant), appareilOrigine: null }]);
   };
 
   /* Annule le dernier appui du jour pour ce compteur — un doigt qui glisse est
@@ -4741,14 +4742,18 @@ function AbaApp() {
 
   /* Occurrence ajoutée après coup, depuis la correction d'une journée —
      symétrique de ajouterReleve pour un compteur. */
+  /* Aucun contexte deviné ici, ni séance ni poste : une correction porte
+     souvent sur un jour passé, et l'intervenant qui corrige n'est pas
+     forcément celui qui a observé au moment visé. */
   const ajouterCompteurReleve = (studentId, compteurId, timestamp) =>
-    setReleves((l) => [...l, { id: uid(), studentId, compteurId, timestamp, kind: 'compteur', source: 'manuel' }]);
+    setReleves((l) => [...l, { id: uid(), studentId, compteurId, timestamp, kind: 'compteur', source: 'manuel', ...TRACABILITE_RELEVE_PAR_DEFAUT }]);
 
   /* Clôture la journée d'un axe : le dernier critère cesse de courir, le
      suivi redevient dormant. Sans effet si rien n'était en cours. */
   const cloturerSuivi = (studentId, suiviId) => {
     if (!critereCourant(releves, studentId, suiviId, Date.now())) return;
-    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp: new Date().toISOString(), critere: null, fin: true, source: 'cloture' }]);
+    const maintenant = new Date().toISOString();
+    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp: maintenant, critere: null, fin: true, source: 'cloture', ...contexteReleve(activeSession, poste, maintenant), appareilOrigine: null }]);
   };
 
   /* Correction après coup — une cotation oubliée, une heure fausse. Aucune
@@ -4756,8 +4761,10 @@ function AbaApp() {
      fiches crise) se recale de lui-même : il n'y a qu'à toucher aux relevés.
      `sentAt` est effacé à la modification : une journée corrigée ressort du lot
      déjà transmis, ce qui est bien le but. */
+  /* Même choix que ajouterCompteurReleve : pas de contexte deviné sur une
+     correction après coup. */
   const ajouterReleve = (studentId, suiviId, timestamp, critere, fin = false) =>
-    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp, critere, fin, source: 'manuel' }]);
+    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp, critere, fin, source: 'manuel', ...TRACABILITE_RELEVE_PAR_DEFAUT }]);
 
   const modifierReleve = (id, maj) =>
     setReleves((l) => l.map((r) => (r.id === id ? { ...r, ...maj, sentAt: null } : r)));
