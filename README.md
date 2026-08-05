@@ -316,14 +316,14 @@ quelle séance l'intervention a commencé.
 
 ## 6. Les cinq modes de cotation
 
-### Essai par essai
+### Essais
 Une réponse par essai, avec son niveau de guidance. Nombre d'essais **sans
 limite** par défaut, ou nombre prévu (3, 5, 8, 10, 20 ou libre) servant de
 simple repère : rien n'empêche de dépasser.
 
 → Score : pourcentage de réponses autonomes.
 
-### Par occurrence
+### Occurrence
 Un simple comptage : chaque appui sur **+1** enregistre une occurrence du
 comportement observé, avec un **−1** pour corriger un appui de trop.
 
@@ -338,7 +338,7 @@ d'observation ; le compteur annexe n'est pas proposé sur ce mode, le comptage
 
 → Score : nombre brut d'occurrences.
 
-### Niveau par intervalle
+### Intervalles
 Relevé périodique du niveau de fonctionnement. Le **pas est libre, de 10
 secondes à 60 minutes** — raccourcis à 30 s, 1, 2, 5, 10 et 15 min, ou saisie
 en minutes et secondes. Un pas court donne une mesure plus fine, mais demande

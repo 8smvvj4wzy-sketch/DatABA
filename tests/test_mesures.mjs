@@ -83,7 +83,7 @@ PERCENT_TYPES.forEach((k) => t(`PERCENT_TYPES ne référence que des modes exist
 USES_GUIDANCE.forEach((k) => t(`USES_GUIDANCE ne référence que des modes existants (${k})`, !!TYPES[k], true));
 
 /* ==================== Garde sur un type retiré ==================== */
-t('un mode existant renvoie ses propres métadonnées', typeMeta('trials').label, 'Essai par essai');
+t('un mode existant renvoie ses propres métadonnées', typeMeta('trials').label, 'Essais');
 t("un mode retiré ne fait pas planter l'affichage", typeMeta('probe').label, 'Mode retiré');
 t('un type absent ne fait pas planter l\'affichage', typeMeta(undefined).label, 'Mode retiré');
 
