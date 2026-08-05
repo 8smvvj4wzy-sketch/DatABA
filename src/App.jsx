@@ -4915,7 +4915,8 @@ function AbaApp() {
           // CRISE (désormais hors flux, voir plus bas) et le bord de l'écran.
           // Ce padding doit rester assez grand pour contenir ces libellés :
           // ils ne comptent plus dans la hauteur de la rangée qui les porte.
-          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.25rem)',
+          // Gardé au-dessus de 0 pour laisser une marge visible avec le bord.
+          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.75rem)',
           display: saisieEnCours ? 'none' : undefined,
         }}
       >
