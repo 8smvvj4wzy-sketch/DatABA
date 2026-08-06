@@ -4,6 +4,21 @@ name: Publier sur GitHub Pages
 # une restriction à « main » empêche toute publication si la branche par
 # défaut du dépôt porte un autre nom. Le bouton « Run workflow » de l'onglet
 # Actions permet aussi de lancer la publication à la main.
+#
+# main est toujours publiée à la racine. Un push sur une autre branche publie
+# EN PLUS son build dans /preview/, sur la même URL Pages : une PR peut ainsi
+# s'ouvrir sur deux appareils de test sans jamais remplacer ce que les
+# tablettes de service téléchargent. Coût accepté : le job compile deux fois
+# (main + branche poussée) à chaque déclenchement.
+#
+# /preview/ n'a de sens que pour une branche à la fois — un push sur une autre
+# branche le remplace. Un seul job pousse cet objectif de test à un moment
+# donné, ce qui correspond à l'usage réel du dépôt.
+#
+# ATTENTION : /preview/ partage la même origine que la racine, donc le même
+# localStorage. Ne jamais ouvrir l'URL /preview/ sur une tablette de service
+# — voir CLAUDE.md, « Collision de stockage ». Réservé à deux appareils vierges
+# ou deux profils de navigateur neufs.
 on:
   push:
   workflow_dispatch:
@@ -21,19 +36,45 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Récupérer le code
+      - name: Récupérer main
         uses: actions/checkout@v4
+        with:
+          ref: main
+          path: site-main
+
+      - name: Récupérer la branche poussée
+        uses: actions/checkout@v4
+        with:
+          path: site-branche
 
       - name: Installer Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Installer les dépendances
-        run: npm install
+      - name: Compiler main
+        working-directory: site-main
+        run: |
+          npm install
+          npm run build
 
-      - name: Compiler l'application
-        run: npm run build
+      - name: Compiler la branche poussée
+        # Seulement si ce n'est pas main elle-même : sinon /preview/
+        # dupliquerait la racine sans aucun intérêt.
+        if: github.ref_name != 'main'
+        working-directory: site-branche
+        run: |
+          npm install
+          npm run build
+
+      - name: Assembler le site publié
+        run: |
+          mkdir -p publication
+          cp -r site-main/dist/. publication/
+          if [ "${{ github.ref_name }}" != "main" ]; then
+            mkdir -p publication/preview
+            cp -r site-branche/dist/. publication/preview/
+          fi
 
       - name: Préparer GitHub Pages
         uses: actions/configure-pages@v5
@@ -41,7 +82,7 @@ jobs:
       - name: Envoyer le résultat compilé
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./dist
+          path: ./publication
 
   deploy:
     needs: build

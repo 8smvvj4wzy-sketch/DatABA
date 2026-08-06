@@ -7,7 +7,7 @@ import {
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
   ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, GripVertical, CalendarClock, CalendarDays, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
-  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon, Info,
+  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon, Info, School,
 } from 'lucide-react';
 
 /* ==================== Design tokens ====================
@@ -1217,16 +1217,119 @@ function modeleDepuisObjectif(obj) {
   return { ...reste, id: uid() };
 }
 
-/* Un nom de modèle déjà pris est suffixé plutôt que rejeté : importConfig
-   dédoublonne les modèles par `name` (voir plus bas), deux homonymes locaux
-   deviendraient donc indiscernables dans la liste puis silencieusement
-   fusionnés au premier import. */
-function nomModeleDisponible(nom, templates, exceptId) {
-  const pris = new Set(templates.filter((t) => t.id !== exceptId).map((t) => t.name));
+/* Un nom déjà pris est suffixé plutôt que rejeté — pas seulement pour les
+   modèles (nomModeleDisponible ci-dessous) : le même besoin se pose pour un
+   objectif importé qui porte le nom d'un objectif local différent (« garder
+   les deux », voir diffObjectifsPersonne). */
+function nomDisponible(nom, items, exceptId) {
+  const pris = new Set((items || []).filter((t) => t.id !== exceptId).map((t) => t.name));
   if (!pris.has(nom)) return nom;
   let i = 2;
   while (pris.has(`${nom} (${i})`)) i++;
   return `${nom} (${i})`;
+}
+
+/* importConfig dédoublonne les modèles par `name` : deux homonymes locaux
+   deviendraient indiscernables dans la liste puis silencieusement fusionnés
+   au premier import, sans ce suffixage. */
+function nomModeleDisponible(nom, templates, exceptId) {
+  return nomDisponible(nom, templates, exceptId);
+}
+
+/* Projette la configuration d'un objectif sur son CONTENU, jamais ses ids.
+   Neutralise le piège des ids par défaut, non générés par uid() (DEFAULT_
+   CHAIN_STEPS : st1..st3 ; DEFAULT_INTERVAL_LEVELS : lv1..lv4 ; BALANCE_
+   OUTCOMES : reussi/guide/erreur/manque) : ils coïncident naturellement
+   entre deux tablettes tant que rien n'est personnalisé. Comparer par id
+   déclarerait à tort un conflit entre deux objectifs identiques — ou
+   l'inverse, laisserait passer deux objectifs réellement différents qui
+   partagent un id par défaut non renommé. */
+function configCanonique(type, config) {
+  const c = config || {};
+  const base = {
+    avecCompteur: !!c.avecCompteur,
+    compteurParEssai: !!c.compteurParEssai,
+    avecChrono: !!c.avecChrono,
+    chronoMode: c.chronoMode || null,
+    chronoSeconds: c.chronoSeconds || null,
+    chronoParEssai: !!c.chronoParEssai,
+  };
+  if (USES_GUIDANCE.includes(type)) {
+    base.guidanceSet = (c.guidanceSet || []).map((g) => ({ code: g.code, label: g.label, independent: !!g.independent }));
+  }
+  if (MASTERY_TYPES.includes(type)) {
+    base.mastery = c.mastery
+      ? { threshold: c.mastery.threshold, sessions: c.mastery.sessions, unit: c.mastery.unit, sens: c.mastery.sens }
+      : null;
+  }
+  if (PERCENT_TYPES.includes(type)) {
+    base.targets = (c.targets || []).map((t) => t.name);
+  }
+  if (type === 'trials') {
+    base.trialCount = c.trialCount || 0;
+  }
+  if (type === 'interval') {
+    base.intervalSeconds = c.intervalSeconds || null;
+    base.intervalMode = c.intervalMode || null;
+    base.levels = (c.levels || []).map((l) => l.name);
+    const niveauCible = (c.levels || []).find((l) => l.id === c.targetLevelId);
+    base.targetLevelName = niveauCible ? niveauCible.name : null;
+  }
+  if (type === 'chaining' || type === 'balance') {
+    base.steps = (c.steps || []).map((s) => s.name);
+  }
+  if (type === 'balance') {
+    base.balanceOutcomes = (c.balanceOutcomes || []).map((o) => ({ label: o.label, short: o.short, reussite: !!o.reussite, exclu: !!o.exclu }));
+  }
+  return base;
+}
+
+/* Empreinte de contenu d'un objectif, en excluant exactement ce que
+   modeleDepuisObjectif exclut déjà (id, priorité, progression en cours,
+   historique de phase) — deux objectifs de même signature sont
+   interchangeables du point de vue de la fusion. */
+function signatureObjectif(obj) {
+  return JSON.stringify({
+    name: (obj.name || '').trim(),
+    type: obj.type,
+    config: configCanonique(obj.type, obj.config),
+  });
+}
+
+/* objectiveSnapshot est indexé par objectiveId (construireDonneesSeance) :
+   la présence de la clé suffit à savoir qu'une séance a figé cet objectif.
+   C'est le verrou qui empêche un import de remplacer les cibles d'un
+   objectif déjà coté — l'historique deviendrait un graphe de points
+   orphelins. */
+function objectifDejaCote(sessions, objectiveId) {
+  return (sessions || []).some((se) => se && se.objectiveSnapshot && Object.prototype.hasOwnProperty.call(se.objectiveSnapshot, objectiveId));
+}
+
+/* Compare les objectifs importés d'une personne à ceux de son homologue
+   local (déjà apparié — voir proposerRapprochementsPersonnes). Priorité :
+   1. même id ET même signature → deja-aligne (silencieux)
+   2. sinon même nom ET même signature → identique-contenu (remap silencieux,
+      sûr : le contenu est prouvé identique)
+   3. sinon même nom mais signature différente → conflit (arbitrage requis)
+   4. sinon → nouveau (ajouté directement)
+   Si l'id local a changé de nom en même temps qu'il divergeait, il n'est pas
+   retrouvé au pas 2 et retombe en « nouveau » — limite assumée, un
+   changement de nom et de contenu simultané des deux côtés est ambigu par
+   nature. */
+function diffObjectifsPersonne(locaux, importes) {
+  return (importes || []).map((imp) => {
+    const parId = (locaux || []).find((l) => l.id === imp.id);
+    if (parId && signatureObjectif(parId) === signatureObjectif(imp)) {
+      return { importe: imp, local: parId, statut: 'deja-aligne' };
+    }
+    const cible = (imp.name || '').trim().toLowerCase();
+    const parNom = (locaux || []).find((l) => (l.name || '').trim().toLowerCase() === cible);
+    if (parNom) {
+      const statut = signatureObjectif(parNom) === signatureObjectif(imp) ? 'identique-contenu' : 'conflit';
+      return { importe: imp, local: parNom, statut };
+    }
+    return { importe: imp, local: null, statut: 'nouveau' };
+  });
 }
 
 /* L'inverse : instancie un objectif réel et indépendant à partir d'un
@@ -1337,6 +1440,37 @@ function supprimerPersonne(session, sid) {
     hidden: sansElle(session.hidden),
     presence: sansElle(session.presence),
     priorityOrder: (session.priorityOrder || []).filter((k) => k.split('|')[0] !== sid),
+  };
+}
+
+/* Symétrique inverse de supprimerPersonne : au lieu de retirer une personne
+   d'une séance, ne garde qu'elle. Une séance mixte (deux groupes dans le même
+   atelier) ne doit jamais transmettre à une autre tablette les données d'un
+   participant qu'elle n'a pas à détenir — c'est la brique de base du renvoi
+   du suivi hors groupe (sessionsHorsGroupe). */
+function sessionPourPersonne(session, sid) {
+  if (!session) return session;
+  const garder = (obj) => {
+    const v = (obj || {})[sid];
+    return v === undefined ? {} : { [sid]: v };
+  };
+  const studentIds = (session.studentIds || []).includes(sid) ? [sid] : [];
+  const selectedObjectives = garder(session.selectedObjectives);
+  const encoreUtilises = new Set(selectedObjectives[sid] || []);
+  const objectiveSnapshot = {};
+  Object.entries(session.objectiveSnapshot || {}).forEach(([oid, o]) => {
+    if (encoreUtilises.has(oid)) objectiveSnapshot[oid] = o;
+  });
+  return {
+    ...session,
+    studentIds,
+    selectedObjectives,
+    objectiveSnapshot,
+    data: garder(session.data),
+    notes: garder(session.notes),
+    hidden: garder(session.hidden),
+    presence: garder(session.presence),
+    priorityOrder: (session.priorityOrder || []).filter((k) => k.split('|')[0] === sid),
   };
 }
 
@@ -1577,6 +1711,33 @@ function jourLocal(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/* L'intervenant en poste n'est valable que pour le jour où il a été choisi :
+   périmé dès que la date locale change, il redevient vide et se redemande
+   plutôt que d'attribuer silencieusement les relevés du lendemain à
+   quelqu'un qui n'est peut-être plus là. */
+function posteValide(poste, maintenant) {
+  return !!(poste && poste.intervenantId && poste.jour === jourLocal(maintenant));
+}
+
+/* Contexte de traçabilité attaché à un relevé au moment de sa création : en
+   séance, l'intervenant, la séance et l'atelier en cours ; hors séance, seul
+   l'intervenant en poste est connu, à condition d'être encore valide pour
+   aujourd'hui — jamais de séance ni d'atelier devinés hors cotation. */
+function contexteReleve(activeSession, poste, maintenant) {
+  if (activeSession) {
+    return {
+      intervenantId: activeSession.intervenantId || null,
+      sessionId: activeSession.id || null,
+      atelierId: activeSession.atelierId || null,
+    };
+  }
+  return {
+    intervenantId: posteValide(poste, maintenant) ? poste.intervenantId : null,
+    sessionId: null,
+    atelierId: null,
+  };
+}
+
 /* Durée d'un relevé, en ms, jusqu'au relevé suivant du même couple
    personne/axe — une clôture borne le segment comme n'importe quel successeur.
    `null` tant qu'aucun successeur n'existe : on ne devine pas une durée qui n'a
@@ -1665,8 +1826,16 @@ function migrerEnvoisCrises(crises, sessions) {
    le même jour — même principe que les étapes manquées de « Détail par
    essai », qui restent vides plutôt qu'à zéro pour ne pas fausser les
    moyennes. */
-function lignesSuiviExport(releves, students, suivis, studentFilter) {
+/* Trois colonnes ajoutées en bout de ligne, communes aux deux formes de
+   relevé : le groupe de la personne (pas celui de la tablette qui exporte —
+   une personne cotée hors de son groupe garde le sien), et le contexte du
+   geste tel qu'enregistré par `contexteReleve`. Un relevé plus ancien que la
+   traçabilité, ou pris hors séance, laisse ces cases vides plutôt que de
+   deviner. */
+function lignesSuiviExport(releves, students, suivis, studentFilter, groupes, intervenants, ateliers) {
   const keep = (sid) => !studentFilter || studentFilter.includes(sid);
+  const intervenantName = (id) => (id && ((intervenants || []).find((i) => i.id === id) || {}).name) || '';
+  const atelierName = (id) => (id && ((ateliers || []).find((a) => a.id === id) || {}).name) || '';
   const tries = (releves || [])
     .filter((r) => r && keep(r.studentId))
     .slice()
@@ -1674,6 +1843,7 @@ function lignesSuiviExport(releves, students, suivis, studentFilter) {
   return tries.map((r, i) => {
     const st = (students || []).find((s) => s.id === r.studentId);
     const d = new Date(r.timestamp);
+    const contexte = [nomGroupe(groupes, st && st.groupeId), intervenantName(r.intervenantId), atelierName(r.atelierId)];
     // Un compteur n'a ni durée (chaque appui est ponctuel) ni critère : une
     // ligne à part, plutôt que de forcer sa forme dans celle d'un relevé de
     // suivi continu.
@@ -1686,6 +1856,7 @@ function lignesSuiviExport(releves, students, suivis, studentFilter) {
         nomCompteur(compteurDe(st, r.compteurId)),
         'occurrence',
         '',
+        ...contexte,
       ];
     }
     const axe = axeDe(suivis, r.suiviId);
@@ -1708,6 +1879,7 @@ function lignesSuiviExport(releves, students, suivis, studentFilter) {
       axe ? nomAxe(axe) : 'Suivi retiré',
       critereLabel,
       duree,
+      ...contexte,
     ];
   });
 }
@@ -1724,10 +1896,18 @@ function releverAliasStabilite(releves) {
     .map((r) => ({ id: r.id, studentId: r.studentId, timestamp: r.timestamp, etat: r.critere, source: r.source || 'pastille' }));
 }
 
+/* Champs de traçabilité d'un relevé : absents des tablettes déjà en service,
+   jamais devinés — un relevé ancien n'a ni intervenant ni contexte connus,
+   et le rester est plus honnête qu'une valeur inventée. */
+const TRACABILITE_RELEVE_PAR_DEFAUT = { intervenantId: null, sessionId: null, atelierId: null, appareilOrigine: null };
+
 /* Migration depuis l'ancien format de relevé (`etat`, sans axe) : `etat`
    devient `critere`, chaque relevé gagne son `suiviId`. Idempotente — un
    relevé déjà au nouveau format traverse inchangé — pour pouvoir tourner à
-   chaque chargement sans jamais avoir besoin d'un drapeau « déjà migré ». */
+   chaque chargement sans jamais avoir besoin d'un drapeau « déjà migré ».
+   Gagne aussi ses champs de traçabilité s'il ne les a pas déjà : un relevé
+   de compteur n'a jamais eu d'autre format à migrer, mais peut tout de même
+   en manquer. */
 function migrerReleves(releves) {
   return (releves || [])
     .filter((r) => r && r.studentId && r.timestamp)
@@ -1735,10 +1915,10 @@ function migrerReleves(releves) {
       // Un relevé de compteur n'a jamais eu d'autre format : rien à migrer,
       // et surtout pas lui donner un `suiviId` — il se confondrait avec un
       // relevé de suivi continu dans tout ce qui filtre dessus.
-      if (r.kind === 'compteur') return r;
+      if (r.kind === 'compteur') return { ...TRACABILITE_RELEVE_PAR_DEFAUT, ...r };
       const suiviId = r.suiviId || 'principal';
-      if (r.critere !== undefined) return { ...r, suiviId };
-      return { id: r.id, studentId: r.studentId, suiviId, timestamp: r.timestamp, critere: r.etat, source: r.source || 'pastille' };
+      if (r.critere !== undefined) return { ...TRACABILITE_RELEVE_PAR_DEFAUT, ...r, suiviId };
+      return { ...TRACABILITE_RELEVE_PAR_DEFAUT, id: r.id, studentId: r.studentId, suiviId, timestamp: r.timestamp, critere: r.etat, source: r.source || 'pastille' };
     });
 }
 
@@ -1749,6 +1929,215 @@ function migrerStudentsSuivi(students) {
     if (Array.isArray(s.suivisActifs)) return s;
     const { suiviStabilite, ...rest } = s;
     return { ...rest, suivisActifs: suiviStabilite ? ['principal'] : [] };
+  });
+}
+
+/* `student.groupeId` : absent des tablettes déjà en service, ajouté à `null`
+   plutôt que deviné — c'est cette valeur qui garde une personne visible sur
+   toutes les tablettes tant que son groupe n'est pas renseigné. Idempotente,
+   même principe que migrerStudentsSuivi. */
+function migrerStudentsGroupe(students) {
+  return (students || []).map((s) => ('groupeId' in s ? s : { ...s, groupeId: null }));
+}
+
+/* Personnes affichées sur l'écran Suivi de cette tablette. Deux replis
+   volontaires, sans lesquels la mise à jour viderait l'écran le jour de sa
+   mise en ligne : une tablette pas encore rattachée à un groupe voit tout le
+   monde, et une personne sans groupe reste visible partout tant qu'elle n'est
+   pas rangée. Le filtre ne se referme donc qu'à mesure que les groupes sont
+   réellement configurés — jamais d'un coup, jamais par défaut. */
+function personnesVisibles(students, groupeAppareil) {
+  if (!groupeAppareil) return students || [];
+  return (students || []).filter((s) => !s.groupeId || s.groupeId === groupeAppareil);
+}
+
+/* Repli pour un groupe supprimé alors que des personnes le portent encore :
+   jamais de suppression en cascade, même principe que CRITERE_INCONNU. Un
+   `groupeId` absent (aucun groupe assigné) est distinct d'un groupe
+   supprimé — seul le second replie sur GROUPE_INCONNU. */
+const GROUPE_INCONNU = { id: null, name: 'Groupe retiré' };
+function groupeDe(groupes, id) {
+  if (!id) return null;
+  return (groupes || []).find((g) => g && g.id === id) || GROUPE_INCONNU;
+}
+function nomGroupe(groupes, id) {
+  const g = groupeDe(groupes, id);
+  return g ? g.name : '';
+}
+
+/* Personnes exportées vers une autre tablette : filtre STRICT, à l'inverse de
+   personnesVisibles qui garde une personne sans groupe partout. Ici l'absence
+   de groupe ne doit jamais faire partir une personne dans « mes profils » —
+   l'ambiguïté de propriété serait pire qu'une omission. Un `groupeId` vide en
+   argument (tablette pas encore rattachée) renvoie donc toujours une liste
+   vide, même si des personnes locales partagent ce même « aucun groupe » —
+   « exporter les profils de mon groupe » n'a pas de sens sans groupe. */
+function profilsDuGroupe(students, groupeId) {
+  if (!groupeId) return [];
+  return (students || []).filter((s) => s.groupeId === groupeId);
+}
+
+/* Les seuls axes de suivi continu réellement référencés par les personnes
+   exportées — pas tout le référentiel de la tablette source, qui peut porter
+   des axes propres à d'autres groupes. */
+function axesUtilises(students, axesSuivi) {
+  const ids = new Set();
+  (students || []).forEach((s) => (s.suivisActifs || []).forEach((id) => ids.add(id)));
+  return (axesSuivi || []).filter((a) => a && ids.has(a.id));
+}
+
+/* Fichier destiné à une autre tablette : les profils (personnes + objectifs)
+   d'un groupe, ou le référentiel complet lors d'une rediffusion depuis la
+   tablette centrale (`portee: 'complet'`). La liste COMPLÈTE des groupes
+   voyage toujours, quelle que soit la portée : c'est elle qui permet de
+   résoudre un groupe importé par son nom plutôt que par un id qui n'a aucun
+   sens sur la tablette qui reçoit (voir resoudreGroupeImporte). Ni ateliers,
+   ni emploi du temps, ni les listes d'objectifs propres à un atelier — hors
+   périmètre d'un profil de personne, déjà exclues d'exportConfig pour la
+   même raison. */
+function payloadProfils({ students, groupes, axesSuivi, appareil, portee, maintenant }) {
+  return {
+    format: 'aba-profils',
+    version: 1,
+    exportedAt: new Date(maintenant).toISOString(),
+    appareil,
+    portee,
+    groupes,
+    students,
+    axesSuivi,
+  };
+}
+
+/* Séances contenant au moins une personne d'un autre groupe que celui de
+   cette tablette, projetées via sessionPourPersonne — une ligne par personne
+   concernée, jamais la séance entière : une séance mixte ne doit repartir que
+   pour son propriétaire. Une personne sans groupe reste sur place, propriété
+   non tranchée, on ne devine pas — même principe que personnesVisibles. */
+function sessionsHorsGroupe(sessions, students, groupeAppareil) {
+  if (!groupeAppareil) return [];
+  const resultats = [];
+  (sessions || []).forEach((se) => {
+    (se.studentIds || []).forEach((sid) => {
+      const st = (students || []).find((s) => s.id === sid);
+      if (st && st.groupeId && st.groupeId !== groupeAppareil) resultats.push(sessionPourPersonne(se, sid));
+    });
+  });
+  return resultats;
+}
+
+/* crisis.studentId et releve.studentId sont déjà singuliers : un simple
+   filtre suffit, pas de projection comme pour les séances. */
+function crisesHorsGroupe(crises, students, groupeAppareil) {
+  if (!groupeAppareil) return [];
+  return (crises || []).filter((c) => {
+    const st = (students || []).find((s) => s.id === c.studentId);
+    return !!(st && st.groupeId && st.groupeId !== groupeAppareil);
+  });
+}
+function relevesHorsGroupe(releves, students, groupeAppareil) {
+  if (!groupeAppareil) return [];
+  return (releves || []).filter((r) => {
+    const st = (students || []).find((s) => s.id === r.studentId);
+    return !!(st && st.groupeId && st.groupeId !== groupeAppareil);
+  });
+}
+
+/* Fusion additive stricte des données de suivi reçues d'une autre tablette :
+   jamais d'écrasement, jamais de fuite vers un studentId ou un objectiveId
+   inconnus localement. C'est ce refus systématique de l'inconnu qui garantit
+   qu'un fichier envoyé à la mauvaise tablette ne peut rien y déposer — pas
+   même la question ne se pose, la donnée est rejetée avant d'être regardée.
+
+   Une séance est rejetée EN BLOC dès qu'un seul de ses objectifs référencés
+   (objectiveSnapshot) est inconnu de la personne concernée : jamais de fusion
+   partielle qui laisserait un objectiveSnapshot à moitié reconnu. */
+function fusionnerSuiviRecu({ sessionsLocales, crisesLocales, relevesLocales, studentsLocaux, recu }) {
+  const studentIds = new Set((studentsLocaux || []).map((s) => s.id));
+  const objectifsConnusDe = {};
+  (studentsLocaux || []).forEach((s) => {
+    objectifsConnusDe[s.id] = new Set((s.objectives || []).map((o) => o.id));
+  });
+
+  const idsSessionsLocales = new Set((sessionsLocales || []).map((s) => s.id));
+  const idsCrisesLocales = new Set((crisesLocales || []).map((c) => c.id));
+  const idsRelevesLocaux = new Set((relevesLocales || []).map((r) => r.id));
+
+  let idInconnu = 0;
+  let dejaPresentes = 0;
+
+  const sessionsAcceptees = [];
+  ((recu && recu.sessions) || []).forEach((se) => {
+    if (idsSessionsLocales.has(se.id)) { dejaPresentes++; return; }
+    const idsSession = se.studentIds || [];
+    if (idsSession.length === 0 || !idsSession.every((sid) => studentIds.has(sid))) { idInconnu++; return; }
+    const objectifsConnus = new Set();
+    idsSession.forEach((sid) => (objectifsConnusDe[sid] || new Set()).forEach((oid) => objectifsConnus.add(oid)));
+    const objectifsRequis = Object.keys(se.objectiveSnapshot || {});
+    if (!objectifsRequis.every((oid) => objectifsConnus.has(oid))) { idInconnu++; return; }
+    sessionsAcceptees.push(se);
+  });
+
+  const crisesAcceptees = [];
+  ((recu && recu.crises) || []).forEach((c) => {
+    if (idsCrisesLocales.has(c.id)) { dejaPresentes++; return; }
+    if (!c.studentId || !studentIds.has(c.studentId)) { idInconnu++; return; }
+    crisesAcceptees.push(c);
+  });
+
+  const relevesAcceptes = [];
+  ((recu && recu.suivi) || []).forEach((r) => {
+    if (idsRelevesLocaux.has(r.id)) { dejaPresentes++; return; }
+    if (!r.studentId || !studentIds.has(r.studentId)) { idInconnu++; return; }
+    relevesAcceptes.push(r);
+  });
+
+  return {
+    sessions: [...(sessionsLocales || []), ...sessionsAcceptees],
+    crises: [...(crisesLocales || []), ...crisesAcceptees],
+    releves: [...(relevesLocales || []), ...relevesAcceptes],
+    ignorees: { idInconnu, dejaPresentes },
+  };
+}
+
+/* Normalisation d'initiales pour la COMPARAISON, jamais pour l'affichage :
+   retrait des diacritiques (même principe que segmentAppareil), de toute
+   ponctuation et des espaces, en majuscules. 'A.B.', 'ab', 'A B' → 'AB'. */
+function normaliserInitiales(txt) {
+  return (txt || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z]/g, '')
+    .toUpperCase();
+}
+
+/* Un groupe importé ne se résout JAMAIS par son id brut — les groupes ne sont
+   pas remappés à l'import (contrairement aux ateliers, voir importConfig) et
+   un id d'origine n'a aucun sens sur la tablette qui reçoit. La résolution se
+   fait par nom, seule information stable entre deux tablettes. */
+function resoudreGroupeImporte(groupesLocaux, nomGroupeImporte) {
+  const local = (groupesLocaux || []).find((g) => g && g.name === nomGroupeImporte);
+  return local ? local.id : null;
+}
+
+/* Propose un rapprochement pour chaque personne importée, ne l'applique
+   jamais : un id déjà présent localement est un signe fiable (import répété,
+   tablette déjà alignée) ; sinon, mêmes initiales normalisées ET même groupe
+   résolu ne valent que comme suggestion. Deux vrais homonymes du même groupe
+   produisent la même proposition — limite assumée, à corriger à la main dans
+   l'écran de rapprochement. */
+function proposerRapprochementsPersonnes(studentsImportes, studentsLocaux, groupesImportes, groupesLocaux) {
+  return (studentsImportes || []).map((importe) => {
+    if ((studentsLocaux || []).some((s) => s.id === importe.id)) {
+      return { importe, statut: 'deja-aligne', candidatLocalId: importe.id };
+    }
+    const groupeImp = groupeDe(groupesImportes, importe.groupeId);
+    const groupeResolu = groupeImp ? resoudreGroupeImporte(groupesLocaux, groupeImp.name) : null;
+    const cible = normaliserInitiales(importe.initials);
+    const candidat = (studentsLocaux || []).find(
+      (s) => normaliserInitiales(s.initials) === cible && (s.groupeId || null) === groupeResolu
+    );
+    if (candidat) return { importe, statut: 'a-confirmer', candidatLocalId: candidat.id };
+    return { importe, statut: 'nouvelle', candidatLocalId: null };
   });
 }
 
@@ -2241,12 +2630,13 @@ function advanceMasteredTargets(students, sessions, guidances) {
    sa propre ligne. La colonne "Indépendant" vaut 1 ou 0 : une moyenne dessus
    donne directement un pourcentage, sans formule à écrire. Les étapes
    manquées restent hors de cette colonne, comme dans les calculs de l'appli. */
-function buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter) {
+function buildDetailRows(sessions, students, ateliers, intervenants, groupes, guidances, studentFilter) {
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
+  const groupName = (sid) => nomGroupe(groupes, (students.find((s) => s.id === sid) || {}).groupeId) || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)', 'Compteur', 'Chrono (s)']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Groupe', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)', 'Compteur', 'Chrono (s)']];
 
   /* Mesure auxiliaire capturée pour cet essai (relance à chaque essai) — vide
      tant que rien n'a été relancé sous cette clé, jamais un zéro par défaut. */
@@ -2264,6 +2654,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
       sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Équilibre' : 'Séance libre',
       intervenantName(sess.intervenantId),
       studentName(sid),
+      groupName(sid),
       obj.name,
       obj.activeTargetName || '—',
       obj.activePhaseName || currentPhase(obj).name,
@@ -2366,7 +2757,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, guidances, 
   return rows;
 }
 
-function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], guidances, studentFilter, releves = [], axesSuivi = []) {
+function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], groupes = [], guidances, studentFilter, releves = [], axesSuivi = []) {
   const keepStudent = (sid) => !studentFilter || studentFilter.includes(sid);
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
@@ -2418,9 +2809,9 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }, { wch: 9 }, { wch: 10 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Cotations');
 
-  const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, guidances, studentFilter);
+  const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, groupes, guidances, studentFilter);
   const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
-  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 11 }];
+  wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 14 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 11 }];
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
   if (detailRows.length > 1) XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail par essai');
 
@@ -2481,15 +2872,15 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   /* Suivi continu : une ligne par relevé, avec son heure et sa durée jusqu'au
      relevé suivant du même couple personne/suivi. Toujours créée, même vide,
      pour que le nombre de feuilles ne varie pas d'un rapport à l'autre. */
-  const suiviRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Suivi', 'Critère', 'Durée (min)']];
-  const lignesSuivi = lignesSuiviExport(releves, students, axesSuivi, studentFilter);
+  const suiviRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Suivi', 'Critère', 'Durée (min)', 'Groupe', 'Intervenant', 'Atelier']];
+  const lignesSuivi = lignesSuiviExport(releves, students, axesSuivi, studentFilter, groupes, intervenants, ateliers);
   if (lignesSuivi.length) {
     lignesSuivi.forEach((l) => suiviRows.push(l));
   } else {
-    suiviRows.push(['', '', '', '', '', 'Aucun relevé de suivi continu sur cette sélection.', '']);
+    suiviRows.push(['', '', '', '', '', 'Aucun relevé de suivi continu sur cette sélection.', '', '', '', '']);
   }
   const ws5 = XLSX.utils.aoa_to_sheet(suiviRows);
-  ws5['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 16 }, { wch: 10 }, { wch: 18 }, { wch: 22 }, { wch: 12 }];
+  ws5['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 16 }, { wch: 10 }, { wch: 18 }, { wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 18 }];
   XLSX.utils.book_append_sheet(wb, ws5, 'Suivi continu');
 
   /* Tableau de bord : une ligne par personne/objectif, une colonne par date.
@@ -3189,13 +3580,14 @@ const ZOOM_LEVELS = [
    document déjà en place. */
 const TAB_ORDER = ['suivi', 'session', 'export'];
 
-/* Les neuf panneaux du tiroir latéral. Source unique : autrefois écrits en
+/* Les dix panneaux du tiroir latéral. Source unique : autrefois écrits en
    dur dans le JSX du tiroir en plus du `switch` de rendu, ce qui obligeait à
    maintenir deux listes en parallèle à chaque ajout ou retrait de panneau. */
 const PANNEAUX = [
   { k: 'personnes', label: 'Personnes accompagnées', icon: Users },
   { k: 'ateliers', label: 'Ateliers et emploi du temps', icon: CalendarDays },
   { k: 'intervenants', label: 'Intervenants', icon: UserCog },
+  { k: 'groupes', label: 'Groupes', icon: School },
   { k: 'modeles', label: "Modèles d'objectifs", icon: BookmarkPlus },
   { k: 'guidances', label: 'Guidances', icon: SlidersHorizontal },
   { k: 'abc', label: 'Réponses ABC', icon: AlertTriangle },
@@ -3504,6 +3896,11 @@ function AbaApp() {
      ordonnés. Un même atelier peut figurer sur plusieurs jours. */
   const [emploiDuTemps, setEmploiDuTemps] = useState({});
   const [intervenants, setIntervenants] = useState([]);
+  /* Groupes (classes) : ce qui distingue deux personnes aux mêmes initiales
+     dans des classes différentes, et ce qui décide, tablette par tablette, de
+     ce qui s'affiche sur l'écran Suivi. Configuration de premier niveau, comme
+     intervenants et ateliers. */
+  const [groupes, setGroupes] = useState([]);
   const [guidances, setGuidances] = useState(DEFAULT_GUIDANCE);
   const [objectiveTemplates, setObjectiveTemplates] = useState([]);
   const [abcOptions, setAbcOptions] = useState(DEFAULT_ABC);
@@ -3514,6 +3911,17 @@ function AbaApp() {
      dans son nom : sans lui, un dossier de sauvegardes ne dit pas de quelle
      tablette vient quoi. */
   const [appareil, setAppareil] = useState('');
+  /* Groupe auquel CETTE tablette est rattachée — distinct du groupe d'une
+     personne. C'est lui qui filtre l'écran Suivi (personnesVisibles) : vide,
+     rien n'est filtré. Choisi dans PanneauDonnees. */
+  const [groupeAppareil, setGroupeAppareil] = useState('');
+  /* Intervenant en poste : { intervenantId, jour } — n'attribue les relevés
+     pris hors séance qu'à condition d'être encore valide pour aujourd'hui
+     (posteValide). Choisi dans PanneauDonnees, périmé au changement de jour
+     local plutôt que reconduit d'un jour sur l'autre. */
+  const [poste, setPoste] = useState(null);
+  const choisirPosteIntervenant = (intervenantId) =>
+    setPoste(intervenantId ? { intervenantId, jour: jourLocal(Date.now()) } : null);
   const [sessions, setSessions] = useState([]);
   const [crises, setCrises] = useState([]);
   /* Relevés de suivi continu : un tableau à part, indépendant des séances, sur
@@ -3696,11 +4104,13 @@ function AbaApp() {
       try {
         const d = JSON.parse(config);
         nbPersonnes = (d.students || []).length;
-        setStudents(migrerStudentsSuivi(d.students || []));
+        setStudents(migrerStudentsGroupe(migrerStudentsSuivi(d.students || [])));
         setAteliers(d.ateliers || []);
         setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
         setIntervenants(d.intervenants || []);
+        setGroupes(d.groupes || []);
         setAppareil(d.appareil || '');
+        setGroupeAppareil(d.groupeAppareil || '');
         retention = d.retentionMonths || 0;
         setRetentionMonths(retention);
         if (Array.isArray(d.guidances) && d.guidances.length) {
@@ -3780,6 +4190,9 @@ function AbaApp() {
     const act = await store.get('aba:active');
     if (act) { try { setActiveSession(JSON.parse(act)); } catch (e) {} }
 
+    const pos = await store.get('aba:poste');
+    if (pos) { try { setPoste(JSON.parse(pos)); } catch (e) {} }
+
     /* Tablette neuve : rien à coter, on ouvre directement sur la configuration
        des personnes accompagnées. Dès qu'une personne existe, l'application
        reprend son comportement normal et démarre sur Session. */
@@ -3790,7 +4203,7 @@ function AbaApp() {
 
   /* Toutes les clés contenant des données, mois par mois compris. */
   async function clesDonnees() {
-    const base = ['aba:config', 'aba:sessions', 'aba:crises', 'aba:suivi', 'aba:stabilite', 'aba:active', SESSIONS_INDEX];
+    const base = ['aba:config', 'aba:sessions', 'aba:crises', 'aba:suivi', 'aba:stabilite', 'aba:active', 'aba:poste', SESSIONS_INDEX];
     const idx = await store.getRaw(SESSIONS_INDEX);
     if (!idx) return base;
     try {
@@ -3876,7 +4289,7 @@ function AbaApp() {
   /* Réécrit toutes les données avec la clé courante — utilisé après un
      changement de code, puisque l'ancienne clé ne déchiffrerait plus rien. */
   async function persistAll() {
-    await store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil }));
+    await store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, groupes, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, groupeAppareil }));
     moisEcrits.current = {};
     await persistSessions(sessions);
     await store.set('aba:crises', JSON.stringify(crises));
@@ -3884,6 +4297,7 @@ function AbaApp() {
       await store.setRaw('aba:stabilite', '');
     }
     await store.set('aba:active', JSON.stringify(activeSession));
+    await store.set('aba:poste', JSON.stringify(poste));
   }
 
   async function changePin(pinHash, pinSalt, pinDigits, pin, mode) {
@@ -3951,8 +4365,8 @@ function AbaApp() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil }));
-  }, [students, ateliers, emploiDuTemps, intervenants, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, loaded]);
+    store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, groupes, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, groupeAppareil }));
+  }, [students, ateliers, emploiDuTemps, intervenants, groupes, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, groupeAppareil, loaded]);
   /* Empreinte du dernier enregistrement de chaque mois, pour n'écrire que ce
      qui a réellement changé. */
   const moisEcrits = useRef({});
@@ -4003,6 +4417,10 @@ function AbaApp() {
     if (!loaded) return;
     store.set('aba:active', JSON.stringify(activeSession));
   }, [activeSession, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    store.set('aba:poste', JSON.stringify(poste));
+  }, [poste, loaded]);
 
   function notify(msg) {
     const jeton = ++toastToken.current;
@@ -4013,9 +4431,12 @@ function AbaApp() {
   }
 
   /* --- gestion --- */
-  const addStudent = (initials) => setStudents((s) => [...s, { id: uid(), initials, objectives: [] }]);
+  const addStudent = (initials, groupeId = null) => setStudents((s) => [...s, { id: uid(), initials, groupeId, objectives: [] }]);
   const removeStudent = (id) => setStudents((s) => s.filter((x) => x.id !== id));
   const renameStudent = (id, initials) => setStudents((s) => s.map((x) => (x.id === id ? { ...x, initials } : x)));
+  /* Distinct de renameStudent : le groupe conditionne l'écran Suivi
+     (personnesVisibles), pas juste l'affichage d'une fiche. */
+  const setStudentGroupe = (id, groupeId) => setStudents((s) => s.map((x) => (x.id === id ? { ...x, groupeId } : x)));
   const addAtelier = (name) => setAteliers((a) => [...a, { id: uid(), name }]);
   const removeAtelier = (id) => {
     setAteliers((a) => a.filter((x) => x.id !== id));
@@ -4099,6 +4520,24 @@ function AbaApp() {
   const addIntervenant = (name) => setIntervenants((l) => [...l, { id: uid(), name }]);
   const removeIntervenant = (id) => setIntervenants((l) => l.filter((x) => x.id !== id));
   const renameIntervenant = (id, name) => setIntervenants((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
+  /* Suppression jamais en cascade : une personne qui portait ce groupe le
+     garde, affiché en « Groupe retiré » (GROUPE_INCONNU) partout où il est
+     lu — même principe que la suppression d'un intervenant ou d'un axe de
+     suivi. */
+  const addGroupe = (name) => setGroupes((l) => [...l, { id: uid(), name }]);
+  const removeGroupe = (id) => setGroupes((l) => l.filter((x) => x.id !== id));
+  const renameGroupe = (id, name) => setGroupes((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
+  /* Depuis la fiche d'une personne : crée le groupe et l'affecte dans le même
+     geste, l'id étant généré ici plutôt que dans deux actions dépendantes qui
+     liraient un état pas encore à jour. Second point d'entrée de création de
+     groupe, assumé : un geste humain explicite sur une fiche n'a rien à voir
+     avec la création automatique et silencieuse interdite à l'import (voir
+     resoudreGroupeImporte, qui ne crée jamais de groupe). */
+  const creerGroupeEtAffecter = (studentId, name) => {
+    const id = uid();
+    setGroupes((l) => [...l, { id, name }]);
+    setStudents((s) => s.map((x) => (x.id === studentId ? { ...x, groupeId: id } : x)));
+  };
   const addGuidance = (g) => setGuidances((l) => [...l, g]);
   const removeGuidance = (code) => setGuidances((l) => (l.length > 1 ? l.filter((x) => x.code !== code) : l));
   const toggleIndependent = (code) => setGuidances((l) => l.map((x) => (x.code === code ? { ...x, independent: !x.independent } : x)));
@@ -4126,9 +4565,10 @@ function AbaApp() {
     notify(`Modèle appliqué à ${studentIds.length} personne${studentIds.length !== 1 ? 's' : ''}`);
   };
 
-  /* Export de configuration : ateliers, intervenants, guidances et modèles.
-     Aucune personne, aucune séance, aucune crise — le fichier ne contient donc
-     aucune donnée d'usager et peut circuler librement entre appareils. */
+  /* Export de configuration : ateliers, intervenants, groupes, guidances et
+     modèles. Aucune personne, aucune séance, aucune crise — le fichier ne
+     contient donc aucune donnée d'usager et peut circuler librement entre
+     appareils. */
   function exportConfig() {
     const payload = {
       format: 'aba-config',
@@ -4137,6 +4577,7 @@ function AbaApp() {
       ateliers: ateliers.map(({ usualStudentIds, usualObjectives, favoriteObjectiveIds, knownObjectiveIds, personnesParJour, ...a }) => a),
       emploiDuTemps,
       intervenants,
+      groupes,
       guidances,
       objectiveTemplates,
       abcOptions,
@@ -4151,9 +4592,10 @@ function AbaApp() {
   function importConfig(d) {
     const nbA = (d.ateliers || []).length;
     const nbI = (d.intervenants || []).length;
+    const nbG = (d.groupes || []).length;
     const nbT = (d.objectiveTemplates || []).length;
     if (!window.confirm(
-      `Importer cette configuration ?\n\n${nbA} atelier(s), ${nbI} intervenant(s), ${nbT} modèle(s) d'objectif.\n\nLes éléments existants sont conservés, les nouveaux s'ajoutent.`
+      `Importer cette configuration ?\n\n${nbA} atelier(s), ${nbI} intervenant(s), ${nbG} groupe(s), ${nbT} modèle(s) d'objectif.\n\nLes éléments existants sont conservés, les nouveaux s'ajoutent.`
     )) return;
     /* Un atelier importé dont le nom existe déjà localement est écarté au
        profit de l'atelier existant : son id d'origine doit être remappé vers
@@ -4180,6 +4622,7 @@ function AbaApp() {
       });
     }
     setIntervenants((cur) => [...cur, ...(d.intervenants || []).filter((i) => !cur.some((x) => x.name === i.name))]);
+    setGroupes((cur) => [...cur, ...(d.groupes || []).filter((g) => !cur.some((x) => x.name === g.name))]);
     setGuidances((cur) => [...cur, ...(d.guidances || []).filter((g) => !cur.some((x) => x.code === g.code))]);
     setObjectiveTemplates((cur) => [...cur, ...(d.objectiveTemplates || []).filter((t) => !cur.some((x) => x.name === t.name))]);
     if (d.abcOptions) {
@@ -4198,6 +4641,97 @@ function AbaApp() {
 
   /* --- sauvegarde / restauration --- */
   const [backupPrompt, setBackupPrompt] = useState(null); // { mode: 'export' } | { mode: 'import', envelope, error }
+  /* Import d'un fichier de profils : { payload } le temps que l'écran de
+     rapprochement soit validé, puis null. */
+  const [rapprochement, setRapprochement] = useState(null);
+  /* Conflits d'objectifs à trancher, enchaînés depuis la validation du
+     rapprochement : { conflits: [{ studentId, importe, local }], resume }. */
+  const [arbitrage, setArbitrage] = useState(null);
+
+  /* Applique un rapprochement validé : les personnes déjà alignées ou
+     rapprochées à la main sont fusionnées, les autres deviennent de
+     nouvelles personnes avec leurs objectifs importés tels quels — rien à
+     trancher, elles n'existaient pas ici. Pour les personnes appariées à une
+     personne existante, chaque objectif importé est diffé (diffObjectifsPersonne) :
+     les identiques ou déjà alignés ne bougent pas, les nouveaux s'ajoutent
+     directement, les conflits partent vers l'écran d'arbitrage plutôt que
+     d'être tranchés en silence. */
+  function appliquerRapprochement(propositions, choix) {
+    const payload = rapprochement.payload;
+    const correspondance = {};
+    const nouvellesPersonnes = [];
+
+    propositions.forEach((p) => {
+      const importeId = p.importe.id;
+      if (p.statut === 'deja-aligne') {
+        correspondance[importeId] = importeId;
+        return;
+      }
+      const c = choix[importeId];
+      if (c && c !== 'nouvelle') {
+        correspondance[importeId] = c;
+        return;
+      }
+      const nouvelId = uid();
+      const groupeImp = groupeDe(payload.groupes, p.importe.groupeId);
+      const groupeResolu = groupeImp ? resoudreGroupeImporte(groupes, groupeImp.name) : null;
+      nouvellesPersonnes.push({ ...p.importe, id: nouvelId, groupeId: groupeResolu });
+      correspondance[importeId] = nouvelId;
+    });
+
+    const conflits = [];
+    let ajoutes = 0;
+    const studentsMisAJour = students.map((st) => {
+      const importe = payload.students.find((im) => correspondance[im.id] === st.id);
+      if (!importe) return st;
+      const diff = diffObjectifsPersonne(st.objectives, importe.objectives || []);
+      let objectives = st.objectives;
+      diff.forEach((d) => {
+        if (d.statut === 'nouveau') {
+          objectives = [...objectives, { ...d.importe }];
+          ajoutes++;
+        } else if (d.statut === 'conflit') {
+          conflits.push({ studentId: st.id, importe: d.importe, local: d.local });
+        }
+      });
+      return objectives === st.objectives ? st : { ...st, objectives };
+    });
+
+    setStudents([...studentsMisAJour, ...nouvellesPersonnes]);
+    setRapprochement(null);
+
+    if (conflits.length) {
+      setArbitrage({ conflits, resume: { nouvelles: nouvellesPersonnes.length, ajoutes } });
+    } else {
+      notify(`Profils importés : ${nouvellesPersonnes.length} nouvelle(s) personne(s), ${ajoutes} objectif(s) ajouté(s).`);
+    }
+  }
+
+  /* Applique les décisions de l'écran d'arbitrage. « Prendre l'importé »
+     conserve l'id LOCAL de l'objectif : n'étant jamais autorisé sur un
+     objectif déjà coté (objectifDejaCote, vérifié aussi côté écran), rien
+     d'externe n'en dépend, et ça évite tout remappage en aval. « Garder les
+     deux » ajoute l'objectif importé avec un id neuf et un nom disponible. */
+  function appliquerArbitrage(decisions) {
+    const conflits = arbitrage.conflits;
+    setStudents((cur) => cur.map((st) => {
+      const mesConflits = conflits.map((c, i) => ({ ...c, i })).filter((c) => c.studentId === st.id);
+      if (!mesConflits.length) return st;
+      let objectives = st.objectives;
+      mesConflits.forEach((c) => {
+        const decision = decisions[c.i] || 'deux';
+        if (decision === 'local') return;
+        if (decision === 'importe') {
+          objectives = objectives.map((o) => (o.id === c.local.id ? { ...c.importe, id: c.local.id } : o));
+        } else if (decision === 'deux') {
+          objectives = [...objectives, { ...c.importe, id: uid(), name: nomDisponible(c.importe.name, objectives) }];
+        }
+      });
+      return { ...st, objectives };
+    }));
+    setArbitrage(null);
+    notify('Objectifs importés arbitrés et appliqués.');
+  }
 
   function exportBackup() {
     setBackupPrompt({ mode: 'export-choix' });
@@ -4220,10 +4754,15 @@ function AbaApp() {
       version: 4,
       exportedAt: new Date().toISOString(),
       appareil,
+      /* groupeId voyage déjà sur chaque personne (aucun champ retiré) ; sans
+         la liste des groupes ci-dessous, Manager n'aurait qu'un identifiant
+         opaque et ne pourrait pas distinguer deux homonymes de classes
+         différentes — la raison d'être du groupe dans le croisement. */
       students: students.filter((st) => idsConcernes.has(st.id)),
       ateliers,
       emploiDuTemps,
       intervenants,
+      groupes,
       guidances,
       axesSuivi,
       sessions: seancesRetenues,
@@ -4251,10 +4790,78 @@ function AbaApp() {
     setBackupPrompt({ mode: 'export', managerPayload: payload, managerNom: nom, apresExport });
   }
 
+  /* Profils (personnes + objectifs) vers une autre tablette : `portee`
+     'groupe' pour « mes profils » (filtré sur groupeAppareil), 'complet' pour
+     la rediffusion depuis une tablette centrale (tout le parc — voir PR7).
+     Toujours chiffré, sans choix clair/chiffré comme pour la sauvegarde
+     complète : ce fichier ne contient que des données d'usagers, jamais de
+     raison de le laisser lisible en clair. */
+  function exportProfils(portee) {
+    const concernes = portee === 'complet' ? students : profilsDuGroupe(students, groupeAppareil);
+    const payload = payloadProfils({
+      students: concernes,
+      groupes,
+      axesSuivi: axesUtilises(concernes, axesSuivi),
+      appareil,
+      portee,
+      maintenant: Date.now(),
+    });
+    const nom = nomFichier(portee === 'complet' ? 'profils-complets' : 'mes-profils', appareil, 'json');
+    setBackupPrompt({ mode: 'export', profilsPayload: payload, profilsNom: nom });
+  }
+
+  /* Ce qui a été coté ici pour des personnes d'un autre groupe, à renvoyer
+     vers leur tablette — jamais vers Manager, qui n'a que faire de savoir
+     quelle tablette a coté quoi. Toujours chiffré, mêmes données personnelles
+     que « mes profils ». Un même fichier peut contenir des tranches
+     destinées à plusieurs tablettes : le tri se fait à la réception
+     (fusionnerSuiviRecu), pas à l'envoi — pas besoin de savoir d'avance qui
+     le recevra. */
+  function exportSuiviHorsGroupe() {
+    const payload = {
+      format: 'aba-suivi-transfert',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      appareil,
+      sessions: sessionsHorsGroupe(sessions, students, groupeAppareil),
+      crises: crisesHorsGroupe(crises, students, groupeAppareil),
+      suivi: relevesHorsGroupe(releves, students, groupeAppareil),
+    };
+    const nom = nomFichier('suivi-hors-groupe', appareil, 'json');
+    setBackupPrompt({ mode: 'export', suiviPayload: payload, suiviNom: nom });
+  }
+
+  /* Applique une fusion additive stricte (fusionnerSuiviRecu) et résume ce
+     qui a été ajouté, déjà présent ou ignoré — jamais un silence qui
+     laisserait croire à un échec quand une partie du fichier ne concernait
+     simplement pas cette tablette. */
+  function appliquerSuiviRecu(payload) {
+    const avant = { sessions: sessions.length, crises: crises.length, releves: releves.length };
+    const resultat = fusionnerSuiviRecu({
+      sessionsLocales: sessions, crisesLocales: crises, relevesLocales: releves,
+      studentsLocaux: students, recu: payload,
+    });
+    setSessions(resultat.sessions);
+    setCrises(resultat.crises);
+    setReleves(resultat.releves);
+    const ajoutSeances = resultat.sessions.length - avant.sessions;
+    const ajoutCrises = resultat.crises.length - avant.crises;
+    const ajoutReleves = resultat.releves.length - avant.releves;
+    const { idInconnu, dejaPresentes } = resultat.ignorees;
+    const parts = [];
+    if (ajoutSeances) parts.push(`${ajoutSeances} séance(s)`);
+    if (ajoutCrises) parts.push(`${ajoutCrises} crise(s)`);
+    if (ajoutReleves) parts.push(`${ajoutReleves} relevé(s)`);
+    let msg = parts.length ? `Suivi reçu : ${parts.join(', ')} ajouté(s)` : 'Suivi reçu : rien de nouveau';
+    if (dejaPresentes) msg += ` — ${dejaPresentes} déjà présent(s)`;
+    if (idInconnu) msg += ` — ${idInconnu} ignoré(s), non reconnus ici`;
+    notify(msg);
+  }
+
   /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
      transferts qui restent dans un espace déjà protégé. */
   function exportBackupClair() {
-    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, emploiDuTemps, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
+    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, groupeAppareil, students, ateliers, emploiDuTemps, intervenants, groupes, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
     setBackupPrompt(null);
@@ -4272,7 +4879,21 @@ function AbaApp() {
       if (ok && apresExport) apresExport();
       return;
     }
-    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, students, ateliers, emploiDuTemps, intervenants, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
+    if (backupPrompt && backupPrompt.profilsPayload) {
+      const enveloppe = await encryptJSON(backupPrompt.profilsPayload, passphrase);
+      const blob = new Blob([JSON.stringify(enveloppe)], { type: 'application/json' });
+      await shareReport({ blob, name: backupPrompt.profilsNom, title: backupPrompt.profilsNom, notify });
+      setBackupPrompt(null);
+      return;
+    }
+    if (backupPrompt && backupPrompt.suiviPayload) {
+      const enveloppe = await encryptJSON(backupPrompt.suiviPayload, passphrase);
+      const blob = new Blob([JSON.stringify(enveloppe)], { type: 'application/json' });
+      await shareReport({ blob, name: backupPrompt.suiviNom, title: backupPrompt.suiviNom, notify });
+      setBackupPrompt(null);
+      return;
+    }
+    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, groupeAppareil, students, ateliers, emploiDuTemps, intervenants, groupes, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
     const envelope = await encryptJSON(payload, passphrase);
     const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json' });
     downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
@@ -4290,19 +4911,22 @@ function AbaApp() {
       `Restaurer cette sauvegarde ?\n\n${(d.students || []).length} personne(s), ${(d.sessions || []).length} séance(s).\n\nToutes les données actuelles de cette tablette seront remplacées.`
     );
     if (!ok) return;
-    setStudents(migrerStudentsSuivi(d.students || []));
+    setStudents(migrerStudentsGroupe(migrerStudentsSuivi(d.students || [])));
     setAteliers(d.ateliers || []);
     setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
     setIntervenants(d.intervenants || []);
+    setGroupes(d.groupes || []);
     if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
     setSessions(d.sessions || []);
     setCrises(d.crises || []);
     setAxesSuivi(migrerAxesSuivi(d.axesSuivi));
     setReleves(migrerReleves(d.suivi || d.stabilite || []));
-    /* Le nom d'appareil du fichier ne s'impose pas à la tablette qui restaure :
-       elle garde le sien s'il est déjà renseigné, sinon elle reprend celui de
-       la sauvegarde plutôt que de rester anonyme. */
+    /* Le nom d'appareil et le groupe de rattachement du fichier ne s'imposent
+       pas à la tablette qui restaure : elle garde les siens s'ils sont déjà
+       renseignés, sinon elle reprend ceux de la sauvegarde plutôt que de
+       rester anonyme. */
     if (d.appareil && !appareil.trim()) setAppareil(d.appareil);
+    if (d.groupeAppareil && !groupeAppareil.trim()) setGroupeAppareil(d.groupeAppareil);
     notify('Sauvegarde restaurée');
   }
 
@@ -4324,6 +4948,15 @@ function AbaApp() {
         setBackupPrompt({ mode: 'import', envelope: d, error: '' });
         return;
       }
+      if (d && d.format === 'aba-profils') {
+        // Même route que confirmImport, pour un fichier de profils resté en clair.
+        setRapprochement({ payload: d });
+        return;
+      }
+      if (d && d.format === 'aba-suivi-transfert') {
+        appliquerSuiviRecu(d);
+        return;
+      }
       // Ancienne sauvegarde exportée en clair, avant l'ajout du chiffrement : toujours acceptée
       applyRestoredData(d);
     };
@@ -4334,6 +4967,20 @@ function AbaApp() {
     try {
       const d = await decryptJSON(backupPrompt.envelope, passphrase);
       setBackupPrompt(null);
+      /* Un fichier de profils est toujours chiffré (exportProfils) : son
+         format réel n'apparaît qu'ici, après déchiffrement — l'enveloppe vue
+         par importBackup est indistincte d'une sauvegarde complète chiffrée.
+         Ne jamais laisser passer vers applyRestoredData, qui REMPLACE tout :
+         un fichier de profils n'a ni ateliers ni emploi du temps ni séances,
+         les confirmer ferait tout disparaître. */
+      if (d && d.format === 'aba-profils') {
+        setRapprochement({ payload: d });
+        return;
+      }
+      if (d && d.format === 'aba-suivi-transfert') {
+        appliquerSuiviRecu(d);
+        return;
+      }
       applyRestoredData(d);
     } catch (e) {
       setBackupPrompt({ ...backupPrompt, error: 'Mot de passe incorrect ou fichier corrompu' });
@@ -4559,7 +5206,7 @@ function AbaApp() {
   const noterSuivi = (studentId, suiviId, critere) => {
     const maintenant = new Date().toISOString();
     const releveId = uid();
-    setReleves((l) => [...l, { id: releveId, studentId, suiviId, timestamp: maintenant, critere, source: 'pastille' }]);
+    setReleves((l) => [...l, { id: releveId, studentId, suiviId, timestamp: maintenant, critere, source: 'pastille', ...contexteReleve(activeSession, poste, maintenant), appareilOrigine: null }]);
     const st = students.find((s) => s.id === studentId);
     const nom = st ? st.initials : '';
     if (critere === 'crise') {
@@ -4598,7 +5245,8 @@ function AbaApp() {
      principe que noterSuivi mais sans critère ni fin — chaque appui compte
      pour lui-même, rien ne « vaut jusqu'au suivant ». */
   const noterCompteur = (studentId, compteurId) => {
-    setReleves((l) => [...l, { id: uid(), studentId, compteurId, timestamp: new Date().toISOString(), kind: 'compteur', source: 'pastille' }]);
+    const maintenant = new Date().toISOString();
+    setReleves((l) => [...l, { id: uid(), studentId, compteurId, timestamp: maintenant, kind: 'compteur', source: 'pastille', ...contexteReleve(activeSession, poste, maintenant), appareilOrigine: null }]);
   };
 
   /* Annule le dernier appui du jour pour ce compteur — un doigt qui glisse est
@@ -4621,14 +5269,18 @@ function AbaApp() {
 
   /* Occurrence ajoutée après coup, depuis la correction d'une journée —
      symétrique de ajouterReleve pour un compteur. */
+  /* Aucun contexte deviné ici, ni séance ni poste : une correction porte
+     souvent sur un jour passé, et l'intervenant qui corrige n'est pas
+     forcément celui qui a observé au moment visé. */
   const ajouterCompteurReleve = (studentId, compteurId, timestamp) =>
-    setReleves((l) => [...l, { id: uid(), studentId, compteurId, timestamp, kind: 'compteur', source: 'manuel' }]);
+    setReleves((l) => [...l, { id: uid(), studentId, compteurId, timestamp, kind: 'compteur', source: 'manuel', ...TRACABILITE_RELEVE_PAR_DEFAUT }]);
 
   /* Clôture la journée d'un axe : le dernier critère cesse de courir, le
      suivi redevient dormant. Sans effet si rien n'était en cours. */
   const cloturerSuivi = (studentId, suiviId) => {
     if (!critereCourant(releves, studentId, suiviId, Date.now())) return;
-    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp: new Date().toISOString(), critere: null, fin: true, source: 'cloture' }]);
+    const maintenant = new Date().toISOString();
+    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp: maintenant, critere: null, fin: true, source: 'cloture', ...contexteReleve(activeSession, poste, maintenant), appareilOrigine: null }]);
   };
 
   /* Correction après coup — une cotation oubliée, une heure fausse. Aucune
@@ -4636,8 +5288,10 @@ function AbaApp() {
      fiches crise) se recale de lui-même : il n'y a qu'à toucher aux relevés.
      `sentAt` est effacé à la modification : une journée corrigée ressort du lot
      déjà transmis, ce qui est bien le but. */
+  /* Même choix que ajouterCompteurReleve : pas de contexte deviné sur une
+     correction après coup. */
   const ajouterReleve = (studentId, suiviId, timestamp, critere, fin = false) =>
-    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp, critere, fin, source: 'manuel' }]);
+    setReleves((l) => [...l, { id: uid(), studentId, suiviId, timestamp, critere, fin, source: 'manuel', ...TRACABILITE_RELEVE_PAR_DEFAUT }]);
 
   const modifierReleve = (id, maj) =>
     setReleves((l) => l.map((r) => (r.id === id ? { ...r, ...maj, sentAt: null } : r)));
@@ -4715,6 +5369,7 @@ function AbaApp() {
             students={students} guidances={guidances} templates={objectiveTemplates} focus={focusEcran}
             premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
+            groupes={groupes} onSetGroupe={setStudentGroupe} onCreerGroupe={creerGroupeEtAffecter}
             axesSuivi={axesSuivi} onToggleAxeSuivi={toggleAxeSuivi}
             onCreerSuivi={creerSuiviPour}
             onAjouterCompteur={ajouterCompteur} onRenommerCompteur={renommerCompteur} onSupprimerCompteur={supprimerCompteur}
@@ -4727,6 +5382,8 @@ function AbaApp() {
         );
       case 'intervenants':
         return <PanneauIntervenants intervenants={intervenants} onAdd={addIntervenant} onRename={renameIntervenant} onRemove={removeIntervenant} />;
+      case 'groupes':
+        return <PanneauGroupes groupes={groupes} onAdd={addGroupe} onRename={renameGroupe} onRemove={removeGroupe} />;
       case 'modeles':
         return (
           <PanneauModeles
@@ -4741,8 +5398,11 @@ function AbaApp() {
         return (
           <PanneauDonnees
             appareil={appareil} onSetAppareil={setAppareil}
+            groupes={groupes} groupeAppareil={groupeAppareil} onSetGroupeAppareil={setGroupeAppareil}
+            intervenants={intervenants} poste={poste} onChoisirPoste={choisirPosteIntervenant}
             retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
             onExportConfig={exportConfig} onExportBackup={exportBackup} onImportBackup={importBackup}
+            onExportProfils={() => exportProfils('groupe')} onExportProfilsComplet={() => exportProfils('complet')}
           />
         );
       case 'guidances':
@@ -4757,9 +5417,14 @@ function AbaApp() {
       case 'suivicontinu':
         return <PanneauSuiviContinu axes={axesSuivi} students={students} onSetAxes={majAxesSuivi} onToggleAxeSuivi={toggleAxeSuivi} focus={focusEcran} />;
       case 'suivi':
+        /* Seul point de filtrage : une personne d'un autre groupe reste
+           cotable partout ailleurs (Session, Export, Personnes), mais ne
+           s'affiche pas ici — cette tablette a produit sa donnée, elle ne
+           la lit pas. personnesVisibles réplique en tout point sans
+           rattachement ni personne sans groupe encore configuré. */
         return (
           <SuiviScreen
-            students={students} sessions={sessions} guidances={guidances}
+            students={personnesVisibles(students, groupeAppareil)} sessions={sessions} guidances={guidances}
             releves={releves} axesSuivi={axesSuivi}
             onResetTracking={resetTracking} onOuvrirMenu={ouvrirMenu}
             onChangePhase={changePhase}
@@ -4812,14 +5477,15 @@ function AbaApp() {
            d'onglet, l'appui depuis Export n'aurait aucun effet visible. */
         return (
           <ExportScreen
-            sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants}
-            guidances={guidances} releves={releves} axesSuivi={axesSuivi} appareil={appareil} notify={notify}
+            sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} groupes={groupes}
+            guidances={guidances} releves={releves} axesSuivi={axesSuivi} appareil={appareil} groupeAppareil={groupeAppareil} notify={notify}
             onEditCrisis={editCrisis} onMarkSent={markSent}
             onMarkCrisesSent={markCrisesSent} onMarkRelevesSent={markRelevesSent}
             onEditSession={(s) => { editSession(s); allerA('session'); }}
             onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
             onOuvrirJournee={(j) => setJourneeSuivi({ studentId: j.studentId, suiviId: j.suiviId, compteurId: j.compteurId, jour: j.jour })}
             onExportManager={exportManager}
+            onExportSuiviHorsGroupe={exportSuiviHorsGroupe}
             onOuvrirMenu={ouvrirMenu}
           />
         );
@@ -5317,6 +5983,26 @@ function AbaApp() {
         />
       )}
 
+      {rapprochement && (
+        <EcranRapprochementPersonnes
+          payload={rapprochement.payload}
+          students={students}
+          groupes={groupes}
+          onValider={appliquerRapprochement}
+          onClose={() => setRapprochement(null)}
+        />
+      )}
+
+      {arbitrage && (
+        <EcranArbitrageObjectifs
+          conflits={arbitrage.conflits}
+          students={students}
+          sessions={sessions}
+          onValider={appliquerArbitrage}
+          onClose={() => setArbitrage(null)}
+        />
+      )}
+
       {toast && (
         <div
           className={`fixed left-1/2 z-40 px-4 py-2.5 rounded-xl text-sm shadow-lg ${toastLeaving ? 'aba-toast-out' : 'aba-toast-in'}`}
@@ -5721,6 +6407,33 @@ function PanneauIntervenants({ intervenants, onAdd, onRename, onRemove }) {
   );
 }
 
+/* Calqué sur PanneauIntervenants : même forme, même EditableRow. Un groupe
+   supprimé n'emporte personne avec lui — voir removeGroupe et GROUPE_INCONNU. */
+function PanneauGroupes({ groupes, onAdd, onRename, onRemove }) {
+  const [nom, setNom] = useState('');
+  const ajouter = () => { if (nom.trim()) { onAdd(nom.trim()); setNom(''); } };
+  return (
+    <div>
+      <SectionTitle sub="Les classes de l'établissement : elles distinguent deux personnes aux mêmes initiales et décident, tablette par tablette, de qui apparaît sur l'écran Suivi.">Groupes</SectionTitle>
+      <Card>
+        <div className="flex gap-2 mb-3">
+          <Field value={nom} onChange={setNom} placeholder="Nom du groupe (ex. Classe 1)" onEnter={ajouter} />
+          <Btn onClick={ajouter} className="px-4 shrink-0"><Plus size={18} /></Btn>
+        </div>
+        {groupes.length === 0 ? (
+          <Empty>Aucun groupe enregistré.</Empty>
+        ) : (
+          <div className="space-y-1.5">
+            {groupes.map((g) => (
+              <EditableRow key={g.id} label={g.name} onRename={(v) => onRename(g.id, v)} onRemove={() => onRemove(g.id)} />
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function PanneauModeles({ templates, students, guidances, onAdd, onUpdate, onRemove, onAppliquer, onOuvrirGuidances }) {
   const [creation, setCreation] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -6082,7 +6795,7 @@ function PanneauMotsDePasse({ security, onChangePin, onDisableProtection }) {
 /* Les deux exports existaient déjà, mais sous deux boutons aux libellés
    proches. Ils sont présentés ici comme un seul choix explicite : avec ou sans
    données personnelles. */
-function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup }) {
+function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSetGroupeAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup, onExportProfils, onExportProfilsComplet }) {
   const fileRef = useRef(null);
   const [nom, setNom] = useState(appareil || '');
   useEffect(() => { setNom(appareil || ''); }, [appareil]);
@@ -6108,6 +6821,51 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
         </div>
       </Card>
 
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <School size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Groupe de cette tablette</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Filtre l'écran Suivi sur ce groupe : les personnes d'un autre groupe restent cotables ici,
+          mais leur suivi ne s'affiche que sur la tablette de leur propre groupe. Tant qu'aucun groupe
+          n'est choisi, l'écran Suivi montre tout le monde.
+        </p>
+        <select
+          value={groupeAppareil || ''}
+          onChange={(ev) => onSetGroupeAppareil(ev.target.value)}
+          className="w-full rounded-lg px-2.5 py-2 text-sm border"
+          style={{ borderColor: BORDER, backgroundColor: CARD }}
+        >
+          <option value="">Aucun (tout afficher)</option>
+          {groupeAppareil && !groupes.some((g) => g.id === groupeAppareil) && (
+            <option value={groupeAppareil}>{nomGroupe(groupes, groupeAppareil)}</option>
+          )}
+          {groupes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+      </Card>
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <UserCog size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Intervenant en poste</span>
+        </div>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Attribue les relevés de suivi pris hors séance — une pastille appuyée en dehors d'une
+          cotation n'a pas d'autre moyen de savoir qui l'a saisie. Remis à zéro chaque jour : à
+          rechoisir en arrivant, jamais reconduit du jour précédent.
+        </p>
+        <select
+          value={posteValide(poste, Date.now()) ? poste.intervenantId : ''}
+          onChange={(ev) => onChoisirPoste(ev.target.value || null)}
+          className="w-full rounded-lg px-2.5 py-2 text-sm border"
+          style={{ borderColor: BORDER, backgroundColor: CARD }}
+        >
+          <option value="">Aucun</option>
+          {intervenants.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+        </select>
+      </Card>
+
       <input
         ref={fileRef}
         type="file"
@@ -6126,7 +6884,7 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Exporter</span>
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Deux fichiers très différents. Le second ne quitte pas l'établissement sans précaution.
+          Quatre fichiers différents. Les trois derniers ne quittent pas l'établissement sans précaution.
         </p>
 
         <button
@@ -6144,7 +6902,7 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
 
         <button
           onClick={onExportBackup}
-          className="w-full rounded-2xl border-2 p-3.5 text-left"
+          className="w-full rounded-2xl border-2 p-3.5 mb-2 text-left"
           style={{ borderColor: INK, backgroundColor: CARD }}
         >
           <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Avec les données personnelles</div>
@@ -6152,6 +6910,32 @@ function PanneauDonnees({ appareil, onSetAppareil, retentionMonths, onSetRetenti
             Sauvegarde complète : initiales, objectifs, cotations, crises et relevés de suivi continu.
             C'est le seul moyen de récupérer l'historique après un effacement ou un changement
             d'appareil — et le seul fichier à protéger par mot de passe.
+          </div>
+        </button>
+
+        <button
+          onClick={onExportProfils}
+          disabled={!groupeAppareil}
+          className="w-full rounded-2xl border-2 p-3.5 mb-2 text-left"
+          style={{ borderColor: ACCENT, backgroundColor: CARD, opacity: groupeAppareil ? 1 : 0.5 }}
+        >
+          <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Mes profils, vers une autre tablette</div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            {groupeAppareil
+              ? "Personnes et objectifs du groupe de cette tablette, à agréger sur une tablette centrale. Toujours chiffré."
+              : 'Configurez d’abord le groupe de cette tablette, ci-dessus.'}
+          </div>
+        </button>
+
+        <button
+          onClick={onExportProfilsComplet}
+          className="w-full rounded-2xl border-2 p-3.5 text-left"
+          style={{ borderColor: ACCENT, backgroundColor: CARD }}
+        >
+          <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Rediffuser tous les profils</div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            Depuis la tablette centrale, après agrégation : personnes et objectifs de tout l'établissement,
+            pas seulement de ce groupe. Toujours chiffré.
           </div>
         </button>
       </Card>
@@ -6235,7 +7019,7 @@ function BoutonPhase({ obj, onChange }) {
    distance, une carte dans Gestion et une carte dans Personnes. */
 function PanneauPersonnes({
   students, guidances, templates, premiereConfiguration, focus,
-  addStudent, removeStudent, renameStudent, axesSuivi, onToggleAxeSuivi, onCreerSuivi,
+  addStudent, removeStudent, renameStudent, groupes, onSetGroupe, onCreerGroupe, axesSuivi, onToggleAxeSuivi, onCreerSuivi,
   onAjouterCompteur, onRenommerCompteur, onSupprimerCompteur,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
   onOuvrirGuidances, onOuvrirModeles, onOuvrirAteliers, onOuvrirIntervenants,
@@ -6245,6 +7029,10 @@ function PanneauPersonnes({
   const [copyingObj, setCopyingObj] = useState(null);
   const [copyTargets, setCopyTargets] = useState([]);
   const [initials, setInitials] = useState('');
+  /* Personne pour laquelle le sélecteur de groupe propose de créer un
+     nouveau groupe plutôt que d'en choisir un existant. */
+  const [creationGroupePour, setCreationGroupePour] = useState(null);
+  const [nomNouveauGroupe, setNomNouveauGroupe] = useState('');
   /* Personne pour laquelle on choisit un suivi à ajouter. */
   const [ajoutSuivi, setAjoutSuivi] = useState(null);
   /* Personne pour laquelle un nouvel objectif s'ouvre déjà déplié, et le type
@@ -6347,6 +7135,67 @@ function PanneauPersonnes({
                       if (window.confirm(`Supprimer ${s.initials} et ses ${s.objectives.length} objectif(s) ?`)) removeStudent(s.id);
                     }}
                   />
+                  {/* Le groupe distingue deux personnes aux mêmes initiales et
+                      décide, tablette par tablette, de qui apparaît sur l'écran
+                      Suivi (personnesVisibles). Sans groupe, une personne reste
+                      visible partout — ce n'est jamais un état bloquant. */}
+                  <div className="mt-2.5">
+                    <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Groupe</div>
+                    {creationGroupePour === s.id ? (
+                      <div className="flex gap-2">
+                        <Field
+                          value={nomNouveauGroupe}
+                          onChange={setNomNouveauGroupe}
+                          placeholder="Nom du groupe (ex. Classe 3)"
+                          onEnter={() => {
+                            const nom = nomNouveauGroupe.trim();
+                            if (!nom) return;
+                            onCreerGroupe(s.id, nom);
+                            setCreationGroupePour(null);
+                          }}
+                        />
+                        <Btn
+                          onClick={() => {
+                            const nom = nomNouveauGroupe.trim();
+                            if (!nom) return;
+                            onCreerGroupe(s.id, nom);
+                            setCreationGroupePour(null);
+                          }}
+                          className="px-4 shrink-0"
+                        >
+                          <Plus size={18} />
+                        </Btn>
+                        <Btn variant="ghost" onClick={() => setCreationGroupePour(null)} className="px-3 shrink-0">
+                          <X size={18} />
+                        </Btn>
+                      </div>
+                    ) : (
+                      <select
+                        value={s.groupeId || ''}
+                        onChange={(ev) => {
+                          const v = ev.target.value;
+                          if (v === '__nouveau') {
+                            setNomNouveauGroupe('');
+                            setCreationGroupePour(s.id);
+                            return;
+                          }
+                          onSetGroupe(s.id, v || null);
+                        }}
+                        className="w-full rounded-lg px-2.5 py-2 text-sm border"
+                        style={{ borderColor: BORDER, backgroundColor: CARD }}
+                      >
+                        <option value="">Sans groupe</option>
+                        {/* Un groupe supprimé reste proposé sur la personne qui le
+                            porte : sans ça, ouvrir la fiche le réécrirait en
+                            silence vers « Sans groupe ». */}
+                        {s.groupeId && !groupes.some((g) => g.id === s.groupeId) && (
+                          <option value={s.groupeId}>{nomGroupe(groupes, s.groupeId)}</option>
+                        )}
+                        {groupes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                        <option value="__nouveau">+ Nouveau groupe…</option>
+                      </select>
+                    )}
+                  </div>
                   {/* Seuls les suivis actifs de cette personne figurent ici.
                       La bibliothèque étant illimitée, tous les lister en
                       interrupteurs faisait grossir la fiche sans fin : le choix
@@ -9831,6 +10680,140 @@ function FeuilleJourneeSuivi({ cible, releves, students, axesSuivi, onAjouter, o
   );
 }
 
+/* Écran de rapprochement : propose une correspondance pour chaque personne
+   importée, ne l'applique jamais seul. Les personnes déjà alignées (même id
+   des deux côtés) ne sont même pas affichées — c'est ce qui rend une
+   rediffusion répétée quasi silencieuse. */
+function EcranRapprochementPersonnes({ payload, students, groupes, onValider, onClose }) {
+  const propositions = React.useMemo(
+    () => proposerRapprochementsPersonnes(payload.students, students, payload.groupes, groupes),
+    [payload, students, groupes]
+  );
+  const aTraiter = propositions.filter((p) => p.statut !== 'deja-aligne');
+  const dejaAlignees = propositions.length - aTraiter.length;
+
+  const [choix, setChoix] = useState(() => {
+    const init = {};
+    aTraiter.forEach((p) => { init[p.importe.id] = p.statut === 'a-confirmer' ? p.candidatLocalId : 'nouvelle'; });
+    return init;
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={onClose}>
+      <div className="rounded-2xl p-5 max-w-lg w-full max-h-[85vh] flex flex-col" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>
+            Profils reçus{payload.appareil ? ` de ${payload.appareil}` : ''}
+          </span>
+          <button onClick={onClose} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
+        </div>
+        <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
+          {dejaAlignees > 0 && `${dejaAlignees} personne(s) déjà à jour. `}
+          Rien n'est appliqué tant que vous n'avez pas validé — corrigez la correspondance si elle ne convient pas.
+        </p>
+
+        {aTraiter.length === 0 ? (
+          <Empty>Tout est déjà à jour.</Empty>
+        ) : (
+          <div className="space-y-2 mb-4 overflow-y-auto flex-1">
+            {aTraiter.map((p) => (
+              <div key={p.importe.id} className="rounded-xl p-3" style={{ backgroundColor: PAPER }}>
+                <div className="text-sm font-medium mb-1.5" style={{ fontFamily: F_DISPLAY }}>
+                  {p.importe.initials}{' '}
+                  <span className="text-xs font-normal" style={{ color: INK_SOFT }}>
+                    — {(p.importe.objectives || []).length} objectif{(p.importe.objectives || []).length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <select
+                  value={choix[p.importe.id]}
+                  onChange={(ev) => setChoix((c) => ({ ...c, [p.importe.id]: ev.target.value }))}
+                  className="w-full rounded-lg px-2.5 py-2 text-sm border"
+                  style={{ borderColor: BORDER, backgroundColor: CARD }}
+                >
+                  <option value="nouvelle">Nouvelle personne</option>
+                  {students.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.initials}{s.groupeId ? ` — ${nomGroupe(groupes, s.groupeId)}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <Btn onClick={() => onValider(propositions, choix)} className="w-full shrink-0">Valider</Btn>
+      </div>
+    </div>
+  );
+}
+
+/* Écran d'arbitrage : seuls les vrais conflits de contenu s'affichent, les
+   objectifs identiques ou déjà alignés ont déjà été appliqués en silence par
+   appliquerRapprochement. « Garder les deux » présélectionné partout : valider
+   sans lire crée un doublon à nettoyer, jamais une perte de travail. */
+function EcranArbitrageObjectifs({ conflits, students, sessions, onValider, onClose }) {
+  const [decisions, setDecisions] = useState(() => {
+    const init = {};
+    conflits.forEach((c, i) => { init[i] = 'deux'; });
+    return init;
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={onClose}>
+      <div className="rounded-2xl p-5 max-w-lg w-full max-h-[85vh] flex flex-col" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Objectifs à arbitrer</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
+        </div>
+        <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
+          Un objectif importé porte le même nom qu'un objectif local, avec un contenu différent.
+          « Garder les deux » n'écrase jamais rien.
+        </p>
+
+        <div className="space-y-3 mb-4 overflow-y-auto flex-1">
+          {conflits.map((c, i) => {
+            const st = students.find((s) => s.id === c.studentId);
+            const verrouille = objectifDejaCote(sessions, c.local.id);
+            return (
+              <div key={i} className="rounded-xl p-3" style={{ backgroundColor: PAPER }}>
+                <div className="text-sm font-medium mb-2" style={{ fontFamily: F_DISPLAY }}>
+                  {st ? st.initials : '?'} — {c.local.name}
+                </div>
+                {verrouille && (
+                  <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
+                    Déjà coté : ses cibles ne peuvent pas être remplacées.
+                  </p>
+                )}
+                <div className="flex flex-col gap-1.5">
+                  {[
+                    { v: 'local', l: 'Garder local' },
+                    { v: 'importe', l: "Prendre l'importé", disabled: verrouille },
+                    { v: 'deux', l: 'Garder les deux' },
+                  ].map((opt) => (
+                    <label key={opt.v} className="flex items-center gap-2 text-sm" style={{ color: INK, opacity: opt.disabled ? 0.4 : 1 }}>
+                      <input
+                        type="radio"
+                        name={`arbitrage-${i}`}
+                        checked={decisions[i] === opt.v}
+                        disabled={opt.disabled}
+                        onChange={() => setDecisions((d) => ({ ...d, [i]: opt.v }))}
+                      />
+                      {opt.l}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <Btn onClick={() => onValider(decisions)} className="w-full shrink-0">Valider</Btn>
+      </div>
+    </div>
+  );
+}
+
 function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onAjouterObjectif, onOuvrirSuivi, onChangePhase }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
   /* Une ligne du résumé mène à la courbe de l'objectif, dans ce même écran :
@@ -10186,7 +11169,16 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
    dessous, puis une archive dépliante pour ce qui est déjà parti. Tout y est
    corrigeable, avant comme après l'envoi : c'est le seul endroit où l'on relit
    avant de transmettre. */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, guidances, releves, axesSuivi, appareil, notify, onEditCrisis, onEditSession, onDeleteSession, onDeleteAllSessions, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onOuvrirMenu }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, groupes, guidances, releves, axesSuivi, appareil, groupeAppareil, notify, onEditCrisis, onEditSession, onDeleteSession, onDeleteAllSessions, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onExportSuiviHorsGroupe, onOuvrirMenu }) {
+  /* Compteur permanent, visible sans le chercher : le renvoi oublié est le
+     seul défaut du dispositif de fusion inter-groupes qui produise une
+     donnée fausse en silence. Ne retombe à zéro que quand tout est parti. */
+  const horsGroupe = React.useMemo(() => ({
+    sessions: sessionsHorsGroupe(sessions, students, groupeAppareil),
+    crises: crisesHorsGroupe(crises, students, groupeAppareil),
+    releves: relevesHorsGroupe(releves, students, groupeAppareil),
+  }), [sessions, crises, releves, students, groupeAppareil]);
+  const nbHorsGroupe = horsGroupe.sessions.length + horsGroupe.crises.length + horsGroupe.releves.length;
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   const journees = React.useMemo(
     () => journeesSuivi(releves, students, axesSuivi, null),
@@ -10251,7 +11243,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
   const sessionLabel = (sess) => (sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Équilibre' : 'Séance libre');
 
   function makeFile() {
-    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, guidances, studentFilter, chosenReleves, axesSuivi);
+    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, groupes, guidances, studentFilter, chosenReleves, axesSuivi);
     const blob = workbookBlob(wb);
     const initials = byStudent
       ? students.filter((s) => pickedStudents.includes(s.id)).map((s) => s.initials.replace(/\./g, '')).join('-')
@@ -10467,6 +11459,26 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, guid
         <SectionTitle sub="Relisez, corrigez, puis transmettez aux cadres pédagogiques.">Export</SectionTitle>
         <BoutonMenu onClick={onOuvrirMenu} />
       </div>
+
+      {nbHorsGroupe > 0 && (
+        <button
+          onClick={onExportSuiviHorsGroupe}
+          className="w-full rounded-2xl border-2 p-3.5 mb-4 text-left"
+          style={{ borderColor: CRISIS, backgroundColor: CARD }}
+        >
+          <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>
+            {horsGroupe.sessions.length > 0 && `${horsGroupe.sessions.length} séance(s)`}
+            {horsGroupe.sessions.length > 0 && (horsGroupe.crises.length > 0 || horsGroupe.releves.length > 0) && ', '}
+            {horsGroupe.crises.length > 0 && `${horsGroupe.crises.length} crise(s)`}
+            {horsGroupe.crises.length > 0 && horsGroupe.releves.length > 0 && ', '}
+            {horsGroupe.releves.length > 0 && `${horsGroupe.releves.length} relevé(s)`}
+            {' '}appartenant à d'autres groupes
+          </div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            À transférer vers leur tablette — appuyer pour exporter, toujours chiffré.
+          </div>
+        </button>
+      )}
 
       <div className="flex gap-1.5 mb-4">
         {[

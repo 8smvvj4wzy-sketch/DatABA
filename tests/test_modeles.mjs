@@ -44,7 +44,7 @@ function extraireLigne(nom) {
   return m[1];
 }
 
-const NOMS = ['uid', 'modeleDepuisObjectif', 'instancierModele', 'nomModeleDisponible'];
+const NOMS = ['uid', 'modeleDepuisObjectif', 'instancierModele', 'nomDisponible', 'nomModeleDisponible'];
 
 const code = `
   const DEFAULT_PHASES = ${extraireLigne('DEFAULT_PHASES')};
