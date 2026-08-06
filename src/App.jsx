@@ -4810,6 +4810,54 @@ function AbaApp() {
     setBackupPrompt({ mode: 'export', profilsPayload: payload, profilsNom: nom });
   }
 
+  /* Ce qui a été coté ici pour des personnes d'un autre groupe, à renvoyer
+     vers leur tablette — jamais vers Manager, qui n'a que faire de savoir
+     quelle tablette a coté quoi. Toujours chiffré, mêmes données personnelles
+     que « mes profils ». Un même fichier peut contenir des tranches
+     destinées à plusieurs tablettes : le tri se fait à la réception
+     (fusionnerSuiviRecu), pas à l'envoi — pas besoin de savoir d'avance qui
+     le recevra. */
+  function exportSuiviHorsGroupe() {
+    const payload = {
+      format: 'aba-suivi-transfert',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      appareil,
+      sessions: sessionsHorsGroupe(sessions, students, groupeAppareil),
+      crises: crisesHorsGroupe(crises, students, groupeAppareil),
+      suivi: relevesHorsGroupe(releves, students, groupeAppareil),
+    };
+    const nom = nomFichier('suivi-hors-groupe', appareil, 'json');
+    setBackupPrompt({ mode: 'export', suiviPayload: payload, suiviNom: nom });
+  }
+
+  /* Applique une fusion additive stricte (fusionnerSuiviRecu) et résume ce
+     qui a été ajouté, déjà présent ou ignoré — jamais un silence qui
+     laisserait croire à un échec quand une partie du fichier ne concernait
+     simplement pas cette tablette. */
+  function appliquerSuiviRecu(payload) {
+    const avant = { sessions: sessions.length, crises: crises.length, releves: releves.length };
+    const resultat = fusionnerSuiviRecu({
+      sessionsLocales: sessions, crisesLocales: crises, relevesLocales: releves,
+      studentsLocaux: students, recu: payload,
+    });
+    setSessions(resultat.sessions);
+    setCrises(resultat.crises);
+    setReleves(resultat.releves);
+    const ajoutSeances = resultat.sessions.length - avant.sessions;
+    const ajoutCrises = resultat.crises.length - avant.crises;
+    const ajoutReleves = resultat.releves.length - avant.releves;
+    const { idInconnu, dejaPresentes } = resultat.ignorees;
+    const parts = [];
+    if (ajoutSeances) parts.push(`${ajoutSeances} séance(s)`);
+    if (ajoutCrises) parts.push(`${ajoutCrises} crise(s)`);
+    if (ajoutReleves) parts.push(`${ajoutReleves} relevé(s)`);
+    let msg = parts.length ? `Suivi reçu : ${parts.join(', ')} ajouté(s)` : 'Suivi reçu : rien de nouveau';
+    if (dejaPresentes) msg += ` — ${dejaPresentes} déjà présent(s)`;
+    if (idInconnu) msg += ` — ${idInconnu} ignoré(s), non reconnus ici`;
+    notify(msg);
+  }
+
   /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
      transferts qui restent dans un espace déjà protégé. */
   function exportBackupClair() {
@@ -4835,6 +4883,13 @@ function AbaApp() {
       const enveloppe = await encryptJSON(backupPrompt.profilsPayload, passphrase);
       const blob = new Blob([JSON.stringify(enveloppe)], { type: 'application/json' });
       await shareReport({ blob, name: backupPrompt.profilsNom, title: backupPrompt.profilsNom, notify });
+      setBackupPrompt(null);
+      return;
+    }
+    if (backupPrompt && backupPrompt.suiviPayload) {
+      const enveloppe = await encryptJSON(backupPrompt.suiviPayload, passphrase);
+      const blob = new Blob([JSON.stringify(enveloppe)], { type: 'application/json' });
+      await shareReport({ blob, name: backupPrompt.suiviNom, title: backupPrompt.suiviNom, notify });
       setBackupPrompt(null);
       return;
     }
@@ -4898,6 +4953,10 @@ function AbaApp() {
         setRapprochement({ payload: d });
         return;
       }
+      if (d && d.format === 'aba-suivi-transfert') {
+        appliquerSuiviRecu(d);
+        return;
+      }
       // Ancienne sauvegarde exportée en clair, avant l'ajout du chiffrement : toujours acceptée
       applyRestoredData(d);
     };
@@ -4916,6 +4975,10 @@ function AbaApp() {
          les confirmer ferait tout disparaître. */
       if (d && d.format === 'aba-profils') {
         setRapprochement({ payload: d });
+        return;
+      }
+      if (d && d.format === 'aba-suivi-transfert') {
+        appliquerSuiviRecu(d);
         return;
       }
       applyRestoredData(d);
@@ -5415,13 +5478,14 @@ function AbaApp() {
         return (
           <ExportScreen
             sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} groupes={groupes}
-            guidances={guidances} releves={releves} axesSuivi={axesSuivi} appareil={appareil} notify={notify}
+            guidances={guidances} releves={releves} axesSuivi={axesSuivi} appareil={appareil} groupeAppareil={groupeAppareil} notify={notify}
             onEditCrisis={editCrisis} onMarkSent={markSent}
             onMarkCrisesSent={markCrisesSent} onMarkRelevesSent={markRelevesSent}
             onEditSession={(s) => { editSession(s); allerA('session'); }}
             onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
             onOuvrirJournee={(j) => setJourneeSuivi({ studentId: j.studentId, suiviId: j.suiviId, compteurId: j.compteurId, jour: j.jour })}
             onExportManager={exportManager}
+            onExportSuiviHorsGroupe={exportSuiviHorsGroupe}
             onOuvrirMenu={ouvrirMenu}
           />
         );
@@ -11105,7 +11169,16 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
    dessous, puis une archive dépliante pour ce qui est déjà parti. Tout y est
    corrigeable, avant comme après l'envoi : c'est le seul endroit où l'on relit
    avant de transmettre. */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, groupes, guidances, releves, axesSuivi, appareil, notify, onEditCrisis, onEditSession, onDeleteSession, onDeleteAllSessions, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onOuvrirMenu }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, groupes, guidances, releves, axesSuivi, appareil, groupeAppareil, notify, onEditCrisis, onEditSession, onDeleteSession, onDeleteAllSessions, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onExportSuiviHorsGroupe, onOuvrirMenu }) {
+  /* Compteur permanent, visible sans le chercher : le renvoi oublié est le
+     seul défaut du dispositif de fusion inter-groupes qui produise une
+     donnée fausse en silence. Ne retombe à zéro que quand tout est parti. */
+  const horsGroupe = React.useMemo(() => ({
+    sessions: sessionsHorsGroupe(sessions, students, groupeAppareil),
+    crises: crisesHorsGroupe(crises, students, groupeAppareil),
+    releves: relevesHorsGroupe(releves, students, groupeAppareil),
+  }), [sessions, crises, releves, students, groupeAppareil]);
+  const nbHorsGroupe = horsGroupe.sessions.length + horsGroupe.crises.length + horsGroupe.releves.length;
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   const journees = React.useMemo(
     () => journeesSuivi(releves, students, axesSuivi, null),
@@ -11386,6 +11459,26 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, grou
         <SectionTitle sub="Relisez, corrigez, puis transmettez aux cadres pédagogiques.">Export</SectionTitle>
         <BoutonMenu onClick={onOuvrirMenu} />
       </div>
+
+      {nbHorsGroupe > 0 && (
+        <button
+          onClick={onExportSuiviHorsGroupe}
+          className="w-full rounded-2xl border-2 p-3.5 mb-4 text-left"
+          style={{ borderColor: CRISIS, backgroundColor: CARD }}
+        >
+          <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>
+            {horsGroupe.sessions.length > 0 && `${horsGroupe.sessions.length} séance(s)`}
+            {horsGroupe.sessions.length > 0 && (horsGroupe.crises.length > 0 || horsGroupe.releves.length > 0) && ', '}
+            {horsGroupe.crises.length > 0 && `${horsGroupe.crises.length} crise(s)`}
+            {horsGroupe.crises.length > 0 && horsGroupe.releves.length > 0 && ', '}
+            {horsGroupe.releves.length > 0 && `${horsGroupe.releves.length} relevé(s)`}
+            {' '}appartenant à d'autres groupes
+          </div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            À transférer vers leur tablette — appuyer pour exporter, toujours chiffré.
+          </div>
+        </button>
+      )}
 
       <div className="flex gap-1.5 mb-4">
         {[
