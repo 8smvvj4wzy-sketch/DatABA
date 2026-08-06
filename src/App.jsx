@@ -1443,6 +1443,37 @@ function supprimerPersonne(session, sid) {
   };
 }
 
+/* Symétrique inverse de supprimerPersonne : au lieu de retirer une personne
+   d'une séance, ne garde qu'elle. Une séance mixte (deux groupes dans le même
+   atelier) ne doit jamais transmettre à une autre tablette les données d'un
+   participant qu'elle n'a pas à détenir — c'est la brique de base du renvoi
+   du suivi hors groupe (sessionsHorsGroupe). */
+function sessionPourPersonne(session, sid) {
+  if (!session) return session;
+  const garder = (obj) => {
+    const v = (obj || {})[sid];
+    return v === undefined ? {} : { [sid]: v };
+  };
+  const studentIds = (session.studentIds || []).includes(sid) ? [sid] : [];
+  const selectedObjectives = garder(session.selectedObjectives);
+  const encoreUtilises = new Set(selectedObjectives[sid] || []);
+  const objectiveSnapshot = {};
+  Object.entries(session.objectiveSnapshot || {}).forEach(([oid, o]) => {
+    if (encoreUtilises.has(oid)) objectiveSnapshot[oid] = o;
+  });
+  return {
+    ...session,
+    studentIds,
+    selectedObjectives,
+    objectiveSnapshot,
+    data: garder(session.data),
+    notes: garder(session.notes),
+    hidden: garder(session.hidden),
+    presence: garder(session.presence),
+    priorityOrder: (session.priorityOrder || []).filter((k) => k.split('|')[0] === sid),
+  };
+}
+
 /* Passage à l'atelier suivant. La séance en cours est close et enregistrée
    telle quelle, une nouvelle s'ouvre sur le nouvel atelier : l'atelier reste
    une propriété de la séance, ce qu'attendent l'export et DatABA Manager, et
@@ -1974,6 +2005,97 @@ function payloadProfils({ students, groupes, axesSuivi, appareil, portee, mainte
     groupes,
     students,
     axesSuivi,
+  };
+}
+
+/* Séances contenant au moins une personne d'un autre groupe que celui de
+   cette tablette, projetées via sessionPourPersonne — une ligne par personne
+   concernée, jamais la séance entière : une séance mixte ne doit repartir que
+   pour son propriétaire. Une personne sans groupe reste sur place, propriété
+   non tranchée, on ne devine pas — même principe que personnesVisibles. */
+function sessionsHorsGroupe(sessions, students, groupeAppareil) {
+  if (!groupeAppareil) return [];
+  const resultats = [];
+  (sessions || []).forEach((se) => {
+    (se.studentIds || []).forEach((sid) => {
+      const st = (students || []).find((s) => s.id === sid);
+      if (st && st.groupeId && st.groupeId !== groupeAppareil) resultats.push(sessionPourPersonne(se, sid));
+    });
+  });
+  return resultats;
+}
+
+/* crisis.studentId et releve.studentId sont déjà singuliers : un simple
+   filtre suffit, pas de projection comme pour les séances. */
+function crisesHorsGroupe(crises, students, groupeAppareil) {
+  if (!groupeAppareil) return [];
+  return (crises || []).filter((c) => {
+    const st = (students || []).find((s) => s.id === c.studentId);
+    return !!(st && st.groupeId && st.groupeId !== groupeAppareil);
+  });
+}
+function relevesHorsGroupe(releves, students, groupeAppareil) {
+  if (!groupeAppareil) return [];
+  return (releves || []).filter((r) => {
+    const st = (students || []).find((s) => s.id === r.studentId);
+    return !!(st && st.groupeId && st.groupeId !== groupeAppareil);
+  });
+}
+
+/* Fusion additive stricte des données de suivi reçues d'une autre tablette :
+   jamais d'écrasement, jamais de fuite vers un studentId ou un objectiveId
+   inconnus localement. C'est ce refus systématique de l'inconnu qui garantit
+   qu'un fichier envoyé à la mauvaise tablette ne peut rien y déposer — pas
+   même la question ne se pose, la donnée est rejetée avant d'être regardée.
+
+   Une séance est rejetée EN BLOC dès qu'un seul de ses objectifs référencés
+   (objectiveSnapshot) est inconnu de la personne concernée : jamais de fusion
+   partielle qui laisserait un objectiveSnapshot à moitié reconnu. */
+function fusionnerSuiviRecu({ sessionsLocales, crisesLocales, relevesLocales, studentsLocaux, recu }) {
+  const studentIds = new Set((studentsLocaux || []).map((s) => s.id));
+  const objectifsConnusDe = {};
+  (studentsLocaux || []).forEach((s) => {
+    objectifsConnusDe[s.id] = new Set((s.objectives || []).map((o) => o.id));
+  });
+
+  const idsSessionsLocales = new Set((sessionsLocales || []).map((s) => s.id));
+  const idsCrisesLocales = new Set((crisesLocales || []).map((c) => c.id));
+  const idsRelevesLocaux = new Set((relevesLocales || []).map((r) => r.id));
+
+  let idInconnu = 0;
+  let dejaPresentes = 0;
+
+  const sessionsAcceptees = [];
+  ((recu && recu.sessions) || []).forEach((se) => {
+    if (idsSessionsLocales.has(se.id)) { dejaPresentes++; return; }
+    const idsSession = se.studentIds || [];
+    if (idsSession.length === 0 || !idsSession.every((sid) => studentIds.has(sid))) { idInconnu++; return; }
+    const objectifsConnus = new Set();
+    idsSession.forEach((sid) => (objectifsConnusDe[sid] || new Set()).forEach((oid) => objectifsConnus.add(oid)));
+    const objectifsRequis = Object.keys(se.objectiveSnapshot || {});
+    if (!objectifsRequis.every((oid) => objectifsConnus.has(oid))) { idInconnu++; return; }
+    sessionsAcceptees.push(se);
+  });
+
+  const crisesAcceptees = [];
+  ((recu && recu.crises) || []).forEach((c) => {
+    if (idsCrisesLocales.has(c.id)) { dejaPresentes++; return; }
+    if (!c.studentId || !studentIds.has(c.studentId)) { idInconnu++; return; }
+    crisesAcceptees.push(c);
+  });
+
+  const relevesAcceptes = [];
+  ((recu && recu.suivi) || []).forEach((r) => {
+    if (idsRelevesLocaux.has(r.id)) { dejaPresentes++; return; }
+    if (!r.studentId || !studentIds.has(r.studentId)) { idInconnu++; return; }
+    relevesAcceptes.push(r);
+  });
+
+  return {
+    sessions: [...(sessionsLocales || []), ...sessionsAcceptees],
+    crises: [...(crisesLocales || []), ...crisesAcceptees],
+    releves: [...(relevesLocales || []), ...relevesAcceptes],
+    ignorees: { idInconnu, dejaPresentes },
   };
 }
 

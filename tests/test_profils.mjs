@@ -46,6 +46,7 @@ const NOMS = [
   'profilsDuGroupe', 'axesUtilises', 'payloadProfils',
   'groupeDe', 'normaliserInitiales', 'resoudreGroupeImporte', 'proposerRapprochementsPersonnes',
   'nomDisponible', 'configCanonique', 'signatureObjectif', 'objectifDejaCote', 'diffObjectifsPersonne',
+  'sessionPourPersonne', 'sessionsHorsGroupe', 'crisesHorsGroupe', 'relevesHorsGroupe', 'fusionnerSuiviRecu',
 ];
 // proposerRapprochementsPersonnes appelle groupeDe, qui replie sur
 // GROUPE_INCONNU (constante sur une seule ligne, donc extraireLigne).
@@ -63,6 +64,7 @@ const {
   profilsDuGroupe, axesUtilises, payloadProfils,
   groupeDe, normaliserInitiales, resoudreGroupeImporte, proposerRapprochementsPersonnes,
   nomDisponible, configCanonique, signatureObjectif, objectifDejaCote, diffObjectifsPersonne,
+  sessionPourPersonne, sessionsHorsGroupe, crisesHorsGroupe, relevesHorsGroupe, fusionnerSuiviRecu,
 } = new Function(code)();
 
 /* ==================== profilsDuGroupe ==================== */
@@ -231,6 +233,94 @@ t('liste locale absente : tout devient nouveau, pas de plantage', diffObjectifsP
   undefined, [{ id: 'IMP4', name: 'X', type: 'trials', config: {} }]
 )[0].statut, 'nouveau');
 t('liste importée absente : liste vide', diffObjectifsPersonne([localHabillage], undefined), []);
+
+/* ==================== sessionPourPersonne ==================== */
+
+const seanceMixte = {
+  id: 'se1', date: 't', startedAt: 1, mode: 'atelier', atelierId: 'at1', intervenantId: 'i1',
+  studentIds: ['a', 'b'],
+  selectedObjectives: { a: ['oa1'], b: ['ob1'] },
+  objectiveSnapshot: { oa1: { id: 'oa1', name: 'Obj A' }, ob1: { id: 'ob1', name: 'Obj B' } },
+  data: { a: { oa1: { result: 'x' } }, b: { ob1: { result: 'y' } } },
+  notes: { a: 'note a', b: 'note b' },
+  hidden: { a: ['oa1'] },
+  presence: { a: { from: 1, to: null }, b: { from: 1, to: null } },
+  priorityOrder: ['a|oa1', 'b|ob1'],
+  pauses: [],
+};
+const projA = sessionPourPersonne(seanceMixte, 'a');
+
+t('sessionPourPersonne : ne garde que la personne visée', projA.studentIds, ['a']);
+t('sessionPourPersonne : selectedObjectives réduit à la personne', projA.selectedObjectives, { a: ['oa1'] });
+t('sessionPourPersonne : objectiveSnapshot réduit aux objectifs encore référencés', Object.keys(projA.objectiveSnapshot), ['oa1']);
+t('sessionPourPersonne : aucune fuite dans data', projA.data, { a: { oa1: { result: 'x' } } });
+t('sessionPourPersonne : aucune fuite dans notes', projA.notes, { a: 'note a' });
+t('sessionPourPersonne : aucune fuite dans hidden', projA.hidden, { a: ['oa1'] });
+t('sessionPourPersonne : aucune fuite dans presence', projA.presence, { a: { from: 1, to: null } });
+t('sessionPourPersonne : priorityOrder filtré', projA.priorityOrder, ['a|oa1']);
+t('sessionPourPersonne : personne absente de la séance → studentIds vide', sessionPourPersonne(seanceMixte, 'z').studentIds, []);
+t('sessionPourPersonne : séance absente, pas de plantage', sessionPourPersonne(null, 'a'), null);
+
+/* ==================== sessionsHorsGroupe / crisesHorsGroupe / relevesHorsGroupe ==================== */
+
+const studentsGroupesTest = [
+  { id: 'a', initials: 'A', groupeId: 'g1' },
+  { id: 'b', initials: 'B', groupeId: 'g2' },
+  { id: 'c', initials: 'C', groupeId: null },
+];
+const seanceTrois = {
+  ...seanceMixte, studentIds: ['a', 'b', 'c'],
+  selectedObjectives: { a: ['oa1'], b: ['ob1'], c: [] },
+  data: { a: {}, b: {}, c: {} }, presence: {}, notes: {}, hidden: {},
+};
+const horsGroupe = sessionsHorsGroupe([seanceTrois], studentsGroupesTest, 'g1');
+
+t('sessionsHorsGroupe : une ligne pour la personne d\'un autre groupe', horsGroupe.length, 1);
+t('sessionsHorsGroupe : projetée sur la bonne personne, ni le même groupe ni la personne sans groupe', horsGroupe[0].studentIds, ['b']);
+t('sessionsHorsGroupe : sans groupeAppareil, rien ne part', sessionsHorsGroupe([seanceTrois], studentsGroupesTest, null), []);
+
+const crisesTest = [{ id: 'cr1', studentId: 'a' }, { id: 'cr2', studentId: 'b' }, { id: 'cr3', studentId: 'c' }];
+t('crisesHorsGroupe : seule la crise de l\'autre groupe part', crisesHorsGroupe(crisesTest, studentsGroupesTest, 'g1').map((c) => c.id), ['cr2']);
+t('crisesHorsGroupe : sans groupeAppareil, rien ne part', crisesHorsGroupe(crisesTest, studentsGroupesTest, null), []);
+
+const relevesTest = [{ id: 'r1', studentId: 'a' }, { id: 'r2', studentId: 'b' }];
+t('relevesHorsGroupe : seul le relevé de l\'autre groupe part', relevesHorsGroupe(relevesTest, studentsGroupesTest, 'g1').map((r) => r.id), ['r2']);
+
+/* ==================== fusionnerSuiviRecu ==================== */
+
+const studentsLocauxFusion = [{ id: 'x', initials: 'X', objectives: [{ id: 'ox1', name: 'Obj X' }] }];
+const sessionConnue = { id: 'sf1', studentIds: ['x'], objectiveSnapshot: { ox1: {} } };
+const sessionObjectifInconnu = { id: 'sf2', studentIds: ['x'], objectiveSnapshot: { 'ox-fantome': {} } };
+const sessionPersonneInconnue = { id: 'sf3', studentIds: ['y'], objectiveSnapshot: {} };
+
+const res1 = fusionnerSuiviRecu({
+  sessionsLocales: [], crisesLocales: [], relevesLocales: [], studentsLocaux: studentsLocauxFusion,
+  recu: { sessions: [sessionConnue, sessionObjectifInconnu, sessionPersonneInconnue], crises: [], suivi: [] },
+});
+t('fusionnerSuiviRecu : séance aux objectifs connus acceptée', res1.sessions.map((s) => s.id), ['sf1']);
+t('fusionnerSuiviRecu : objectif inconnu ET studentId inconnu rejetés EN BLOC (2 séances)', res1.ignorees.idInconnu, 2);
+
+const res2 = fusionnerSuiviRecu({
+  sessionsLocales: res1.sessions, crisesLocales: [], relevesLocales: [], studentsLocaux: studentsLocauxFusion,
+  recu: { sessions: [sessionConnue], crises: [], suivi: [] },
+});
+t('fusionnerSuiviRecu : réimporter la même séance n\'ajoute rien', res2.sessions.length, 1);
+t('fusionnerSuiviRecu : comptée comme déjà présente, pas comme un nouvel ajout', res2.ignorees.dejaPresentes, 1);
+
+const res3 = fusionnerSuiviRecu({
+  sessionsLocales: [], crisesLocales: [], relevesLocales: [], studentsLocaux: studentsLocauxFusion,
+  recu: {
+    sessions: [],
+    crises: [{ id: 'cf1', studentId: 'x' }, { id: 'cf2', studentId: 'z' }],
+    suivi: [{ id: 'rf1', studentId: 'x' }, { id: 'rf2', studentId: 'z' }],
+  },
+});
+t('fusionnerSuiviRecu : crise et relevé au studentId inconnu rejetés', [res3.crises.length, res3.releves.length], [1, 1]);
+t('fusionnerSuiviRecu : comptés comme id inconnu (1 crise + 1 relevé)', res3.ignorees.idInconnu, 2);
+
+t('fusionnerSuiviRecu : rien reçu, pas de plantage', fusionnerSuiviRecu({
+  sessionsLocales: [], crisesLocales: [], relevesLocales: [], studentsLocaux: studentsLocauxFusion, recu: {},
+}).sessions, []);
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko > 0 ? 1 : 0);
