@@ -1217,16 +1217,119 @@ function modeleDepuisObjectif(obj) {
   return { ...reste, id: uid() };
 }
 
-/* Un nom de modèle déjà pris est suffixé plutôt que rejeté : importConfig
-   dédoublonne les modèles par `name` (voir plus bas), deux homonymes locaux
-   deviendraient donc indiscernables dans la liste puis silencieusement
-   fusionnés au premier import. */
-function nomModeleDisponible(nom, templates, exceptId) {
-  const pris = new Set(templates.filter((t) => t.id !== exceptId).map((t) => t.name));
+/* Un nom déjà pris est suffixé plutôt que rejeté — pas seulement pour les
+   modèles (nomModeleDisponible ci-dessous) : le même besoin se pose pour un
+   objectif importé qui porte le nom d'un objectif local différent (« garder
+   les deux », voir diffObjectifsPersonne). */
+function nomDisponible(nom, items, exceptId) {
+  const pris = new Set((items || []).filter((t) => t.id !== exceptId).map((t) => t.name));
   if (!pris.has(nom)) return nom;
   let i = 2;
   while (pris.has(`${nom} (${i})`)) i++;
   return `${nom} (${i})`;
+}
+
+/* importConfig dédoublonne les modèles par `name` : deux homonymes locaux
+   deviendraient indiscernables dans la liste puis silencieusement fusionnés
+   au premier import, sans ce suffixage. */
+function nomModeleDisponible(nom, templates, exceptId) {
+  return nomDisponible(nom, templates, exceptId);
+}
+
+/* Projette la configuration d'un objectif sur son CONTENU, jamais ses ids.
+   Neutralise le piège des ids par défaut, non générés par uid() (DEFAULT_
+   CHAIN_STEPS : st1..st3 ; DEFAULT_INTERVAL_LEVELS : lv1..lv4 ; BALANCE_
+   OUTCOMES : reussi/guide/erreur/manque) : ils coïncident naturellement
+   entre deux tablettes tant que rien n'est personnalisé. Comparer par id
+   déclarerait à tort un conflit entre deux objectifs identiques — ou
+   l'inverse, laisserait passer deux objectifs réellement différents qui
+   partagent un id par défaut non renommé. */
+function configCanonique(type, config) {
+  const c = config || {};
+  const base = {
+    avecCompteur: !!c.avecCompteur,
+    compteurParEssai: !!c.compteurParEssai,
+    avecChrono: !!c.avecChrono,
+    chronoMode: c.chronoMode || null,
+    chronoSeconds: c.chronoSeconds || null,
+    chronoParEssai: !!c.chronoParEssai,
+  };
+  if (USES_GUIDANCE.includes(type)) {
+    base.guidanceSet = (c.guidanceSet || []).map((g) => ({ code: g.code, label: g.label, independent: !!g.independent }));
+  }
+  if (MASTERY_TYPES.includes(type)) {
+    base.mastery = c.mastery
+      ? { threshold: c.mastery.threshold, sessions: c.mastery.sessions, unit: c.mastery.unit, sens: c.mastery.sens }
+      : null;
+  }
+  if (PERCENT_TYPES.includes(type)) {
+    base.targets = (c.targets || []).map((t) => t.name);
+  }
+  if (type === 'trials') {
+    base.trialCount = c.trialCount || 0;
+  }
+  if (type === 'interval') {
+    base.intervalSeconds = c.intervalSeconds || null;
+    base.intervalMode = c.intervalMode || null;
+    base.levels = (c.levels || []).map((l) => l.name);
+    const niveauCible = (c.levels || []).find((l) => l.id === c.targetLevelId);
+    base.targetLevelName = niveauCible ? niveauCible.name : null;
+  }
+  if (type === 'chaining' || type === 'balance') {
+    base.steps = (c.steps || []).map((s) => s.name);
+  }
+  if (type === 'balance') {
+    base.balanceOutcomes = (c.balanceOutcomes || []).map((o) => ({ label: o.label, short: o.short, reussite: !!o.reussite, exclu: !!o.exclu }));
+  }
+  return base;
+}
+
+/* Empreinte de contenu d'un objectif, en excluant exactement ce que
+   modeleDepuisObjectif exclut déjà (id, priorité, progression en cours,
+   historique de phase) — deux objectifs de même signature sont
+   interchangeables du point de vue de la fusion. */
+function signatureObjectif(obj) {
+  return JSON.stringify({
+    name: (obj.name || '').trim(),
+    type: obj.type,
+    config: configCanonique(obj.type, obj.config),
+  });
+}
+
+/* objectiveSnapshot est indexé par objectiveId (construireDonneesSeance) :
+   la présence de la clé suffit à savoir qu'une séance a figé cet objectif.
+   C'est le verrou qui empêche un import de remplacer les cibles d'un
+   objectif déjà coté — l'historique deviendrait un graphe de points
+   orphelins. */
+function objectifDejaCote(sessions, objectiveId) {
+  return (sessions || []).some((se) => se && se.objectiveSnapshot && Object.prototype.hasOwnProperty.call(se.objectiveSnapshot, objectiveId));
+}
+
+/* Compare les objectifs importés d'une personne à ceux de son homologue
+   local (déjà apparié — voir proposerRapprochementsPersonnes). Priorité :
+   1. même id ET même signature → deja-aligne (silencieux)
+   2. sinon même nom ET même signature → identique-contenu (remap silencieux,
+      sûr : le contenu est prouvé identique)
+   3. sinon même nom mais signature différente → conflit (arbitrage requis)
+   4. sinon → nouveau (ajouté directement)
+   Si l'id local a changé de nom en même temps qu'il divergeait, il n'est pas
+   retrouvé au pas 2 et retombe en « nouveau » — limite assumée, un
+   changement de nom et de contenu simultané des deux côtés est ambigu par
+   nature. */
+function diffObjectifsPersonne(locaux, importes) {
+  return (importes || []).map((imp) => {
+    const parId = (locaux || []).find((l) => l.id === imp.id);
+    if (parId && signatureObjectif(parId) === signatureObjectif(imp)) {
+      return { importe: imp, local: parId, statut: 'deja-aligne' };
+    }
+    const cible = (imp.name || '').trim().toLowerCase();
+    const parNom = (locaux || []).find((l) => (l.name || '').trim().toLowerCase() === cible);
+    if (parNom) {
+      const statut = signatureObjectif(parNom) === signatureObjectif(imp) ? 'identique-contenu' : 'conflit';
+      return { importe: imp, local: parNom, statut };
+    }
+    return { importe: imp, local: null, statut: 'nouveau' };
+  });
 }
 
 /* L'inverse : instancie un objectif réel et indépendant à partir d'un

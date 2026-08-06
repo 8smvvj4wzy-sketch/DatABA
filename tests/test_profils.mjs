@@ -45,14 +45,24 @@ function extraireLigne(nom) {
 const NOMS = [
   'profilsDuGroupe', 'axesUtilises', 'payloadProfils',
   'groupeDe', 'normaliserInitiales', 'resoudreGroupeImporte', 'proposerRapprochementsPersonnes',
+  'nomDisponible', 'configCanonique', 'signatureObjectif', 'objectifDejaCote', 'diffObjectifsPersonne',
 ];
 // proposerRapprochementsPersonnes appelle groupeDe, qui replie sur
 // GROUPE_INCONNU (constante sur une seule ligne, donc extraireLigne).
-const code = `const GROUPE_INCONNU = ${extraireLigne('GROUPE_INCONNU')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')} };`;
+// configCanonique dépend de trois listes de types, également sur une seule
+// ligne — PERCENT_TYPES doit être définie avant MASTERY_TYPES, qui la
+// référence (`[...PERCENT_TYPES, 'occurrence']`).
+const code = `const GROUPE_INCONNU = ${extraireLigne('GROUPE_INCONNU')};
+const PERCENT_TYPES = ${extraireLigne('PERCENT_TYPES')};
+const MASTERY_TYPES = ${extraireLigne('MASTERY_TYPES')};
+const USES_GUIDANCE = ${extraireLigne('USES_GUIDANCE')};
+${NOMS.map(extraire).join('\n')}
+return { ${NOMS.join(', ')} };`;
 // eslint-disable-next-line no-new-func
 const {
   profilsDuGroupe, axesUtilises, payloadProfils,
   groupeDe, normaliserInitiales, resoudreGroupeImporte, proposerRapprochementsPersonnes,
+  nomDisponible, configCanonique, signatureObjectif, objectifDejaCote, diffObjectifsPersonne,
 } = new Function(code)();
 
 /* ==================== profilsDuGroupe ==================== */
@@ -160,6 +170,67 @@ const rapproGroupeInconnuLocalement = proposerRapprochementsPersonnes(
 t('groupe importé introuvable dans la liste importée : aucun candidat, plutôt que de risquer un mélange', rapproGroupeInconnuLocalement[0].statut, 'nouvelle');
 
 t('liste importée absente : pas de plantage', proposerRapprochementsPersonnes(undefined, studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro), []);
+
+/* ==================== nomDisponible ==================== */
+
+const itemsNommes = [{ id: 't1', name: 'Pointer une image' }, { id: 't2', name: 'Pointer une image (2)' }];
+
+t('nomDisponible — nom libre inchangé', nomDisponible('Nouveau', itemsNommes), 'Nouveau');
+t('nomDisponible — suffixe le premier créneau libre', nomDisponible('Pointer une image', itemsNommes), 'Pointer une image (3)');
+t('nomDisponible — ignore son propre nom (édition)', nomDisponible('Pointer une image', itemsNommes, 't1'), 'Pointer une image');
+
+/* ==================== configCanonique / signatureObjectif ==================== */
+
+// Mêmes étapes par défaut, jamais renommées, mais des ids différents —
+// exactement le piège DEFAULT_CHAIN_STEPS (st1..st3 sur une tablette, autre
+// chose sur une autre si la bibliothèque a divergé entre versions).
+const stepsA = [{ id: 'st1', name: '' }, { id: 'st2', name: '' }, { id: 'st3', name: '' }];
+const stepsB = [{ id: 'stX1', name: '' }, { id: 'stX2', name: '' }, { id: 'stX3', name: '' }];
+const stepsC = [{ id: 'st1', name: 'Ouvrir' }, { id: 'st2', name: 'Enfiler' }, { id: 'st3', name: 'Fermer' }];
+
+t('configCanonique ignore les ids d\'étapes, compare le contenu', configCanonique('chaining', { steps: stepsA }), configCanonique('chaining', { steps: stepsB }));
+t('configCanonique détecte un vrai contenu différent : signatures distinctes', JSON.stringify(configCanonique('chaining', { steps: stepsA })) === JSON.stringify(configCanonique('chaining', { steps: stepsC })), false);
+
+const levelsA = [{ id: 'lv1', name: 'Stable' }, { id: 'lv2', name: 'Crise' }];
+const levelsB = [{ id: 'lvA', name: 'Stable' }, { id: 'lvB', name: 'Crise' }];
+t('configCanonique résout targetLevelId en nom, pas en id', configCanonique('interval', { levels: levelsA, targetLevelId: 'lv1' }), configCanonique('interval', { levels: levelsB, targetLevelId: 'lvA' }));
+
+const objA = { id: 'a1', name: "Suite d'habillage", type: 'chaining', config: { steps: stepsA, avecChrono: false, avecCompteur: false }, favorite: true, currentTargetId: null, masteredTargetIds: [], phaseHistory: [{ id: 'ph1', name: 'Intervention', date: null }] };
+const objB = { id: 'a2', name: "Suite d'habillage", type: 'chaining', config: { steps: stepsB, avecChrono: false, avecCompteur: false }, favorite: false, currentTargetId: null, masteredTargetIds: ['x'], phaseHistory: [] };
+t('signatureObjectif ignore id, favorite, progression, phaseHistory', signatureObjectif(objA), signatureObjectif(objB));
+t('signatureObjectif change avec le nom', signatureObjectif(objA) === signatureObjectif({ ...objA, name: 'Autre nom' }), false);
+
+/* ==================== objectifDejaCote ==================== */
+
+const sessionsAvecSnapshot = [{ id: 's1', objectiveSnapshot: { obj1: {} } }, { id: 's2', objectiveSnapshot: {} }];
+t('objectifDejaCote détecte un objectif figé dans un snapshot', objectifDejaCote(sessionsAvecSnapshot, 'obj1'), true);
+t('objectifDejaCote : rien si jamais figé', objectifDejaCote(sessionsAvecSnapshot, 'obj9'), false);
+t('objectifDejaCote : pas de plantage sans séances', objectifDejaCote(undefined, 'obj1'), false);
+
+/* ==================== diffObjectifsPersonne ==================== */
+
+const localHabillage = { id: 'L1', name: "Suite d'habillage", type: 'chaining', config: { steps: stepsA } };
+
+t('même id, même signature : deja-aligne', diffObjectifsPersonne(
+  [localHabillage], [{ id: 'L1', name: "Suite d'habillage", type: 'chaining', config: { steps: stepsA } }]
+)[0].statut, 'deja-aligne');
+
+t('id différent mais même nom et étapes par défaut non renommées : identique-contenu, PAS conflit', diffObjectifsPersonne(
+  [localHabillage], [{ id: 'IMP2', name: "Suite d'habillage", type: 'chaining', config: { steps: stepsB } }]
+)[0].statut, 'identique-contenu');
+
+t('même nom, contenu vraiment différent : conflit', diffObjectifsPersonne(
+  [localHabillage], [{ id: 'IMP3', name: "Suite d'habillage", type: 'chaining', config: { steps: stepsC } }]
+)[0].statut, 'conflit');
+
+t('aucun objectif local du même nom : nouveau', diffObjectifsPersonne(
+  [localHabillage], [{ id: 'IMP4', name: 'Objectif totalement nouveau', type: 'trials', config: { trialCount: 5 } }]
+)[0].statut, 'nouveau');
+
+t('liste locale absente : tout devient nouveau, pas de plantage', diffObjectifsPersonne(
+  undefined, [{ id: 'IMP4', name: 'X', type: 'trials', config: {} }]
+)[0].statut, 'nouveau');
+t('liste importée absente : liste vide', diffObjectifsPersonne([localHabillage], undefined), []);
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko > 0 ? 1 : 0);
