@@ -3580,6 +3580,54 @@ const ZOOM_LEVELS = [
    document déjà en place. */
 const TAB_ORDER = ['suivi', 'session', 'export'];
 
+/* Logo affiché en pied du tiroir latéral. */
+function LogoDatABA({ height = 30 }) {
+  return (
+    <svg height={height} viewBox="0 0 260 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="DatABA">
+      <defs>
+        <linearGradient id="logoDatabaDark" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#12386b" />
+          <stop offset="1" stopColor="#1c5aa8" />
+        </linearGradient>
+        <linearGradient id="logoDatabaLight" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#2f8fe0" />
+          <stop offset="1" stopColor="#4fc3f7" />
+        </linearGradient>
+        <clipPath id="logoDatabaPiece">
+          <path d="
+            M 25,20
+            A 10,10 0 0 1 35,10
+            L 47,10
+            A 11,11 0 0 0 69,10
+            L 77,10
+            A 11,11 0 0 0 99,10
+            L 105,10
+            A 10,10 0 0 1 115,20
+            L 115,31
+            A 11,11 0 0 0 115,53
+            L 115,67
+            A 11,11 0 0 0 115,89
+            L 115,100
+            A 10,10 0 0 1 105,110
+            L 35,110
+            A 10,10 0 0 1 25,100
+            L 25,78
+            A 18,18 0 0 1 25,42
+            L 25,20
+            Z
+          " />
+        </clipPath>
+      </defs>
+      <g clipPath="url(#logoDatabaPiece)">
+        <rect x="0" y="0" width="140" height="120" fill="url(#logoDatabaDark)" />
+        <polygon points="25,20 115,20 115,100" fill="url(#logoDatabaLight)" />
+      </g>
+      <text x="150" y="55" fontFamily={F_DISPLAY} fontWeight="800" fontSize="42" fill="#12386b">Dat</text>
+      <text x="150" y="95" fontFamily={F_DISPLAY} fontWeight="800" fontSize="42" fill="#2f9bef">ABA</text>
+    </svg>
+  );
+}
+
 /* Les dix panneaux du tiroir latéral. Source unique : autrefois écrits en
    dur dans le JSX du tiroir en plus du `switch` de rendu, ce qui obligeait à
    maintenir deux listes en parallèle à chaque ajout ou retrait de panneau. */
@@ -5750,7 +5798,7 @@ function AbaApp() {
           onClick={TIROIR_FERME_AU_TAP_DEHORS ? () => setTiroir(false) : undefined}
         >
           <div
-            className="h-full overflow-y-auto shadow-2xl"
+            className="h-full overflow-y-auto shadow-2xl flex flex-col"
             style={{
               width: '86%',
               maxWidth: '22rem',
@@ -5800,6 +5848,10 @@ function AbaApp() {
                   </button>
                 );
               })}
+            </div>
+
+            <div className="flex-1 flex items-center justify-center">
+              <LogoDatABA />
             </div>
           </div>
         </div>
