@@ -5217,7 +5217,7 @@ function AbaApp() {
             intervenants={intervenants} poste={poste} onChoisirPoste={choisirPosteIntervenant}
             retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
             onExportConfig={exportConfig} onExportBackup={exportBackup} onImportBackup={importBackup}
-            onExportProfils={() => exportProfils('groupe')}
+            onExportProfils={() => exportProfils('groupe')} onExportProfilsComplet={() => exportProfils('complet')}
           />
         );
       case 'guidances':
@@ -6609,7 +6609,7 @@ function PanneauMotsDePasse({ security, onChangePin, onDisableProtection }) {
 /* Les deux exports existaient déjà, mais sous deux boutons aux libellés
    proches. Ils sont présentés ici comme un seul choix explicite : avec ou sans
    données personnelles. */
-function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSetGroupeAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup, onExportProfils }) {
+function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSetGroupeAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup, onExportProfils, onExportProfilsComplet }) {
   const fileRef = useRef(null);
   const [nom, setNom] = useState(appareil || '');
   useEffect(() => { setNom(appareil || ''); }, [appareil]);
@@ -6698,7 +6698,7 @@ function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSe
           <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Exporter</span>
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Trois fichiers différents. Les deux derniers ne quittent pas l'établissement sans précaution.
+          Quatre fichiers différents. Les trois derniers ne quittent pas l'établissement sans précaution.
         </p>
 
         <button
@@ -6730,7 +6730,7 @@ function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSe
         <button
           onClick={onExportProfils}
           disabled={!groupeAppareil}
-          className="w-full rounded-2xl border-2 p-3.5 text-left"
+          className="w-full rounded-2xl border-2 p-3.5 mb-2 text-left"
           style={{ borderColor: ACCENT, backgroundColor: CARD, opacity: groupeAppareil ? 1 : 0.5 }}
         >
           <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Mes profils, vers une autre tablette</div>
@@ -6738,6 +6738,18 @@ function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSe
             {groupeAppareil
               ? "Personnes et objectifs du groupe de cette tablette, à agréger sur une tablette centrale. Toujours chiffré."
               : 'Configurez d’abord le groupe de cette tablette, ci-dessus.'}
+          </div>
+        </button>
+
+        <button
+          onClick={onExportProfilsComplet}
+          className="w-full rounded-2xl border-2 p-3.5 text-left"
+          style={{ borderColor: ACCENT, backgroundColor: CARD }}
+        >
+          <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Rediffuser tous les profils</div>
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            Depuis la tablette centrale, après agrégation : personnes et objectifs de tout l'établissement,
+            pas seulement de ce groupe. Toujours chiffré.
           </div>
         </button>
       </Card>
