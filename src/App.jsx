@@ -4302,6 +4302,17 @@ function AbaApp() {
   const addGroupe = (name) => setGroupes((l) => [...l, { id: uid(), name }]);
   const removeGroupe = (id) => setGroupes((l) => l.filter((x) => x.id !== id));
   const renameGroupe = (id, name) => setGroupes((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
+  /* Depuis la fiche d'une personne : crée le groupe et l'affecte dans le même
+     geste, l'id étant généré ici plutôt que dans deux actions dépendantes qui
+     liraient un état pas encore à jour. Second point d'entrée de création de
+     groupe, assumé : un geste humain explicite sur une fiche n'a rien à voir
+     avec la création automatique et silencieuse interdite à l'import (voir
+     resoudreGroupeImporte, qui ne crée jamais de groupe). */
+  const creerGroupeEtAffecter = (studentId, name) => {
+    const id = uid();
+    setGroupes((l) => [...l, { id, name }]);
+    setStudents((s) => s.map((x) => (x.id === studentId ? { ...x, groupeId: id } : x)));
+  };
   const addGuidance = (g) => setGuidances((l) => [...l, g]);
   const removeGuidance = (code) => setGuidances((l) => (l.length > 1 ? l.filter((x) => x.code !== code) : l));
   const toggleIndependent = (code) => setGuidances((l) => l.map((x) => (x.code === code ? { ...x, independent: !x.independent } : x)));
@@ -4980,7 +4991,7 @@ function AbaApp() {
             students={students} guidances={guidances} templates={objectiveTemplates} focus={focusEcran}
             premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
-            groupes={groupes} onSetGroupe={setStudentGroupe}
+            groupes={groupes} onSetGroupe={setStudentGroupe} onCreerGroupe={creerGroupeEtAffecter}
             axesSuivi={axesSuivi} onToggleAxeSuivi={toggleAxeSuivi}
             onCreerSuivi={creerSuiviPour}
             onAjouterCompteur={ajouterCompteur} onRenommerCompteur={renommerCompteur} onSupprimerCompteur={supprimerCompteur}
@@ -6597,7 +6608,7 @@ function BoutonPhase({ obj, onChange }) {
    distance, une carte dans Gestion et une carte dans Personnes. */
 function PanneauPersonnes({
   students, guidances, templates, premiereConfiguration, focus,
-  addStudent, removeStudent, renameStudent, groupes, onSetGroupe, axesSuivi, onToggleAxeSuivi, onCreerSuivi,
+  addStudent, removeStudent, renameStudent, groupes, onSetGroupe, onCreerGroupe, axesSuivi, onToggleAxeSuivi, onCreerSuivi,
   onAjouterCompteur, onRenommerCompteur, onSupprimerCompteur,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
   onOuvrirGuidances, onOuvrirModeles, onOuvrirAteliers, onOuvrirIntervenants,
@@ -6607,6 +6618,10 @@ function PanneauPersonnes({
   const [copyingObj, setCopyingObj] = useState(null);
   const [copyTargets, setCopyTargets] = useState([]);
   const [initials, setInitials] = useState('');
+  /* Personne pour laquelle le sélecteur de groupe propose de créer un
+     nouveau groupe plutôt que d'en choisir un existant. */
+  const [creationGroupePour, setCreationGroupePour] = useState(null);
+  const [nomNouveauGroupe, setNomNouveauGroupe] = useState('');
   /* Personne pour laquelle on choisit un suivi à ajouter. */
   const [ajoutSuivi, setAjoutSuivi] = useState(null);
   /* Personne pour laquelle un nouvel objectif s'ouvre déjà déplié, et le type
@@ -6715,21 +6730,60 @@ function PanneauPersonnes({
                       visible partout — ce n'est jamais un état bloquant. */}
                   <div className="mt-2.5">
                     <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Groupe</div>
-                    <select
-                      value={s.groupeId || ''}
-                      onChange={(ev) => onSetGroupe(s.id, ev.target.value || null)}
-                      className="w-full rounded-lg px-2.5 py-2 text-sm border"
-                      style={{ borderColor: BORDER, backgroundColor: CARD }}
-                    >
-                      <option value="">Sans groupe</option>
-                      {/* Un groupe supprimé reste proposé sur la personne qui le
-                          porte : sans ça, ouvrir la fiche le réécrirait en
-                          silence vers « Sans groupe ». */}
-                      {s.groupeId && !groupes.some((g) => g.id === s.groupeId) && (
-                        <option value={s.groupeId}>{nomGroupe(groupes, s.groupeId)}</option>
-                      )}
-                      {groupes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                    </select>
+                    {creationGroupePour === s.id ? (
+                      <div className="flex gap-2">
+                        <Field
+                          value={nomNouveauGroupe}
+                          onChange={setNomNouveauGroupe}
+                          placeholder="Nom du groupe (ex. Classe 3)"
+                          onEnter={() => {
+                            const nom = nomNouveauGroupe.trim();
+                            if (!nom) return;
+                            onCreerGroupe(s.id, nom);
+                            setCreationGroupePour(null);
+                          }}
+                        />
+                        <Btn
+                          onClick={() => {
+                            const nom = nomNouveauGroupe.trim();
+                            if (!nom) return;
+                            onCreerGroupe(s.id, nom);
+                            setCreationGroupePour(null);
+                          }}
+                          className="px-4 shrink-0"
+                        >
+                          <Plus size={18} />
+                        </Btn>
+                        <Btn variant="ghost" onClick={() => setCreationGroupePour(null)} className="px-3 shrink-0">
+                          <X size={18} />
+                        </Btn>
+                      </div>
+                    ) : (
+                      <select
+                        value={s.groupeId || ''}
+                        onChange={(ev) => {
+                          const v = ev.target.value;
+                          if (v === '__nouveau') {
+                            setNomNouveauGroupe('');
+                            setCreationGroupePour(s.id);
+                            return;
+                          }
+                          onSetGroupe(s.id, v || null);
+                        }}
+                        className="w-full rounded-lg px-2.5 py-2 text-sm border"
+                        style={{ borderColor: BORDER, backgroundColor: CARD }}
+                      >
+                        <option value="">Sans groupe</option>
+                        {/* Un groupe supprimé reste proposé sur la personne qui le
+                            porte : sans ça, ouvrir la fiche le réécrirait en
+                            silence vers « Sans groupe ». */}
+                        {s.groupeId && !groupes.some((g) => g.id === s.groupeId) && (
+                          <option value={s.groupeId}>{nomGroupe(groupes, s.groupeId)}</option>
+                        )}
+                        {groupes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                        <option value="__nouveau">+ Nouveau groupe…</option>
+                      </select>
+                    )}
                   </div>
                   {/* Seuls les suivis actifs de cette personne figurent ici.
                       La bibliothèque étant illimitée, tous les lister en
