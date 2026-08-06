@@ -1874,6 +1874,48 @@ function payloadProfils({ students, groupes, axesSuivi, appareil, portee, mainte
   };
 }
 
+/* Normalisation d'initiales pour la COMPARAISON, jamais pour l'affichage :
+   retrait des diacritiques (même principe que segmentAppareil), de toute
+   ponctuation et des espaces, en majuscules. 'A.B.', 'ab', 'A B' → 'AB'. */
+function normaliserInitiales(txt) {
+  return (txt || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z]/g, '')
+    .toUpperCase();
+}
+
+/* Un groupe importé ne se résout JAMAIS par son id brut — les groupes ne sont
+   pas remappés à l'import (contrairement aux ateliers, voir importConfig) et
+   un id d'origine n'a aucun sens sur la tablette qui reçoit. La résolution se
+   fait par nom, seule information stable entre deux tablettes. */
+function resoudreGroupeImporte(groupesLocaux, nomGroupeImporte) {
+  const local = (groupesLocaux || []).find((g) => g && g.name === nomGroupeImporte);
+  return local ? local.id : null;
+}
+
+/* Propose un rapprochement pour chaque personne importée, ne l'applique
+   jamais : un id déjà présent localement est un signe fiable (import répété,
+   tablette déjà alignée) ; sinon, mêmes initiales normalisées ET même groupe
+   résolu ne valent que comme suggestion. Deux vrais homonymes du même groupe
+   produisent la même proposition — limite assumée, à corriger à la main dans
+   l'écran de rapprochement. */
+function proposerRapprochementsPersonnes(studentsImportes, studentsLocaux, groupesImportes, groupesLocaux) {
+  return (studentsImportes || []).map((importe) => {
+    if ((studentsLocaux || []).some((s) => s.id === importe.id)) {
+      return { importe, statut: 'deja-aligne', candidatLocalId: importe.id };
+    }
+    const groupeImp = groupeDe(groupesImportes, importe.groupeId);
+    const groupeResolu = groupeImp ? resoudreGroupeImporte(groupesLocaux, groupeImp.name) : null;
+    const cible = normaliserInitiales(importe.initials);
+    const candidat = (studentsLocaux || []).find(
+      (s) => normaliserInitiales(s.initials) === cible && (s.groupeId || null) === groupeResolu
+    );
+    if (candidat) return { importe, statut: 'a-confirmer', candidatLocalId: candidat.id };
+    return { importe, statut: 'nouvelle', candidatLocalId: null };
+  });
+}
+
 /* Compteur d'occurrence d'une personne, par id — repli explicite pour un
    compteur supprimé, même principe que CRITERE_INCONNU. */
 const COMPTEUR_INCONNU = { id: null, nom: 'Compteur retiré' };

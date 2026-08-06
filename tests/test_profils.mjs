@@ -33,10 +33,27 @@ function extraire(nom) {
   throw new Error(`Fin de déclaration introuvable : ${nom}`);
 }
 
-const NOMS = ['profilsDuGroupe', 'axesUtilises', 'payloadProfils'];
-const code = `${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')} };`;
+/* Une constante tenant sur une seule ligne n'a pas de fermeture propre en
+   colonne zéro : `extraire` chercherait bien plus loin dans le fichier. */
+function extraireLigne(nom) {
+  const re = new RegExp(`^const ${nom} = (.+);$`, 'm');
+  const m = source.match(re);
+  if (!m) throw new Error(`Constante introuvable (ligne unique) dans src/App.jsx : ${nom}`);
+  return m[1];
+}
+
+const NOMS = [
+  'profilsDuGroupe', 'axesUtilises', 'payloadProfils',
+  'groupeDe', 'normaliserInitiales', 'resoudreGroupeImporte', 'proposerRapprochementsPersonnes',
+];
+// proposerRapprochementsPersonnes appelle groupeDe, qui replie sur
+// GROUPE_INCONNU (constante sur une seule ligne, donc extraireLigne).
+const code = `const GROUPE_INCONNU = ${extraireLigne('GROUPE_INCONNU')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')} };`;
 // eslint-disable-next-line no-new-func
-const { profilsDuGroupe, axesUtilises, payloadProfils } = new Function(code)();
+const {
+  profilsDuGroupe, axesUtilises, payloadProfils,
+  groupeDe, normaliserInitiales, resoudreGroupeImporte, proposerRapprochementsPersonnes,
+} = new Function(code)();
 
 /* ==================== profilsDuGroupe ==================== */
 
@@ -93,6 +110,56 @@ const payloadComplet = payloadProfils({
   students: [], groupes: [], axesSuivi: [], appareil: 'Centrale', portee: 'complet', maintenant: '2026-08-06T09:00:00.000Z',
 });
 t('portee complet acceptée telle quelle', payloadComplet.portee, 'complet');
+
+/* ==================== normaliserInitiales ==================== */
+
+t('points, espaces et casse ignorés', [normaliserInitiales('A.B.'), normaliserInitiales('ab'), normaliserInitiales('A B')], ['AB', 'AB', 'AB']);
+t('diacritiques retirés', normaliserInitiales('É.À.'), 'EA');
+t('chaîne vide ou absente', [normaliserInitiales(''), normaliserInitiales(undefined)], ['', '']);
+
+/* ==================== resoudreGroupeImporte ==================== */
+
+const groupesLocaux = [{ id: 'gl1', name: 'Classe 1' }, { id: 'gl2', name: 'Classe 2' }];
+
+t('résolution par nom, id local renvoyé', resoudreGroupeImporte(groupesLocaux, 'Classe 2'), 'gl2');
+t('aucun groupe local du même nom : null, jamais l\'id importé', resoudreGroupeImporte(groupesLocaux, 'Classe 9'), null);
+t('liste locale absente : pas de plantage', resoudreGroupeImporte(undefined, 'Classe 1'), null);
+
+/* ==================== proposerRapprochementsPersonnes ==================== */
+
+const groupesImportesRappro = [{ id: 'gi1', name: 'Classe 1' }, { id: 'gi2', name: 'Classe 2' }];
+const groupesLocauxRappro = [{ id: 'gl1', name: 'Classe 1' }, { id: 'gl2', name: 'Classe 2' }];
+
+const studentsLocauxRappro = [
+  { id: 'loc-a', initials: 'A.B.', groupeId: 'gl1' },
+  { id: 'loc-b', initials: 'A.B.', groupeId: 'gl2' }, // homonyme, autre groupe
+];
+
+t('id déjà présent localement : déjà aligné, silencieux', proposerRapprochementsPersonnes(
+  [{ id: 'loc-a', initials: 'A.B.', groupeId: 'gi1' }], studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro
+), [{ importe: { id: 'loc-a', initials: 'A.B.', groupeId: 'gi1' }, statut: 'deja-aligne', candidatLocalId: 'loc-a' }]);
+
+const rapproSansIdConnu = proposerRapprochementsPersonnes(
+  [{ id: 'imp-x', initials: 'A.B.', groupeId: 'gi1' }], studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro
+);
+t('mêmes initiales ET même groupe résolu : candidat proposé, pas appliqué', [rapproSansIdConnu[0].statut, rapproSansIdConnu[0].candidatLocalId], ['a-confirmer', 'loc-a']);
+
+const rapproAutreGroupe = proposerRapprochementsPersonnes(
+  [{ id: 'imp-y', initials: 'A.B.', groupeId: 'gi2' }], studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro
+);
+t('même initiales mais groupe résolu différent : candidate l\'homonyme du bon groupe, pas l\'autre', rapproAutreGroupe[0].candidatLocalId, 'loc-b');
+
+const rapproNouvelle = proposerRapprochementsPersonnes(
+  [{ id: 'imp-z', initials: 'Z.Z.', groupeId: 'gi1' }], studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro
+);
+t('aucune correspondance : nouvelle personne', [rapproNouvelle[0].statut, rapproNouvelle[0].candidatLocalId], ['nouvelle', null]);
+
+const rapproGroupeInconnuLocalement = proposerRapprochementsPersonnes(
+  [{ id: 'imp-w', initials: 'A.B.', groupeId: 'gi-fantome' }], studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro
+);
+t('groupe importé introuvable dans la liste importée : aucun candidat, plutôt que de risquer un mélange', rapproGroupeInconnuLocalement[0].statut, 'nouvelle');
+
+t('liste importée absente : pas de plantage', proposerRapprochementsPersonnes(undefined, studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro), []);
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko > 0 ? 1 : 0);
