@@ -4519,6 +4519,97 @@ function AbaApp() {
 
   /* --- sauvegarde / restauration --- */
   const [backupPrompt, setBackupPrompt] = useState(null); // { mode: 'export' } | { mode: 'import', envelope, error }
+  /* Import d'un fichier de profils : { payload } le temps que l'écran de
+     rapprochement soit validé, puis null. */
+  const [rapprochement, setRapprochement] = useState(null);
+  /* Conflits d'objectifs à trancher, enchaînés depuis la validation du
+     rapprochement : { conflits: [{ studentId, importe, local }], resume }. */
+  const [arbitrage, setArbitrage] = useState(null);
+
+  /* Applique un rapprochement validé : les personnes déjà alignées ou
+     rapprochées à la main sont fusionnées, les autres deviennent de
+     nouvelles personnes avec leurs objectifs importés tels quels — rien à
+     trancher, elles n'existaient pas ici. Pour les personnes appariées à une
+     personne existante, chaque objectif importé est diffé (diffObjectifsPersonne) :
+     les identiques ou déjà alignés ne bougent pas, les nouveaux s'ajoutent
+     directement, les conflits partent vers l'écran d'arbitrage plutôt que
+     d'être tranchés en silence. */
+  function appliquerRapprochement(propositions, choix) {
+    const payload = rapprochement.payload;
+    const correspondance = {};
+    const nouvellesPersonnes = [];
+
+    propositions.forEach((p) => {
+      const importeId = p.importe.id;
+      if (p.statut === 'deja-aligne') {
+        correspondance[importeId] = importeId;
+        return;
+      }
+      const c = choix[importeId];
+      if (c && c !== 'nouvelle') {
+        correspondance[importeId] = c;
+        return;
+      }
+      const nouvelId = uid();
+      const groupeImp = groupeDe(payload.groupes, p.importe.groupeId);
+      const groupeResolu = groupeImp ? resoudreGroupeImporte(groupes, groupeImp.name) : null;
+      nouvellesPersonnes.push({ ...p.importe, id: nouvelId, groupeId: groupeResolu });
+      correspondance[importeId] = nouvelId;
+    });
+
+    const conflits = [];
+    let ajoutes = 0;
+    const studentsMisAJour = students.map((st) => {
+      const importe = payload.students.find((im) => correspondance[im.id] === st.id);
+      if (!importe) return st;
+      const diff = diffObjectifsPersonne(st.objectives, importe.objectives || []);
+      let objectives = st.objectives;
+      diff.forEach((d) => {
+        if (d.statut === 'nouveau') {
+          objectives = [...objectives, { ...d.importe }];
+          ajoutes++;
+        } else if (d.statut === 'conflit') {
+          conflits.push({ studentId: st.id, importe: d.importe, local: d.local });
+        }
+      });
+      return objectives === st.objectives ? st : { ...st, objectives };
+    });
+
+    setStudents([...studentsMisAJour, ...nouvellesPersonnes]);
+    setRapprochement(null);
+
+    if (conflits.length) {
+      setArbitrage({ conflits, resume: { nouvelles: nouvellesPersonnes.length, ajoutes } });
+    } else {
+      notify(`Profils importés : ${nouvellesPersonnes.length} nouvelle(s) personne(s), ${ajoutes} objectif(s) ajouté(s).`);
+    }
+  }
+
+  /* Applique les décisions de l'écran d'arbitrage. « Prendre l'importé »
+     conserve l'id LOCAL de l'objectif : n'étant jamais autorisé sur un
+     objectif déjà coté (objectifDejaCote, vérifié aussi côté écran), rien
+     d'externe n'en dépend, et ça évite tout remappage en aval. « Garder les
+     deux » ajoute l'objectif importé avec un id neuf et un nom disponible. */
+  function appliquerArbitrage(decisions) {
+    const conflits = arbitrage.conflits;
+    setStudents((cur) => cur.map((st) => {
+      const mesConflits = conflits.map((c, i) => ({ ...c, i })).filter((c) => c.studentId === st.id);
+      if (!mesConflits.length) return st;
+      let objectives = st.objectives;
+      mesConflits.forEach((c) => {
+        const decision = decisions[c.i] || 'deux';
+        if (decision === 'local') return;
+        if (decision === 'importe') {
+          objectives = objectives.map((o) => (o.id === c.local.id ? { ...c.importe, id: c.local.id } : o));
+        } else if (decision === 'deux') {
+          objectives = [...objectives, { ...c.importe, id: uid(), name: nomDisponible(c.importe.name, objectives) }];
+        }
+      });
+      return { ...st, objectives };
+    }));
+    setArbitrage(null);
+    notify('Objectifs importés arbitrés et appliqués.');
+  }
 
   function exportBackup() {
     setBackupPrompt({ mode: 'export-choix' });
@@ -4681,8 +4772,8 @@ function AbaApp() {
         return;
       }
       if (d && d.format === 'aba-profils') {
-        // Même garde que confirmImport, pour un fichier de profils resté en clair.
-        notify('Fichier de profils reçu — l’écran de rapprochement arrive dans une prochaine mise à jour');
+        // Même route que confirmImport, pour un fichier de profils resté en clair.
+        setRapprochement({ payload: d });
         return;
       }
       // Ancienne sauvegarde exportée en clair, avant l'ajout du chiffrement : toujours acceptée
@@ -4702,8 +4793,7 @@ function AbaApp() {
          un fichier de profils n'a ni ateliers ni emploi du temps ni séances,
          les confirmer ferait tout disparaître. */
       if (d && d.format === 'aba-profils') {
-        // Garde de sécurité en attendant l'écran de rapprochement (prochaine mise à jour).
-        notify('Fichier de profils reçu — l’écran de rapprochement arrive dans une prochaine mise à jour');
+        setRapprochement({ payload: d });
         return;
       }
       applyRestoredData(d);
@@ -5704,6 +5794,26 @@ function AbaApp() {
           error={backupPrompt.error}
           onSubmit={backupPrompt.mode === 'export' ? confirmExport : confirmImport}
           onClose={() => setBackupPrompt(null)}
+        />
+      )}
+
+      {rapprochement && (
+        <EcranRapprochementPersonnes
+          payload={rapprochement.payload}
+          students={students}
+          groupes={groupes}
+          onValider={appliquerRapprochement}
+          onClose={() => setRapprochement(null)}
+        />
+      )}
+
+      {arbitrage && (
+        <EcranArbitrageObjectifs
+          conflits={arbitrage.conflits}
+          students={students}
+          sessions={sessions}
+          onValider={appliquerArbitrage}
+          onClose={() => setArbitrage(null)}
         />
       )}
 
@@ -10367,6 +10477,140 @@ function FeuilleJourneeSuivi({ cible, releves, students, axesSuivi, onAjouter, o
           Une fiche crise ouverte depuis un relevé « Crise » suit ces
           corrections, tant que sa durée n'a pas été saisie à la main.
         </p>
+      </div>
+    </div>
+  );
+}
+
+/* Écran de rapprochement : propose une correspondance pour chaque personne
+   importée, ne l'applique jamais seul. Les personnes déjà alignées (même id
+   des deux côtés) ne sont même pas affichées — c'est ce qui rend une
+   rediffusion répétée quasi silencieuse. */
+function EcranRapprochementPersonnes({ payload, students, groupes, onValider, onClose }) {
+  const propositions = React.useMemo(
+    () => proposerRapprochementsPersonnes(payload.students, students, payload.groupes, groupes),
+    [payload, students, groupes]
+  );
+  const aTraiter = propositions.filter((p) => p.statut !== 'deja-aligne');
+  const dejaAlignees = propositions.length - aTraiter.length;
+
+  const [choix, setChoix] = useState(() => {
+    const init = {};
+    aTraiter.forEach((p) => { init[p.importe.id] = p.statut === 'a-confirmer' ? p.candidatLocalId : 'nouvelle'; });
+    return init;
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={onClose}>
+      <div className="rounded-2xl p-5 max-w-lg w-full max-h-[85vh] flex flex-col" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>
+            Profils reçus{payload.appareil ? ` de ${payload.appareil}` : ''}
+          </span>
+          <button onClick={onClose} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
+        </div>
+        <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
+          {dejaAlignees > 0 && `${dejaAlignees} personne(s) déjà à jour. `}
+          Rien n'est appliqué tant que vous n'avez pas validé — corrigez la correspondance si elle ne convient pas.
+        </p>
+
+        {aTraiter.length === 0 ? (
+          <Empty>Tout est déjà à jour.</Empty>
+        ) : (
+          <div className="space-y-2 mb-4 overflow-y-auto flex-1">
+            {aTraiter.map((p) => (
+              <div key={p.importe.id} className="rounded-xl p-3" style={{ backgroundColor: PAPER }}>
+                <div className="text-sm font-medium mb-1.5" style={{ fontFamily: F_DISPLAY }}>
+                  {p.importe.initials}{' '}
+                  <span className="text-xs font-normal" style={{ color: INK_SOFT }}>
+                    — {(p.importe.objectives || []).length} objectif{(p.importe.objectives || []).length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <select
+                  value={choix[p.importe.id]}
+                  onChange={(ev) => setChoix((c) => ({ ...c, [p.importe.id]: ev.target.value }))}
+                  className="w-full rounded-lg px-2.5 py-2 text-sm border"
+                  style={{ borderColor: BORDER, backgroundColor: CARD }}
+                >
+                  <option value="nouvelle">Nouvelle personne</option>
+                  {students.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.initials}{s.groupeId ? ` — ${nomGroupe(groupes, s.groupeId)}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <Btn onClick={() => onValider(propositions, choix)} className="w-full shrink-0">Valider</Btn>
+      </div>
+    </div>
+  );
+}
+
+/* Écran d'arbitrage : seuls les vrais conflits de contenu s'affichent, les
+   objectifs identiques ou déjà alignés ont déjà été appliqués en silence par
+   appliquerRapprochement. « Garder les deux » présélectionné partout : valider
+   sans lire crée un doublon à nettoyer, jamais une perte de travail. */
+function EcranArbitrageObjectifs({ conflits, students, sessions, onValider, onClose }) {
+  const [decisions, setDecisions] = useState(() => {
+    const init = {};
+    conflits.forEach((c, i) => { init[i] = 'deux'; });
+    return init;
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={onClose}>
+      <div className="rounded-2xl p-5 max-w-lg w-full max-h-[85vh] flex flex-col" style={{ backgroundColor: CARD }} onClick={(ev) => ev.stopPropagation()}>
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Objectifs à arbitrer</span>
+          <button onClick={onClose} style={{ color: INK_SOFT }} aria-label="Fermer"><X size={18} /></button>
+        </div>
+        <p className="text-xs mb-4" style={{ color: INK_SOFT }}>
+          Un objectif importé porte le même nom qu'un objectif local, avec un contenu différent.
+          « Garder les deux » n'écrase jamais rien.
+        </p>
+
+        <div className="space-y-3 mb-4 overflow-y-auto flex-1">
+          {conflits.map((c, i) => {
+            const st = students.find((s) => s.id === c.studentId);
+            const verrouille = objectifDejaCote(sessions, c.local.id);
+            return (
+              <div key={i} className="rounded-xl p-3" style={{ backgroundColor: PAPER }}>
+                <div className="text-sm font-medium mb-2" style={{ fontFamily: F_DISPLAY }}>
+                  {st ? st.initials : '?'} — {c.local.name}
+                </div>
+                {verrouille && (
+                  <p className="text-xs mb-2" style={{ color: INK_SOFT }}>
+                    Déjà coté : ses cibles ne peuvent pas être remplacées.
+                  </p>
+                )}
+                <div className="flex flex-col gap-1.5">
+                  {[
+                    { v: 'local', l: 'Garder local' },
+                    { v: 'importe', l: "Prendre l'importé", disabled: verrouille },
+                    { v: 'deux', l: 'Garder les deux' },
+                  ].map((opt) => (
+                    <label key={opt.v} className="flex items-center gap-2 text-sm" style={{ color: INK, opacity: opt.disabled ? 0.4 : 1 }}>
+                      <input
+                        type="radio"
+                        name={`arbitrage-${i}`}
+                        checked={decisions[i] === opt.v}
+                        disabled={opt.disabled}
+                        onChange={() => setDecisions((d) => ({ ...d, [i]: opt.v }))}
+                      />
+                      {opt.l}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <Btn onClick={() => onValider(decisions)} className="w-full shrink-0">Valider</Btn>
       </div>
     </div>
   );
