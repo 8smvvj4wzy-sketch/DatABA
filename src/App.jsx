@@ -3581,68 +3581,22 @@ const ZOOM_LEVELS = [
 const TAB_ORDER = ['suivi', 'session', 'export'];
 
 /* Logo affiché en pied du tiroir latéral. */
-const LogoDatABA = ({ height = 60 }) => (
-  <svg
-    height={height}
-    viewBox="0 0 260 120"
-    xmlns="http://www.w3.org/2000/svg"
-    role="img"
-    aria-label="DatABA"
-  >
-    <defs>
-      <linearGradient id="logoDatabaDark" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stopColor="#12386b" />
-        <stop offset="1" stopColor="#1c5aa8" />
-      </linearGradient>
-      <linearGradient id="logoDatabaLight" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stopColor="#2f8fe0" />
-        <stop offset="1" stopColor="#4fc3f7" />
-      </linearGradient>
-      <clipPath id="logoDatabaPiece">
-        <path
-          d="
-            M 25,20
-            A 10,10 0 0 1 35,10
-            H 105
-            A 10,10 0 0 1 115,20
-            V 100
-            A 10,10 0 0 1 105,110
-            H 35
-            A 10,10 0 0 1 25,100
-            V 20
-            Z
-          "
-        />
-      </clipPath>
-    </defs>
+import logoDataba from './LOGO DATABA.png'; // 
 
-    <g clipPath="url(#logoDatabaPiece)">
-      <rect x="0" y="0" width="140" height="120" fill="url(#logoDatabaDark)" />
-      <polygon points="25,20 115,20 115,100" fill="url(#logoDatabaLight)" />
-    </g>
+export function LogoDatABA({ height = 60 }) {
+  return (
+    <img
+      src={logoDataba}
+      alt="DatABA"
+      style={{
+        height,
+        width: 'auto',
+        display: 'block',
+      }}
+    />
+  );
+}
 
-    <text
-      x="150"
-      y="55"
-      fontFamily="sans-serif"
-      fontWeight="800"
-      fontSize="42"
-      fill="#12386b"
-    >
-      Dat
-    </text>
-    <text
-      x="150"
-      y="95"
-      fontFamily="sans-serif"
-      fontWeight="800"
-      fontSize="42"
-      fill="#2f9bef"
-    >
-      ABA
-    </text>
-  </svg>
-);
 
 /* Les dix panneaux du tiroir latéral. Source unique : autrefois écrits en
    dur dans le JSX du tiroir en plus du `switch` de rendu, ce qui obligeait à
