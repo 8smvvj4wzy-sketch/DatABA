@@ -3581,21 +3581,16 @@ const ZOOM_LEVELS = [
 const TAB_ORDER = ['suivi', 'session', 'export'];
 
 /* Logo affiché en pied du tiroir latéral. */
-import logoDataba from './logo-databa.png'; // 
-
-export function LogoDatABA({ height = 60 }) {
+export function LogoDatABA({ height = 40 }) {
   return (
     <img
-      src={logoDataba}
+      src="/logo-databa.png"
       alt="DatABA"
-      style={{
-        height,
-        width: 'auto',
-        display: 'block',
-      }}
+      style={{ height, width: "auto" }}
     />
   );
 }
+
 
 
 /* Les dix panneaux du tiroir latéral. Source unique : autrefois écrits en
