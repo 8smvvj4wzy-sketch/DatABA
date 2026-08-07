@@ -3581,7 +3581,7 @@ const ZOOM_LEVELS = [
 const TAB_ORDER = ['suivi', 'session', 'export'];
 
 /* Logo affiché en pied du tiroir latéral. */
-import logoDataba from './LOGO DATABA.png'; // 
+import logoDataba from './LOGO-DATABA.png'; // 
 
 export function LogoDatABA({ height = 60 }) {
   return (
