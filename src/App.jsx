@@ -1348,6 +1348,68 @@ function probesDuJour(sessions, sessionCourante, studentId, objectiveId, ref) {
   return { faites: creneaux.size, creneaux: Array.from(creneaux) };
 }
 
+/* Une cotation a-t-elle vraiment été saisie, au-delà de la forme vide posée
+   par emptyEntry ? entryMatches ne vérifie que la FORME (toujours vraie une
+   fois l'entrée créée, qu'on ait coté quelque chose ou non — voir son usage
+   ailleurs) ; ici on compare au contenu réellement vierge. */
+function objectifEstCote(obj, entry) {
+  if (!entry || !entryMatches(obj, entry)) return false;
+  return JSON.stringify(entry) !== JSON.stringify(emptyEntry(obj));
+}
+
+/* Objectifs prévus par l'emploi du temps du jour et pas encore cotés
+   aujourd'hui — pour la fenêtre « Prévus non cotés » de l'écran Suivi. Un
+   même objectif présent dans plusieurs ateliers du jour ne ressort qu'une
+   fois, avec la liste de ces ateliers. `sessionCourante` s'ajoute à
+   `sessions`, même principe que probesDuJour : une séance n'est écrite dans
+   l'historique qu'à sa fin, et un atelier en cours ne doit pas réapparaître
+   comme « non coté » sous prétexte que rien n'est encore enregistré. */
+function objectifsPrevusNonCotes(students, ateliers, emploiDuTemps, sessions, sessionCourante, maintenant) {
+  const ref = new Date(maintenant);
+  const jour = ref.getDay();
+  const duJour = ateliersDuJour(emploiDuTemps, ateliers, jour);
+
+  // studentId -> objectiveId -> Set(nom d'atelier)
+  const prevus = {};
+  duJour.forEach((atelier) => {
+    personnesPrevues(atelier, jour).forEach((sid) => {
+      const oids = (atelier.usualObjectives || {})[sid] || [];
+      if (!oids.length) return;
+      if (!prevus[sid]) prevus[sid] = new Map();
+      oids.forEach((oid) => {
+        if (!prevus[sid].has(oid)) prevus[sid].set(oid, new Set());
+        prevus[sid].get(oid).add(atelier.name);
+      });
+    });
+  });
+
+  const toutes = sessionCourante ? [...(sessions || []), sessionCourante] : (sessions || []);
+  const duJourSessions = toutes.filter((se) => se && memeJour(new Date(se.date), ref));
+
+  const resultat = [];
+  (students || []).forEach((st) => {
+    const objectifsPersonne = prevus[st.id];
+    if (!objectifsPersonne) return;
+    const lignes = [];
+    objectifsPersonne.forEach((ateliersSet, oid) => {
+      const obj = (st.objectives || []).find((o) => o.id === oid);
+      if (!obj) return;
+      if (obj.type === 'probe') {
+        const quota = obj.config.probesParJour || 1;
+        const { faites } = probesDuJour(duJourSessions, null, st.id, oid, ref);
+        if (faites >= quota) return;
+        lignes.push({ objectifId: oid, nom: obj.name, type: obj.type, ateliers: Array.from(ateliersSet), probeReste: quota - faites, probeQuota: quota });
+        return;
+      }
+      const dejaCote = duJourSessions.some((se) => objectifEstCote(obj, se.data && se.data[st.id] && se.data[st.id][oid]));
+      if (dejaCote) return;
+      lignes.push({ objectifId: oid, nom: obj.name, type: obj.type, ateliers: Array.from(ateliersSet), probeReste: null, probeQuota: null });
+    });
+    if (lignes.length) resultat.push({ studentId: st.id, initials: st.initials, objectifs: lignes });
+  });
+  return resultat;
+}
+
 /* Compare les objectifs importés d'une personne à ceux de son homologue
    local (déjà apparié — voir proposerRapprochementsPersonnes). Priorité :
    1. même id ET même signature → deja-aligne (silencieux)
@@ -5704,6 +5766,7 @@ function AbaApp() {
           <SuiviScreen
             students={personnesVisibles(students, classeAppareil)} sessions={sessions} guidances={guidances}
             releves={releves} axesSuivi={axesSuivi}
+            ateliers={ateliers} emploiDuTemps={emploiDuTemps} activeSession={activeSession}
             onResetTracking={resetTracking} onOuvrirMenu={ouvrirMenu}
             onChangePhase={changePhase}
             onOuvrirObjectif={(sid, oid) => ouvrirEcran('personnes', { personne: sid, objectif: oid })}
@@ -11438,8 +11501,14 @@ function EcranArbitrageObjectifs({ conflits, students, sessions, onValider, onCl
   );
 }
 
-function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onAjouterObjectif, onOuvrirSuivi, onChangePhase }) {
+function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, ateliers, emploiDuTemps, activeSession, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onAjouterObjectif, onOuvrirSuivi, onChangePhase }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
+  const [fenetreNonCotes, setFenetreNonCotes] = useState(false);
+  const nonCotes = React.useMemo(
+    () => objectifsPrevusNonCotes(students, ateliers, emploiDuTemps, sessions, activeSession, Date.now()),
+    [students, ateliers, emploiDuTemps, sessions, activeSession]
+  );
+  const nbNonCotes = nonCotes.reduce((n, p) => n + p.objectifs.length, 0);
   /* Une ligne du résumé mène à la courbe de l'objectif, dans ce même écran :
      c'est là qu'on voit où il en est. L'édition reste derrière « Modifier
      l'objectif », sous la courbe — auparavant le résumé y sautait directement,
@@ -11481,6 +11550,21 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
         <BoutonMenu onClick={onOuvrirMenu} />
       </div>
 
+      {nbNonCotes > 0 && (
+        <button
+          onClick={() => setFenetreNonCotes(true)}
+          className="w-full rounded-2xl border-2 p-3.5 mb-4 text-left flex items-center gap-3"
+          style={{ borderColor: CAT_AMBER, backgroundColor: CARD }}
+        >
+          <ClipboardList size={18} style={{ color: CAT_AMBER }} className="shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>
+              {nbNonCotes} objectif{nbNonCotes > 1 ? 's' : ''} prévu{nbNonCotes > 1 ? 's' : ''} pas encore coté{nbNonCotes > 1 ? 's' : ''}
+            </div>
+            <div className="text-xs" style={{ color: INK_SOFT }}>D'après l'emploi du temps du jour</div>
+          </div>
+        </button>
+      )}
       <FriseJournee students={students} axesSuivi={axesSuivi} releves={releves} onOuvrirSuivi={onOuvrirSuivi} />
       <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} onVoirGraphique={voirGraphique} />
       <div className="space-y-3">
@@ -11525,6 +11609,45 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
           );
         })}
       </div>
+
+      {fenetreNonCotes && (
+        <Modale titre="Prévus non cotés aujourd'hui" onClose={() => setFenetreNonCotes(false)}>
+          {nonCotes.length === 0 ? (
+            <Empty>Tout ce qui était prévu aujourd'hui a été coté.</Empty>
+          ) : (
+            <div className="space-y-4">
+              {nonCotes.map((p) => (
+                <div key={p.studentId}>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <PastillePersonne initials={p.initials} taille={28} />
+                    <span className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{p.initials}</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {p.objectifs.map((o) => {
+                      const meta = typeMeta(o.type);
+                      const Icon = meta.icon;
+                      return (
+                        <div key={o.objectifId} className="rounded-xl px-2.5 py-2" style={{ backgroundColor: PAPER }}>
+                          <div className="flex items-center gap-2">
+                            <Icon size={14} style={{ color: meta.color }} className="shrink-0" />
+                            <span className="text-sm flex-1 min-w-0 truncate">{o.nom}</span>
+                            {o.probeReste != null && (
+                              <span className="text-xs shrink-0" style={{ color: CAT_AMBER, fontFamily: F_MONO }}>
+                                {o.probeReste}/{o.probeQuota} restante{o.probeReste > 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs mt-0.5" style={{ color: INK_SOFT }}>{o.ateliers.join(', ')}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Modale>
+      )}
     </div>
   );
 }
