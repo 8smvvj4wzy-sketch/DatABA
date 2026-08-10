@@ -9523,7 +9523,12 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     const rendue = largeurColonne || colWidth;
     const colonnes = Math.max(1, Math.min(4, Math.floor(rendue / colWidth)));
     const largeurRendueParColonne = (rendue - (colonnes - 1) * 12) / colonnes;
-    const compact = largeurRendueParColonne < 200;
+    /* Deux déclencheurs, pas un. La largeur seule ne suffisait pas : sur
+       téléphone en portrait il n'y a qu'une colonne, large de ~290 px, donc
+       jamais « étroite » — et la compaction ne s'activait justement pas là où
+       on la réclame. Baisser la densité doit resserrer la carte, c'est le
+       geste que l'éducateur fait et le résultat qu'il en attend. */
+    const compact = largeurRendueParColonne < 200 || zoom <= 0.7;
     if (count < 3) {
       const baseMiseEnPage = ((rendue / zoom) - (colonnes - 1) * 12) / colonnes;
       return { style: { zoom, display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }, itemStyle: { flex: `1 1 ${baseMiseEnPage}px`, minWidth: 0 }, compact };
@@ -10505,18 +10510,22 @@ function ObjectiveHeader({ obj, entry, guidances, compact }) {
               deux lignes — le nom complet reste lisible en title et par le
               double-appui qui agrandit la carte. */}
           <div
-            className="font-medium leading-snug break-words"
+            className={`font-medium leading-snug break-words ${compact ? 'text-sm' : ''}`}
             title={obj.name}
             style={compact ? { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' } : undefined}
           >
             {obj.name}
           </div>
-          {cible && (
+          {/* Cible et résultat sautent en densité compacte : deux lignes de
+              texte secondaire par carte, c'est ce qui coûte le plus cher en
+              hauteur quand on cherche à empiler. Les deux restent lisibles
+              dans la fiche agrandie, qui force compact à faux. */}
+          {cible && !compact && (
             <div className="text-xs mt-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5" style={{ backgroundColor: PAPER, color: INK }}>
               <Target size={11} /> {cible}
             </div>
           )}
-          <div className="text-xs mt-0.5" style={{ color: INK_SOFT }}>{result}</div>
+          {!compact && <div className="text-xs mt-0.5" style={{ color: INK_SOFT }}>{result}</div>}
         </div>
       </div>
     </div>
@@ -10812,58 +10821,82 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
 
   const cursor = unlimited ? done : trials.findIndex((t) => !trialCode(t));
 
+  /* Bande des essais déjà cotés. En compact elle passe à gauche des boutons de
+     guidance au lieu d'être au-dessus : les deux blocs se partagent alors la
+     hauteur au lieu de l'additionner. */
+  const bandeEssais = (
+    <div className={`flex gap-1.5 overflow-x-auto pb-1 ${compact ? 'flex-1 min-w-0' : 'mb-2.5'}`}>
+      {cells.map((t, i) => {
+        const code = trialCode(t);
+        const g = code ? guidanceByCode(list, code) : null;
+        const isNext = !code && (unlimited ? i === cells.length - 1 : i === cursor);
+        const ms = trialMs(t);
+        return (
+          <div key={i} className="shrink-0 text-center">
+            <div
+              className={`${compact ? 'w-8 h-8 text-[11px]' : 'w-9 h-9 text-xs'} rounded-lg flex items-center justify-center font-semibold border ${code && i === justRecorded ? 'aba-trial-in' : ''}`}
+              style={{
+                fontFamily: F_MONO,
+                backgroundColor: g ? g.color : CARD,
+                color: g ? texteLisibleSur(g.color) : INK_SOFT,
+                borderColor: g ? g.color : BORDER,
+                boxShadow: isNext ? `0 0 0 2px ${TYPES.trials.color}66` : 'none',
+              }}
+            >
+              {code || i + 1}
+            </div>
+            {ms != null && (
+              <div className="text-[10px] mt-0.5" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{(ms / 1000).toFixed(1)}s</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  /* Boutons de cotation. En compact : grille de deux colonnes, collée à droite
+     de la bande d'essais — avec quatre guidances elle fait deux rangées, soit
+     à peu près la hauteur de la bande, au lieu de s'y ajouter. Sinon, rangée
+     unique sur toute la largeur, plus confortable quand la place ne manque
+     pas. */
+  const boutonsGuidance = (
+    <div className={compact ? 'shrink-0 grid grid-cols-2 gap-1' : 'flex flex-wrap gap-1.5'}>
+      {list.map((g) => {
+        const texte = texteLisibleSur(g.color);
+        return (
+          <button
+            key={g.code}
+            onClick={() => record(g.code)}
+            title={g.label}
+            className={`${compact ? 'min-w-[38px] py-1.5 rounded-lg' : 'flex-1 min-w-[44px] py-2.5 rounded-xl'} active:scale-95 transition-transform`}
+            style={{ backgroundColor: g.color, color: texte }}
+          >
+            {/* Code seul : le libellé complet passait à la ligne dans une
+                colonne étroite et gonflait la hauteur de la carte —
+                exactement le symptôme signalé (« plus d'empilement
+                qu'avant »). Le code seul suffit à coter, le libellé reste
+                accessible par appui long (title). */}
+            <div className={`${compact ? 'text-xs' : 'text-sm'} font-semibold`} style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div>
-      <div className="flex gap-1.5 mb-2.5 overflow-x-auto pb-1">
-        {cells.map((t, i) => {
-          const code = trialCode(t);
-          const g = code ? guidanceByCode(list, code) : null;
-          const isNext = !code && (unlimited ? i === cells.length - 1 : i === cursor);
-          const ms = trialMs(t);
-          return (
-            <div key={i} className="shrink-0 text-center">
-              <div
-                className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-semibold border ${code && i === justRecorded ? 'aba-trial-in' : ''}`}
-                style={{
-                  fontFamily: F_MONO,
-                  backgroundColor: g ? g.color : CARD,
-                  color: g ? texteLisibleSur(g.color) : INK_SOFT,
-                  borderColor: g ? g.color : BORDER,
-                  boxShadow: isNext ? `0 0 0 2px ${TYPES.trials.color}66` : 'none',
-                }}
-              >
-                {code || i + 1}
-              </div>
-              {ms != null && (
-                <div className="text-[10px] mt-0.5" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{(ms / 1000).toFixed(1)}s</div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="flex flex-wrap gap-1.5">
-        {list.map((g) => {
-          const texte = texteLisibleSur(g.color);
-          return (
-            <button
-              key={g.code}
-              onClick={() => record(g.code)}
-              title={g.label}
-              className={`flex-1 min-w-[44px] ${compact ? 'py-2' : 'py-2.5'} rounded-xl active:scale-95 transition-transform`}
-              style={{ backgroundColor: g.color, color: texte }}
-            >
-              {/* Code seul : le libellé complet passait à la ligne dans une
-                  colonne étroite et gonflait la hauteur de la carte —
-                  exactement le symptôme signalé (« plus d'empilement
-                  qu'avant »). Le code seul suffit à coter, le libellé reste
-                  accessible par appui long (title). */}
-              <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
-            </button>
-          );
-        })}
-      </div>
-      <div className="flex items-center justify-between mt-2">
+      {compact ? (
+        <div className="flex gap-2 items-start">
+          {bandeEssais}
+          {boutonsGuidance}
+        </div>
+      ) : (
+        <>
+          {bandeEssais}
+          {boutonsGuidance}
+        </>
+      )}
+      <div className={`flex items-center justify-between ${compact ? 'mt-1' : 'mt-2'}`}>
         <span className="text-xs" style={{ color: INK_SOFT }}>
           {unlimited
             ? `${done} essai${done !== 1 ? 's' : ''} coté${done !== 1 ? 's' : ''}`
