@@ -6064,7 +6064,7 @@ function AbaApp() {
           bouton Crise exige. Au-dessus, les pastilles — celles des fiches
           ouvertes, puis celles du suivi continu. */}
       <div
-        className={`fixed bottom-0 left-0 right-0 z-30 px-3 pointer-events-none ${pleinEcranActif ? 'pt-2' : 'pt-8'}`}
+        className={`fixed bottom-0 left-0 right-0 z-30 px-3 pointer-events-none ${pleinEcranActif ? 'pt-1' : 'pt-8'}`}
         style={{
           background: `linear-gradient(to top, ${PAPER} 60%, transparent)`,
           // Barre abaissée : moins d'espace qu'avant entre les libellés ABC/
@@ -6072,11 +6072,14 @@ function AbaApp() {
           // Ce padding doit rester assez grand pour contenir ces libellés :
           // ils ne comptent plus dans la hauteur de la rangée qui les porte.
           // Gardé au-dessus de 0 pour laisser une marge visible avec le bord.
+          //
           // En plein écran de cotation, ABC et Crise sont les deux seuls
-          // éléments qui restent : ils se posent au plus près du bord, d'où
-          // le padding légèrement plus grand qu'en temps normal.
+          // éléments qui restent et doivent se poser au plus près du bord. On
+          // n'y garde que 40 % de la zone réservée à l'indicateur d'accueil :
+          // seuls les LIBELLÉS descendent jusque-là, et ce n'est que du texte.
+          // Les cercles, eux — les seules cibles tactiles — restent au-dessus.
           paddingBottom: pleinEcranActif
-            ? 'calc(env(safe-area-inset-bottom, 0px) + 0.85rem)'
+            ? 'calc(env(safe-area-inset-bottom, 0px) * 0.4 + 0.6rem)'
             : 'calc(env(safe-area-inset-bottom, 0px) + 0.75rem)',
           display: saisieEnCours ? 'none' : undefined,
         }}
@@ -6190,7 +6193,7 @@ function AbaApp() {
             >
               <ClipboardList size={pleinEcranActif ? 17 : 20} />
             </button>
-            <span className={`absolute top-full font-medium whitespace-nowrap ${pleinEcranActif ? 'mt-0.5 text-[10px]' : 'mt-1 text-[11px]'}`} style={{ fontFamily: F_DISPLAY, color: COLOR_ABC }}>ABC</span>
+            <span className={`absolute top-full font-medium whitespace-nowrap ${pleinEcranActif ? 'mt-0 text-[9px]' : 'mt-1 text-[11px]'}`} style={{ fontFamily: F_DISPLAY, color: COLOR_ABC }}>ABC</span>
           </div>
 
           {/* Masquée en plein écran de cotation, avec les pastilles de suivi
@@ -6235,7 +6238,7 @@ function AbaApp() {
             >
               <AlertTriangle size={pleinEcranActif ? 17 : 20} />
             </button>
-            <span className={`absolute top-full font-semibold whitespace-nowrap ${pleinEcranActif ? 'mt-0.5 text-[10px]' : 'mt-1 text-[11px]'}`} style={{ fontFamily: F_DISPLAY, color: CRISIS }}>CRISE</span>
+            <span className={`absolute top-full font-semibold whitespace-nowrap ${pleinEcranActif ? 'mt-0 text-[9px]' : 'mt-1 text-[11px]'}`} style={{ fontFamily: F_DISPLAY, color: CRISIS }}>CRISE</span>
           </div>
         </div>
         </div>
