@@ -7,7 +7,7 @@ import {
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
   ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, GripVertical, CalendarClock, CalendarDays, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
-  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon, Info, School,
+  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon, Info, School, CheckCircle2,
 } from 'lucide-react';
 
 /* ==================== Design tokens ====================
@@ -183,6 +183,7 @@ const TYPES = {
   interval: { label: 'Intervalles', short: 'Intervalles', icon: LayoutGrid, color: CAT_LILAC },
   chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: CAT_CYAN },
   balance: { label: 'Équilibre', short: 'Équilibre', icon: Route, color: CAT_INDIGO },
+  probe: { label: 'Probe (1 / 0)', short: 'Probe', icon: CheckCircle2, color: CAT_AMBER },
 };
 
 /* Couleur commune à tout ce qui mesure une durée : le chronomètre par essai
@@ -306,16 +307,28 @@ const DEFAULT_INTERVAL_LEVELS = [
 const LEVEL_COLORS = [CAT_TEAL, CAT_INDIGO, CAT_AMBER, CAT_CORAL, CAT_VIOLET, CAT_CYAN, CAT_LILAC, CAT_SLATE];
 
 /* Types dont le score est un pourcentage : eux seuls portent des cibles successives */
-const PERCENT_TYPES = ['trials', 'interval', 'chaining', 'balance'];
+const PERCENT_TYPES = ['trials', 'interval', 'chaining', 'balance', 'probe'];
 /* Types admettant un critère d'acquisition. Le comptage d'occurrences en a un
    lui aussi, mais sur un nombre brut et souvent dans l'autre sens : un
    comportement problème est acquis quand il passe *sous* le seuil. */
 const MASTERY_TYPES = [...PERCENT_TYPES, 'occurrence'];
-/* Types dont la cotation repose sur des niveaux de guidance */
-const USES_GUIDANCE = ['trials', 'chaining'];
+/* Types dont la cotation repose sur des niveaux de guidance. Pour Probe,
+   c'est une option du formulaire (`config.useGuidance`) plutôt qu'un mode
+   imposé — la cotation 1/0 seule reste la voie par défaut. */
+const USES_GUIDANCE = ['trials', 'chaining', 'probe'];
 /* `sens` : 'min' = au moins le seuil (le défaut historique, et le seul sens qui
    ait du sens pour un pourcentage de réussite), 'max' = au plus le seuil. */
 const DEFAULT_MASTERY = { threshold: 80, sessions: 3, unit: 'sessions', sens: 'min' };
+/* Probe se valide en général par 3 jours consécutifs à « réussi » — un
+   critère par JOUR, pas par séance : plusieurs probes le même jour ne
+   comptent que pour un point (voir objectivePoints/toDayPoints, déjà conçus
+   pour cette unité). */
+const DEFAULT_MASTERY_PROBE = { threshold: 100, sessions: 3, unit: 'days', sens: 'min' };
+/* Fréquences de probe possibles par jour, et le libellé de chaque créneau
+   quand il y en a deux (matin avant 13h, après-midi ensuite — heure locale,
+   jamais UTC, même principe que jourLocal). */
+const PROBE_FREQUENCES = [1, 2];
+const PROBE_CRENEAUX = { matin: 'Matin', aprem: 'Après-midi' };
 
 /* ==================== Sécurité : code PIN et sauvegarde chiffrée ====================
    Tout se fait avec l'API Web Crypto du navigateur, sans aucun serveur.
@@ -953,6 +966,7 @@ function emptyEntry(obj) {
     if (obj.type === 'interval') return { marks: {}, segments: [] };
     if (obj.type === 'chaining') return { steps: {} };
     if (obj.type === 'balance') return { trials: [{ steps: {} }] };
+    if (obj.type === 'probe') return { value: null, guidance: null, creneau: null };
     return null;
   })();
   if (!base) return {};
@@ -977,6 +991,7 @@ function entryMatches(obj, entry) {
   if (obj.type === 'interval') return !!entry.marks;
   if (obj.type === 'chaining') return !!entry.steps;
   if (obj.type === 'balance') return Array.isArray(entry.trials) || !!entry.steps;
+  if (obj.type === 'probe') return entry.value === 0 || entry.value === 1 || 'guidance' in entry;
   return false;
 }
 
@@ -1198,6 +1213,10 @@ function descriptionObjectif(obj) {
   if (obj.type === 'trials') s += obj.config.trialCount ? ` · ${obj.config.trialCount} essais prévus` : ' · essais sans limite';
   if (obj.type === 'interval') s += ` · toutes les ${fmtDuration(intervalStepSec(obj) * 1000)} · ${INTERVAL_MODE_SHORT[obj.config.intervalMode] || 'momentané'} · ${(obj.config.levels || []).length} niveaux`;
   if (obj.type === 'chaining' || obj.type === 'balance') s += ` · ${(obj.config.steps || []).length} étapes`;
+  if (obj.type === 'probe') {
+    const parJour = obj.config.probesParJour || 1;
+    s += ` · ${parJour} par jour${parJour > 1 ? ' (matin / après-midi)' : ''}${obj.config.useGuidance ? ' · par niveaux de guidance' : ' · 1 ou 0'}`;
+  }
   if (obj.config.mastery) s += ` · acquis ${libelleSeuil(obj)} sur ${obj.config.mastery.sessions} ${obj.config.mastery.unit === 'days' ? 'jours' : 'séances'}`;
   if (obj.config.avecCompteur) s += ' · compteur';
   if (obj.config.avecChrono) {
@@ -1303,6 +1322,30 @@ function signatureObjectif(obj) {
    orphelins. */
 function objectifDejaCote(sessions, objectiveId) {
   return (sessions || []).some((se) => se && se.objectiveSnapshot && Object.prototype.hasOwnProperty.call(se.objectiveSnapshot, objectiveId));
+}
+
+/* Probes déjà faites AUJOURD'HUI pour un objectif d'une personne, toutes
+   séances confondues — un même objectif Probe peut revenir dans plusieurs
+   ateliers le même jour, et compte pour un seul quota, pas un par atelier.
+   `sessionCourante` s'ajoute aux séances déjà enregistrées : la séance en
+   cours n'est écrite qu'à sa fin. Le nombre de CRÉNEAUX distincts déjà cotés
+   borne le quota (config.probesParJour), pas le nombre de cotations — deux
+   probes au même créneau ne comptent qu'une fois. */
+function probesDuJour(sessions, sessionCourante, studentId, objectiveId, ref) {
+  const creneaux = new Set();
+  const examiner = (se) => {
+    if (!se || !memeJour(new Date(se.date), ref)) return;
+    const obj = se.objectiveSnapshot && se.objectiveSnapshot[objectiveId];
+    if (!obj || obj.type !== 'probe') return;
+    const entry = se.data && se.data[studentId] && se.data[studentId][objectiveId];
+    if (!entry) return;
+    const cote = obj.config.useGuidance ? !!entry.guidance : (entry.value === 0 || entry.value === 1);
+    if (!cote) return;
+    creneaux.add(entry.creneau || 'matin');
+  };
+  (sessions || []).forEach(examiner);
+  examiner(sessionCourante);
+  return { faites: creneaux.size, creneaux: Array.from(creneaux) };
 }
 
 /* Compare les objectifs importés d'une personne à ceux de son homologue
@@ -1709,6 +1752,16 @@ function jourLocal(ts) {
   if (Number.isNaN(d.getTime())) return null;
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/* Créneau local d'un horodatage pour un objectif Probe coté deux fois par
+   jour : 'matin' avant 13h heure locale, 'aprem' ensuite. Heure locale,
+   jamais UTC — même principe que jourLocal, pour ne pas faire basculer un
+   probe de créneau selon le fuseau du navigateur. */
+function creneauProbe(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.getHours() < 13 ? 'matin' : 'aprem';
 }
 
 /* L'intervenant en poste n'est valable que pour le jour où il a été choisi :
@@ -2452,6 +2505,15 @@ function summarize(obj, entry, guidances) {
       detail: `${detail}${st.renforts.length ? ` — renforcé : ${st.renforts.join(', ')}` : ''}`,
     };
   }
+  if (obj.type === 'probe') {
+    if (obj.config.useGuidance) {
+      if (!entry.guidance) return { result: 'Non coté', detail: '' };
+      const g = guidanceByCode(gList, entry.guidance);
+      return { result: g ? g.label : entry.guidance, detail: entry.creneau ? (PROBE_CRENEAUX[entry.creneau] || '') : '' };
+    }
+    if (entry.value !== 0 && entry.value !== 1) return { result: 'Non coté', detail: '' };
+    return { result: entry.value === 1 ? 'Réussi (1)' : 'Non réussi (0)', detail: entry.creneau ? (PROBE_CRENEAUX[entry.creneau] || '') : '' };
+  }
   return { result: '—', detail: '' };
 }
 
@@ -2483,6 +2545,14 @@ function objectiveScore(obj, entry, guidances) {
     const st = balanceStats(obj, entry);
     if (!st.notes) return null;
     return { value: st.pct, percent: true, unit: '%' };
+  }
+  if (obj.type === 'probe') {
+    if (obj.config.useGuidance) {
+      if (!entry.guidance) return null;
+      return { value: isIndependentCode(gList, entry.guidance) ? 100 : 0, percent: true, unit: '%' };
+    }
+    if (entry.value !== 0 && entry.value !== 1) return null;
+    return { value: entry.value * 100, percent: true, unit: '%' };
   }
   return null;
 }
@@ -5645,7 +5715,7 @@ function AbaApp() {
         return (
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
-            crises={crises} guidances={guidances}
+            crises={crises} guidances={guidances} sessions={sessions}
             onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => ouvrirEcran('personnes')}
             onProgrammerEquilibre={(sid) => ouvrirEcran('personnes', { personne: sid, nouveau: 'balance' })}
             onOuvrirMenu={ouvrirMenu} planDuJour={planDuJour}
@@ -7949,13 +8019,32 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
   const [targetLevelId, setTargetLevelId] = useState(
     initConfig.targetLevelId || (initConfig.levels && initConfig.levels[0] && initConfig.levels[0].id) || DEFAULT_INTERVAL_LEVELS[0].id
   );
-  const [threshold, setThreshold] = useState((initConfig.mastery || DEFAULT_MASTERY).threshold);
-  const [masterySessions, setMasterySessions] = useState((initConfig.mastery || DEFAULT_MASTERY).sessions);
-  const [masteryUnit, setMasteryUnit] = useState((initConfig.mastery || DEFAULT_MASTERY).unit || 'sessions');
+  const [threshold, setThreshold] = useState((initConfig.mastery || (init.type === 'probe' ? DEFAULT_MASTERY_PROBE : DEFAULT_MASTERY)).threshold);
+  const [masterySessions, setMasterySessions] = useState((initConfig.mastery || (init.type === 'probe' ? DEFAULT_MASTERY_PROBE : DEFAULT_MASTERY)).sessions);
+  const [masteryUnit, setMasteryUnit] = useState((initConfig.mastery || (init.type === 'probe' ? DEFAULT_MASTERY_PROBE : DEFAULT_MASTERY)).unit || 'sessions');
   /* Sens du critère, propre au mode Occurrence : « au moins » (augmenter un
      comportement) ou « au plus » (le réduire). Les autres modes restent sur
      « au moins », seul sens cohérent pour un pourcentage de réussite. */
   const [masterySens, setMasterySens] = useState((initConfig.mastery || DEFAULT_MASTERY).sens || 'min');
+  /* Probe : fréquence quotidienne et cotation 1/0 ou par niveaux de
+     guidance (option, désactivée par défaut). */
+  const [probesParJour, setProbesParJour] = useState(initConfig.probesParJour || 1);
+  const [useGuidance, setUseGuidance] = useState(!!initConfig.useGuidance);
+  /* La cotation par guidance n'est active pour Probe que si la case est
+     cochée — contrairement aux autres types de USES_GUIDANCE, où c'est
+     automatique. */
+  const guidanceUiActive = type === 'probe' ? useGuidance : USES_GUIDANCE.includes(type);
+  /* Un changement de mode réinitialise le critère d'acquisition à son défaut
+     — 100 % sur 3 jours pour Probe, 80 % sur 3 séances sinon — sauf en
+     édition d'un objectif qui a déjà son propre réglage. */
+  useEffect(() => {
+    if (initConfig.mastery) return;
+    const d = type === 'probe' ? DEFAULT_MASTERY_PROBE : DEFAULT_MASTERY;
+    setThreshold(d.threshold);
+    setMasterySessions(d.sessions);
+    setMasteryUnit(d.unit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type]);
 
   function submit() {
     if (!name.trim()) return;
@@ -7973,6 +8062,10 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
     }
     if (type === 'chaining' || type === 'balance') config.steps = steps.filter((s) => s.name.trim());
     if (type === 'balance' && balanceSet.length) config.balanceOutcomes = balanceSet;
+    if (type === 'probe') {
+      config.probesParJour = PROBE_FREQUENCES.includes(probesParJour) ? probesParJour : 1;
+      config.useGuidance = !!useGuidance;
+    }
     if (avecCompteur && type !== 'occurrence') {
       config.avecCompteur = true;
       if (parEssaiPossible && compteurParEssai) config.compteurParEssai = true;
@@ -7985,7 +8078,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
       }
       if (parEssaiPossible && chronoParEssai) config.chronoParEssai = true;
     }
-    if (USES_GUIDANCE.includes(type) && guidanceSet.length) config.guidanceSet = guidanceSet;
+    if (guidanceUiActive && guidanceSet.length) config.guidanceSet = guidanceSet;
     if (MASTERY_TYPES.includes(type)) {
       const occ = type === 'occurrence';
       config.mastery = {
@@ -8203,7 +8296,39 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
         </div>
       )}
 
-      {USES_GUIDANCE.includes(type) && (
+      {type === 'probe' && (
+        <div className="space-y-3">
+          <div>
+            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Probes par jour</div>
+            <div className="flex gap-1.5">
+              {PROBE_FREQUENCES.map((n) => (
+                <button key={n} onClick={() => setProbesParJour(n)} className="rounded-lg px-3.5 py-2 text-sm border"
+                  style={{ borderColor: probesParJour === n ? ACCENT : BORDER, backgroundColor: probesParJour === n ? ACCENT : 'transparent', color: probesParJour === n ? ACCENT_INK : INK_SOFT, fontFamily: F_MONO }}>
+                  {n}
+                </button>
+              ))}
+            </div>
+            {probesParJour > 1 && (
+              <p className="text-xs mt-1.5" style={{ color: INK_SOFT }}>
+                Un matin, un après-midi (avant/après 13 h). La cotation se bloque une fois les
+                {' '}{probesParJour} faites, débloquable d'un appui si besoin.
+              </p>
+            )}
+          </div>
+          <button
+            onClick={() => setUseGuidance((v) => !v)}
+            className="w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm border text-left"
+            style={{ borderColor: useGuidance ? ACCENT : BORDER, backgroundColor: useGuidance ? ACCENT + '18' : 'transparent' }}
+          >
+            <span className="w-4 h-4 rounded border shrink-0 flex items-center justify-center" style={{ borderColor: useGuidance ? ACCENT : BORDER, backgroundColor: useGuidance ? ACCENT : 'transparent' }}>
+              {useGuidance && <Check size={12} style={{ color: ACCENT_INK }} />}
+            </span>
+            Coter par niveaux de guidance plutôt qu'en 1 / 0
+          </button>
+        </div>
+      )}
+
+      {guidanceUiActive && (
         <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
           <div className="flex items-center gap-1.5 mb-1">
             <SlidersHorizontal size={14} style={{ color: INK_SOFT }} />
@@ -8586,9 +8711,9 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, crises, guidances, onSetAtelierGroup, notify, onOuvrirConfiguration, onProgrammerEquilibre, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish, onAnnulerCorrection }) {
+function SessionScreen({ students, ateliers, intervenants, crises, guidances, sessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onProgrammerEquilibre, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish, onAnnulerCorrection }) {
   if (activeSession) {
-    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} notify={notify} onFinish={onFinish} onAnnulerCorrection={onAnnulerCorrection} suiteDuJour={planDuJour && planDuJour.restants} />;
+    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} sessions={sessions} notify={notify} onFinish={onFinish} onAnnulerCorrection={onAnnulerCorrection} suiteDuJour={planDuJour && planDuJour.restants} />;
   }
   return (
     <SessionSetup
@@ -9037,7 +9162,7 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
   );
 }
 
-function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, notify, onFinish, onAnnulerCorrection, suiteDuJour }) {
+function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, sessions, notify, onFinish, onAnnulerCorrection, suiteDuJour }) {
   const isEdit = !!session.isEdit;
   const [currentId, setCurrentId] = useState(session.studentIds[0]);
   const [viewMode, setViewMode] = useState('priority');
@@ -9047,6 +9172,18 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const [wakeOk, setWakeOk] = useState(false);
   const stepsRef = useRef({});
   const [expanded, setExpanded] = useState(null); // { sid, oid } de l'objectif agrandi
+  /* Objectifs Probe débloqués malgré le quota du jour déjà atteint — vaut
+     pour cette séance seulement, jamais persisté : rouvrir l'atelier plus
+     tard revérifie le quota depuis zéro. Clé `${sid}|${oid}`. */
+  const [probesDebloquees, setProbesDebloquees] = useState(() => new Set());
+  const debloquerProbe = (sid, oid) => setProbesDebloquees((s) => new Set(s).add(`${sid}|${oid}`));
+  function probeEstBloque(sid, oid) {
+    const obj = session.objectiveSnapshot[oid];
+    if (!obj || obj.type !== 'probe') return false;
+    if (probesDebloquees.has(`${sid}|${oid}`)) return false;
+    const quota = obj.config.probesParJour || 1;
+    return probesDuJour(sessions, session, sid, oid, now).faites >= quota;
+  }
 
   /* Feuilles de commande, une seule ouverte à la fois : 'atelier' (passage à
      l'atelier suivant), 'ajout' (arrivée d'une personne), ou { personne: sid }. */
@@ -9548,6 +9685,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                     onExpand={() => setExpanded({ sid, oid })}
                     onChange={(p) => updateEntry(sid, oid, p)}
                     compact={compact}
+                    probeBloque={probeEstBloque(sid, oid)}
+                    onDebloquerProbe={() => debloquerProbe(sid, oid)}
                   />
                 );
               };
@@ -9633,6 +9772,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       compact={packSolo.compact}
                       onExpand={() => setExpanded({ sid: currentId, oid })}
                       onChange={(p) => updateEntry(currentId, oid, p)}
+                      probeBloque={probeEstBloque(currentId, oid)}
+                      onDebloquerProbe={() => debloquerProbe(currentId, oid)}
                     />
                   );
                 }}
@@ -9692,6 +9833,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 expandedView
                 onExpand={() => setExpanded(null)}
                 onChange={(p) => updateEntry(expanded.sid, expanded.oid, p)}
+                probeBloque={probeEstBloque(expanded.sid, expanded.oid)}
+                onDebloquerProbe={() => debloquerProbe(expanded.sid, expanded.oid)}
               />
             </div>
           </div>
@@ -9990,7 +10133,7 @@ function FeuillePersonne({ sid, students, present, onPartir, onFaireRevenir, onS
   );
 }
 
-function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick, compact }) {
+function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick, compact, probeBloque, onDebloquerProbe }) {
   /* Double-appui sur l'intitulé : agrandit la fiche. On le détecte à la main,
      l'événement natif de double-clic étant peu fiable au toucher sur iOS. */
   const dernierAppui = useRef(0);
@@ -10061,6 +10204,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
         {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} compact={compact} />}
         {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} compact={compact} />}
+        {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} bloque={probeBloque} onDebloquer={onDebloquerProbe} />}
         {!TYPES[obj.type] && (
           <div className="text-xs" style={{ color: INK_SOFT }}>
             Ce mode de cotation a été retiré. L'objectif est à recréer dans un mode disponible.
@@ -10269,6 +10413,63 @@ function OccurrenceWidget({ entry, onChange }) {
         style={{ backgroundColor: TYPES.occurrence.color }}>
         <span className="text-2xl font-semibold" style={{ fontFamily: F_MONO }}>{entry.count}</span>
         <span className="text-sm ml-2 opacity-90">+1</span>
+      </button>
+    </div>
+  );
+}
+
+/* Probe : 1/0 par défaut, ou par niveaux de guidance si `config.useGuidance`.
+   `bloque` grise la carte quand le quota du jour (config.probesParJour) est
+   déjà atteint — voir probesDuJour ; un appui la débloque pour la séance. */
+function ProbeWidget({ obj, entry, guidances, onChange, bloque, onDebloquer }) {
+  if (bloque) {
+    return (
+      <button
+        onClick={onDebloquer}
+        className="w-full rounded-xl py-4 text-sm border text-center"
+        style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: PAPER }}
+      >
+        Probe du jour déjà faite — appuyer pour coter quand même
+      </button>
+    );
+  }
+  const list = objectiveGuidances(obj, guidances);
+  if (obj.config.useGuidance) {
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {list.map((g) => {
+          const on = entry.guidance === g.code;
+          const texte = texteLisibleSur(g.color);
+          return (
+            <button
+              key={g.code}
+              onClick={() => onChange({ guidance: on ? null : g.code, value: null, creneau: creneauProbe(Date.now()) })}
+              className="flex-1 min-w-[72px] rounded-xl py-3 border active:scale-95 transition-transform"
+              style={{ borderColor: on ? g.color : BORDER, backgroundColor: on ? g.color : 'transparent', color: on ? texte : INK_SOFT }}
+            >
+              <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
+              <div className="text-[11px] leading-tight break-words" style={{ overflowWrap: 'anywhere' }}>{g.label}</div>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+  return (
+    <div className="flex gap-2">
+      <button
+        onClick={() => onChange({ value: entry.value === 0 ? null : 0, guidance: null, creneau: creneauProbe(Date.now()) })}
+        className="flex-1 rounded-xl py-4 text-lg font-semibold border active:scale-95 transition-transform"
+        style={{ borderColor: entry.value === 0 ? CRISIS : BORDER, backgroundColor: entry.value === 0 ? CRISIS : 'transparent', color: entry.value === 0 ? '#fff' : INK_SOFT }}
+      >
+        0
+      </button>
+      <button
+        onClick={() => onChange({ value: entry.value === 1 ? null : 1, guidance: null, creneau: creneauProbe(Date.now()) })}
+        className="flex-1 rounded-xl py-4 text-lg font-semibold border active:scale-95 transition-transform"
+        style={{ borderColor: entry.value === 1 ? TYPES.probe.color : BORDER, backgroundColor: entry.value === 1 ? TYPES.probe.color : 'transparent', color: entry.value === 1 ? texteLisibleSur(TYPES.probe.color) : INK_SOFT }}
+      >
+        1
       </button>
     </div>
   );

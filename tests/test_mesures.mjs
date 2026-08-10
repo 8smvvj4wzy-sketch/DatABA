@@ -45,7 +45,7 @@ function extraireLigne(nom) {
 }
 
 const code = `
-  const ListChecks = 'ListChecks', Hash = 'Hash', LayoutGrid = 'LayoutGrid', ListOrdered = 'ListOrdered', Route = 'Route', HelpCircle = 'HelpCircle';
+  const ListChecks = 'ListChecks', Hash = 'Hash', LayoutGrid = 'LayoutGrid', ListOrdered = 'ListOrdered', Route = 'Route', HelpCircle = 'HelpCircle', CheckCircle2 = 'CheckCircle2';
   const INK_SOFT = '#5B6B5E';
   const CAT_TEAL = ${extraireLigne('CAT_TEAL')};
   const CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};
@@ -68,23 +68,31 @@ const code = `
   ${extraire('figerChronos')}
   ${extraire('relancerMesures')}
   ${extraire('reindexMesuresEssais')}
-  return { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais };
+  ${extraire('guidanceByCode')}
+  ${extraire('isIndependentCode')}
+  ${extraire('objectiveGuidances')}
+  ${extraire('objectiveScore')}
+  ${extraire('creneauProbe')}
+  ${extraire('memeJour')}
+  ${extraire('probesDuJour')}
+  return { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais, objectiveScore, creneauProbe, probesDuJour };
 `;
 // eslint-disable-next-line no-new-func
-const { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais } = new Function(code)();
+const { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais, objectiveScore, creneauProbe, probesDuJour } = new Function(code)();
 
-/* ==================== Lot A : cinq modes, et pas un de plus ====================
+/* ==================== Lot A : six modes, et pas un de plus ====================
    Le comptage par occurrence, retiré faute d'usage, a été réintroduit comme
-   un mode de cotation à part entière — les trois autres modes retirés à la
-   même occasion (probe, timer, latence) restent absents. */
-t('exactement cinq modes de cotation', Object.keys(TYPES), ['trials', 'occurrence', 'interval', 'chaining', 'balance']);
-t('les modes encore retirés restent absents', Object.keys(TYPES).some((k) => ['probe', 'timer', 'latency'].includes(k)), false);
+   un mode de cotation à part entière ; Probe l'a été à son tour, pour les
+   objectifs qui se valident par sondage quotidien. Les deux modes retirés à
+   la refonte des modes qui restent absents : timer, latence. */
+t('exactement six modes de cotation', Object.keys(TYPES), ['trials', 'occurrence', 'interval', 'chaining', 'balance', 'probe']);
+t('les modes encore retirés restent absents', Object.keys(TYPES).some((k) => ['timer', 'latency'].includes(k)), false);
 PERCENT_TYPES.forEach((k) => t(`PERCENT_TYPES ne référence que des modes existants (${k})`, !!TYPES[k], true));
 USES_GUIDANCE.forEach((k) => t(`USES_GUIDANCE ne référence que des modes existants (${k})`, !!TYPES[k], true));
 
 /* ==================== Garde sur un type retiré ==================== */
 t('un mode existant renvoie ses propres métadonnées', typeMeta('trials').label, 'Essais');
-t("un mode retiré ne fait pas planter l'affichage", typeMeta('probe').label, 'Mode retiré');
+t("un mode retiré ne fait pas planter l'affichage", typeMeta('timer').label, 'Mode retiré');
 t('un type absent ne fait pas planter l\'affichage', typeMeta(undefined).label, 'Mode retiré');
 
 /* ==================== emptyEntry : la mesure auxiliaire est du bord ==================== */
@@ -93,13 +101,17 @@ const OBJ_OCCURRENCE = { type: 'occurrence', config: {} };
 const OBJ_INTERVAL = { type: 'interval', config: {} };
 const OBJ_CHAINING = { type: 'chaining', config: {} };
 const OBJ_BALANCE = { type: 'balance', config: {} };
-const OBJ_RETIRE = { type: 'probe', config: {} };
+const OBJ_RETIRE = { type: 'timer', config: {} };
+
+const OBJ_PROBE = { type: 'probe', config: { probesParJour: 1 } };
+const OBJ_PROBE_GUIDANCE = { type: 'probe', config: { probesParJour: 2, useGuidance: true } };
 
 t('trials : entrée vide porte des mesures vides', emptyEntry(OBJ_TRIALS).mesures, mesuresVides());
 t('occurrence : entrée vide part de zéro', emptyEntry(OBJ_OCCURRENCE), { count: 0, mesures: mesuresVides() });
 t('interval : entrée vide porte des mesures vides', emptyEntry(OBJ_INTERVAL).mesures, mesuresVides());
 t('chaining : entrée vide porte des mesures vides', emptyEntry(OBJ_CHAINING).mesures, mesuresVides());
 t('balance : entrée vide porte des mesures vides', emptyEntry(OBJ_BALANCE).mesures, mesuresVides());
+t('probe : entrée vide, rien coté', emptyEntry(OBJ_PROBE), { value: null, guidance: null, creneau: null, mesures: mesuresVides() });
 t('un type retiré ne produit plus de cotation', emptyEntry(OBJ_RETIRE), {});
 
 t('entryMatches reconnaît une entrée occurrence', entryMatches(OBJ_OCCURRENCE, emptyEntry(OBJ_OCCURRENCE)), true);
@@ -107,7 +119,26 @@ t('un compte à zéro reste une entrée valide (0 est un nombre)', entryMatches(
 t("une entrée sans compte n'est pas une cotation occurrence", entryMatches(OBJ_OCCURRENCE, { count: '3' }), false);
 
 t('entryMatches est vrai sur une entrée neuve de chaque mode conservé', entryMatches(OBJ_TRIALS, emptyEntry(OBJ_TRIALS)), true);
+t('entryMatches probe : 0 est une cotation valide', entryMatches(OBJ_PROBE, { value: 0 }), true);
+t('entryMatches probe : 1 est une cotation valide', entryMatches(OBJ_PROBE, { value: 1 }), true);
+t('entryMatches probe : entrée neuve (structure) reconnue', entryMatches(OBJ_PROBE, emptyEntry(OBJ_PROBE)), true);
 t('un type retiré ne correspond plus à rien', entryMatches(OBJ_RETIRE, { value: 1 }), false);
+
+/* ==================== objectiveScore : probe, 1/0 et guidance ==================== */
+const guidancesProbe = [{ code: 'I', label: 'Indépendant', independent: true }, { code: '0', label: 'Aide totale', independent: false }];
+t('probe 1/0 : coté 1 → score 100', objectiveScore(OBJ_PROBE, { value: 1 }, guidancesProbe), { value: 100, percent: true, unit: '%' });
+t('probe 1/0 : coté 0 → score 0', objectiveScore(OBJ_PROBE, { value: 0 }, guidancesProbe), { value: 0, percent: true, unit: '%' });
+t('probe 1/0 : non coté → aucun score', objectiveScore(OBJ_PROBE, { value: null }, guidancesProbe), null);
+t('probe par guidance : code indépendant → score 100', objectiveScore(OBJ_PROBE_GUIDANCE, { value: null, guidance: 'I' }, guidancesProbe), { value: 100, percent: true, unit: '%' });
+t('probe par guidance : code non indépendant → score 0', objectiveScore(OBJ_PROBE_GUIDANCE, { value: null, guidance: '0' }, guidancesProbe), { value: 0, percent: true, unit: '%' });
+t('probe par guidance : rien coté → aucun score', objectiveScore(OBJ_PROBE_GUIDANCE, { value: null, guidance: null }, guidancesProbe), null);
+
+/* ==================== creneauProbe : matin/après-midi, bornes locales ==================== */
+t('avant 13h : matin', creneauProbe(new Date(2026, 7, 3, 9, 0).getTime()), 'matin');
+t('12h59 : encore matin', creneauProbe(new Date(2026, 7, 3, 12, 59).getTime()), 'matin');
+t('13h00 pile : après-midi', creneauProbe(new Date(2026, 7, 3, 13, 0).getTime()), 'aprem');
+t('en soirée : après-midi', creneauProbe(new Date(2026, 7, 3, 18, 30).getTime()), 'aprem');
+t('horodatage invalide : pas de plantage', creneauProbe('n-importe-quoi'), null);
 
 /* ==================== figerChronos : le cœur du lot B ====================
    Le chrono d'un essai chronométré (à plat sur l'entrée) et le chrono
@@ -175,6 +206,44 @@ const reindexes = reindexMesuresEssais(essaisAvantSuppression, 1);
 t("l'essai supprimé disparaît : plus que deux essais", Object.keys(reindexes).length, 2);
 t('les essais suivants glissent d’un cran', reindexes[1].compteur.total, 3);
 t('les essais précédents restent en place', reindexes[0].compteur.total, 1);
+
+/* ==================== probesDuJour : quota par créneaux distincts ====================
+   Un même objectif Probe peut revenir dans plusieurs ateliers le même jour :
+   les séances déjà enregistrées ET la séance en cours comptent, mais un
+   créneau ne se compte qu'une fois même coté deux fois par erreur. */
+const OBJ_PROBE_2X = { id: 'p1', name: 'Salutation', type: 'probe', config: { probesParJour: 2 } };
+const ref = new Date(2026, 7, 5, 15, 0); // 5 août 2026, 15h
+
+function seanceProbe(dateIso, value, creneau) {
+  return {
+    date: dateIso,
+    objectiveSnapshot: { p1: OBJ_PROBE_2X },
+    data: { eleve: { p1: { value, guidance: null, creneau } } },
+  };
+}
+
+t('aucune séance : quota à zéro', probesDuJour([], null, 'eleve', 'p1', ref).faites, 0);
+
+const matinFait = seanceProbe('2026-08-05T09:00:00.000Z', 1, 'matin');
+t('une probe faite ce matin : un créneau', probesDuJour([matinFait], null, 'eleve', 'p1', ref).faites, 1);
+
+const memeAtelierMatinRefait = seanceProbe('2026-08-05T09:30:00.000Z', 1, 'matin');
+t('même créneau coté deux fois : ne compte qu\'une fois', probesDuJour([matinFait, memeAtelierMatinRefait], null, 'eleve', 'p1', ref).faites, 1);
+
+const apremFait = seanceProbe('2026-08-05T14:00:00.000Z', 0, 'aprem');
+t('deux ateliers, deux créneaux différents : quota atteint (2)', probesDuJour([matinFait, apremFait], null, 'eleve', 'p1', ref).faites, 2);
+
+const hierMatin = seanceProbe('2026-08-04T09:00:00.000Z', 1, 'matin');
+t('une probe d\'hier ne compte pas pour aujourd\'hui', probesDuJour([hierMatin], null, 'eleve', 'p1', ref).faites, 0);
+
+const sessionCourante = seanceProbe('2026-08-05T15:00:00.000Z', 1, 'aprem');
+t('la séance en cours compte aussi, pas seulement l\'historique', probesDuJour([matinFait], sessionCourante, 'eleve', 'p1', ref).faites, 2);
+
+const nonCote = seanceProbe('2026-08-05T09:00:00.000Z', null, null);
+t('entrée créée mais pas cotée (value null) : ne compte pas', probesDuJour([nonCote], null, 'eleve', 'p1', ref).faites, 0);
+
+const autrePersonne = { ...matinFait, data: { autre: matinFait.data.eleve } };
+t('une probe d\'une autre personne ne compte pas', probesDuJour([autrePersonne], null, 'eleve', 'p1', ref).faites, 0);
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko ? 1 : 0);
