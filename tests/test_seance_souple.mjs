@@ -48,6 +48,7 @@ const NOMS = [
   'fenetrePresence', 'estPresent', 'fenetresPause', 'chevauchementMs', 'dureePresence',
   'objectifsParDefaut', 'construireDonneesSeance',
   'ajouterPersonne', 'retirerPersonne', 'supprimerPersonne', 'chainerAtelier',
+  'deplacerDansListe', 'reinjecterSousEnsemble',
 ];
 
 const code = `
@@ -313,6 +314,44 @@ t('objectif inconnu ignoré plutôt que planter',
   }, T0 + 600_000);
   t('Balance Program : aucun atelier posé', next.atelierId, null);
   t('Balance Program : le mode est repris', next.mode, 'balance');
+}
+
+/* ---- Ordre des cartes dans la zone de cotation ---- */
+
+{
+  const l = ['a', 'b', 'c', 'd'];
+  t('déplacement vers la fin', F.deplacerDansListe(l, 0, 2), ['b', 'c', 'a', 'd']);
+  t('déplacement vers le début', F.deplacerDansListe(l, 3, 1), ['a', 'd', 'b', 'c']);
+  t('sur place : liste inchangée', F.deplacerDansListe(l, 2, 2), ['a', 'b', 'c', 'd']);
+  t('bornes ramenées dans la liste', F.deplacerDansListe(l, 0, 99), ['b', 'c', 'd', 'a']);
+  t('la source n\'est pas modifiée', l, ['a', 'b', 'c', 'd']);
+}
+
+{
+  /* Réordonner un sous-ensemble ne doit déplacer que les créneaux qu'il
+     occupait déjà — les autres gardent leur place exacte. */
+  t(
+    'sous-ensemble complet : l\'ordre passe tel quel',
+    F.reinjecterSousEnsemble(['a', 'b', 'c'], ['c', 'a', 'b']),
+    ['c', 'a', 'b']
+  );
+  t(
+    'sous-ensemble partiel : les autres ne bougent pas',
+    F.reinjecterSousEnsemble(['a', 'x', 'b', 'y', 'c'], ['c', 'b', 'a']),
+    ['c', 'x', 'b', 'y', 'a']
+  );
+  /* Un objectif devenu prioritaire après coup n'est pas encore dans
+     priorityOrder : il n'a aucun créneau à réutiliser et était perdu. */
+  t(
+    'clé absente de la liste complète : insérée à la position choisie',
+    F.reinjecterSousEnsemble(['a', 'b', 'z'], ['b', 'a', 'nouveau']),
+    ['b', 'a', 'nouveau', 'z']
+  );
+  t(
+    'liste complète vide : le sous-ensemble fait la liste',
+    F.reinjecterSousEnsemble([], ['a', 'b']),
+    ['a', 'b']
+  );
 }
 
 console.log(`\n${ok} OK, ${ko} en échec`);
