@@ -11817,6 +11817,40 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, clas
   const [pickedJournees, setPickedJournees] = useState(() => journees.filter((j) => !j.envoye).map((j) => j.cle));
   const [archiveOuverte, setArchiveOuverte] = useState(false);
 
+  /* Filtre par mois, surtout utile pour retrouver quelque chose dans
+     l'archive une fois qu'elle s'allonge. Vide = tous les mois. La liste des
+     mois proposés vient des trois collections, jamais d'un calendrier
+     générique — un mois sans rien dedans n'a pas sa place dans le menu. */
+  const [moisFiltre, setMoisFiltre] = useState('');
+  const moisDisponibles = React.useMemo(() => {
+    const s = new Set();
+    sessions.forEach((se) => s.add(moisDe(se.date)));
+    crises.forEach((c) => s.add(moisDe(c.date)));
+    journees.forEach((j) => s.add(moisDe(j.date)));
+    s.delete('inconnu');
+    return Array.from(s).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  }, [sessions, crises, journees]);
+  const libelleMois = (m) => {
+    const [an, mo] = m.split('-').map(Number);
+    return new Date(an, mo - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  };
+  const sessionsFiltrees = moisFiltre ? sessions.filter((se) => moisDe(se.date) === moisFiltre) : sessions;
+  const crisesFiltrees = moisFiltre ? crises.filter((c) => moisDe(c.date) === moisFiltre) : crises;
+  const journeesFiltrees = moisFiltre ? journees.filter((j) => moisDe(j.date) === moisFiltre) : journees;
+  /* Changer de mois retire de la sélection tout ce qui sort du filtre — sans
+     ça, un envoi groupé pourrait inclure en douce une séance devenue
+     invisible à l'écran. */
+  function choisirMois(m) {
+    setMoisFiltre(m);
+    if (!m) return;
+    const idsSessions = new Set(sessions.filter((se) => moisDe(se.date) === m).map((se) => se.id));
+    const idsCrises = new Set(crises.filter((c) => moisDe(c.date) === m).map((c) => c.id));
+    const clesJournees = new Set(journees.filter((j) => moisDe(j.date) === m).map((j) => j.cle));
+    setPicked((l) => l.filter((id) => idsSessions.has(id)));
+    setPickedCrises((l) => l.filter((id) => idsCrises.has(id)));
+    setPickedJournees((l) => l.filter((cle) => clesJournees.has(cle)));
+  }
+
   /* Deux façons de composer un rapport : en choisissant des séances, ou en
      choisissant des personnes — auquel cas toutes leurs cotations sont reprises,
      quelles que soient les séances. */
@@ -11849,16 +11883,16 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, clas
   const chosenReleves = chosenJournees.reduce((l, j) => l.concat(j.releves), []);
   const chosenSentCount = byStudent ? 0 : chosen.filter((s) => s.sentAt).length;
 
-  const seancesTriees = sessions.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  const seancesTriees = sessionsFiltrees.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
   const aTransmettre = {
     seances: seancesTriees.filter((s) => !s.sentAt),
-    crises: crises.filter((c) => !c.sentAt),
-    journees: journees.filter((j) => !j.envoye),
+    crises: crisesFiltrees.filter((c) => !c.sentAt),
+    journees: journeesFiltrees.filter((j) => !j.envoye),
   };
   const archive = {
     seances: seancesTriees.filter((s) => s.sentAt),
-    crises: crises.filter((c) => c.sentAt),
-    journees: journees.filter((j) => j.envoye),
+    crises: crisesFiltrees.filter((c) => c.sentAt),
+    journees: journeesFiltrees.filter((j) => j.envoye),
   };
   const nbArchive = archive.seances.length + archive.crises.length + archive.journees.length;
   const rienATransmettre = !aTransmettre.seances.length && !aTransmettre.crises.length && !aTransmettre.journees.length;
@@ -12104,6 +12138,20 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, clas
         </button>
       )}
 
+      {moisDisponibles.length > 0 && (
+        <select
+          value={moisFiltre}
+          onChange={(ev) => choisirMois(ev.target.value)}
+          className="w-full rounded-lg px-2.5 py-2 text-sm border mb-3"
+          style={{ borderColor: BORDER, backgroundColor: CARD, color: INK }}
+        >
+          <option value="">Tous les mois</option>
+          {moisDisponibles.map((m) => (
+            <option key={m} value={m}>{libelleMois(m)}</option>
+          ))}
+        </select>
+      )}
+
       <div className="flex gap-1.5 mb-4">
         {[
           { k: 'sessions', label: 'Par séance', icon: Layers },
@@ -12159,10 +12207,10 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, clas
 
       {!byStudent && aTransmettre.seances.length > 0 && (
         <div className="flex gap-1.5 mb-3">
-          <button onClick={() => setPicked(unsentIds)} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
-            Non-envoyés ({unsentIds.length})
+          <button onClick={() => setPicked(aTransmettre.seances.map((s) => s.id))} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+            Non-envoyés ({aTransmettre.seances.length})
           </button>
-          <button onClick={() => setPicked(sessions.map((s) => s.id))} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+          <button onClick={() => setPicked(sessionsFiltrees.map((s) => s.id))} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
             Tout sélectionner
           </button>
           <button onClick={() => setPicked([])} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
