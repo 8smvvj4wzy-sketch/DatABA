@@ -12,7 +12,7 @@
    APRÈS CHAQUE NOUVELLE MISE EN LIGNE : incrémentez CACHE_VERSION ci-dessous.
    Les anciens caches sont alors supprimés automatiquement. */
 
-const CACHE_VERSION = 'v91';
+const CACHE_VERSION = 'v92';
 const CACHE_NAME = `aba-${CACHE_VERSION}`;
 const NETWORK_TIMEOUT_MS = 2500;
 
