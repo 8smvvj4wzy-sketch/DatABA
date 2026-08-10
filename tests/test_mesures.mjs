@@ -58,6 +58,9 @@ const code = `
   ${extraire('TYPES')}
   const PERCENT_TYPES = ${extraireLigne('PERCENT_TYPES')};
   const USES_GUIDANCE = ${extraireLigne('USES_GUIDANCE')};
+  const MASTERY_TYPES = ${extraireLigne('MASTERY_TYPES')};
+  const DEFAULT_MASTERY = ${extraireLigne('DEFAULT_MASTERY')};
+  const DEFAULT_MASTERY_PROBE = ${extraireLigne('DEFAULT_MASTERY_PROBE')};
   const TYPE_INCONNU = ${extraireLigne('TYPE_INCONNU')};
   ${extraire('typeMeta')}
   ${extraire('timeShort')}
@@ -75,10 +78,12 @@ const code = `
   ${extraire('creneauProbe')}
   ${extraire('memeJour')}
   ${extraire('probesDuJour')}
-  return { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais, objectiveScore, creneauProbe, probesDuJour };
+  ${extraire('masteryDe')}
+  ${extraire('configCanonique')}
+  return { TYPES, PERCENT_TYPES, USES_GUIDANCE, MASTERY_TYPES, DEFAULT_MASTERY, DEFAULT_MASTERY_PROBE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais, objectiveScore, creneauProbe, probesDuJour, masteryDe, configCanonique };
 `;
 // eslint-disable-next-line no-new-func
-const { TYPES, PERCENT_TYPES, USES_GUIDANCE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais, objectiveScore, creneauProbe, probesDuJour } = new Function(code)();
+const { TYPES, PERCENT_TYPES, USES_GUIDANCE, MASTERY_TYPES, DEFAULT_MASTERY, DEFAULT_MASTERY_PROBE, typeMeta, mesuresVides, mesuresExport, emptyEntry, entryMatches, figerChronos, relancerMesures, reindexMesuresEssais, objectiveScore, creneauProbe, probesDuJour, masteryDe, configCanonique } = new Function(code)();
 
 /* ==================== Lot A : six modes, et pas un de plus ====================
    Le comptage par occurrence, retiré faute d'usage, a été réintroduit comme
@@ -244,6 +249,28 @@ t('entrée créée mais pas cotée (value null) : ne compte pas', probesDuJour([
 
 const autrePersonne = { ...matinFait, data: { autre: matinFait.data.eleve } };
 t('une probe d\'une autre personne ne compte pas', probesDuJour([autrePersonne], null, 'eleve', 'p1', ref).faites, 0);
+
+/* `ref` en nombre (epoch ms), comme le lui passe SessionRunning.probeEstBloque
+   — pas seulement en Date, comme le lui passe objectifsPrevusNonCotes. Sans
+   la normalisation, memeJour plante sur .getFullYear() d'un nombre. */
+t('ref en nombre (epoch ms) : pas de plantage, même résultat qu\'en Date', probesDuJour([matinFait], null, 'eleve', 'p1', ref.getTime()).faites, 1);
+
+/* ==================== configCanonique : signature d'un probe ====================
+   Sans probesParJour ni useGuidance dans la signature, deux probes réglés
+   différemment se confondent — diffObjectifsPersonne les classerait alors
+   « déjà alignés », et un import qui change la fréquence ou le mode de
+   cotation serait silencieusement ignoré. */
+const sigProbe1x = JSON.stringify(configCanonique('probe', { probesParJour: 1, useGuidance: false }));
+const sigProbe2x = JSON.stringify(configCanonique('probe', { probesParJour: 2, useGuidance: false }));
+const sigProbeGuidance = JSON.stringify(configCanonique('probe', { probesParJour: 1, useGuidance: true }));
+t('configCanonique : 1 par jour ≠ 2 par jour', sigProbe1x === sigProbe2x, false);
+t('configCanonique : 1/0 ≠ par guidance', sigProbe1x === sigProbeGuidance, false);
+t('configCanonique : deux réglages identiques → même signature', sigProbe1x === JSON.stringify(configCanonique('probe', { probesParJour: 1, useGuidance: false })), true);
+
+/* ==================== masteryDe : repli selon le type ==================== */
+t('probe sans config.mastery : repli à 100 % sur 3 jours, pas 80 % sur 3 séances', masteryDe(OBJ_PROBE), DEFAULT_MASTERY_PROBE);
+t('trials sans config.mastery : repli habituel à 80 % sur 3 séances', masteryDe(OBJ_TRIALS), DEFAULT_MASTERY);
+t('probe avec mastery personnalisé : le repli ne prime pas', masteryDe({ type: 'probe', config: { mastery: { threshold: 90, sessions: 5, unit: 'days', sens: 'min' } } }).threshold, 90);
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko ? 1 : 0);

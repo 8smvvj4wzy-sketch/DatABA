@@ -10,6 +10,7 @@
 #   2 ter. séance écrite sans être passée par finalizeSession
 #   2 quater. renommages laissés incomplets (vocabulaire résiduel)
 #   2 quinquies. identifiants importés en double
+#   2 sexies. un mode de cotation ajouté à TYPES mais pas suivi partout
 #   3. suite de tests Node autonome
 
 set -u
@@ -194,6 +195,50 @@ if [ -n "$RESIDUS_BALANCE" ]; then
 fi
 
 [ "$RENOMMAGES" -eq 0 ] && echo "  ✓ aucun résidu détecté" || ECHECS=$((ECHECS + 1))
+
+# ── 2 sexies. Aiguillage des modes de cotation incomplet ───────────────
+# Un mode ajouté à TYPES doit être suivi dans CHAQUE fonction qui distingue
+# par obj.type — sinon il se comporte comme un mode RETIRÉ à cet endroit
+# précis, silencieusement. C'est exactement ce qui est arrivé à Probe à son
+# ajout : absent de configCanonique, deux réglages différents (probesParJour,
+# useGuidance) produisaient la même signature et un import qui changeait l'un
+# des deux était ignoré sans le dire ; absent de buildDetailRows, aucune
+# ligne dans l'export détaillé. Chaque fonction listée ci-dessous distingue
+# les modes par la forme littérale « obj.type === 'mode' » — une recherche de
+# ce littéral suffit, sans avoir à interpréter le JS.
+echo
+echo "── 2 sexies. Aiguillage des modes de cotation ──"
+MODES=$(sed -n "/^const TYPES = {/,/^};/p" src/App.jsx | grep -oP '^\s*\K[a-zA-Z0-9_]+(?=:)')
+FONCTIONS_AIGUILLAGE="emptyEntry entryMatches summarize objectiveScore configCanonique objectifEstCote buildDetailRows"
+# Exceptions documentées, « FONCTION:mode » — occurrence n'a pas d'essais
+# discrets et aucun champ de configuration qui lui soit propre (son seuil
+# d'acquisition passe par le générique MASTERY_TYPES) : configCanonique et
+# buildDetailRows n'ont donc légitimement rien de spécifique à écrire pour
+# lui (voir le commentaire au-dessus de son absence dans buildDetailRows).
+EXCEPTIONS="configCanonique:occurrence buildDetailRows:occurrence"
+AIGUILLAGE_INCOMPLET=0
+for FN in $FONCTIONS_AIGUILLAGE; do
+  CORPS=$(awk -v fn="function $FN(" '
+    index($0, fn) == 1 { grab = 1 }
+    grab { print }
+    grab && /^\}/ && index($0, fn) != 1 { exit }
+  ' src/App.jsx)
+  if [ -z "$CORPS" ]; then
+    echo "  ✗ fonction introuvable : $FN"
+    AIGUILLAGE_INCOMPLET=1
+    continue
+  fi
+  for MODE in $MODES; do
+    case " $EXCEPTIONS " in
+      *" $FN:$MODE "*) continue ;;
+    esac
+    if ! echo "$CORPS" | grep -qF "'$MODE'"; then
+      echo "  ✗ $FN ne distingue pas le mode '$MODE'"
+      AIGUILLAGE_INCOMPLET=1
+    fi
+  done
+done
+[ "$AIGUILLAGE_INCOMPLET" -eq 0 ] && echo "  ✓ tous les modes sont suivis dans chaque aiguillage" || ECHECS=$((ECHECS + 1))
 
 # ── 2 quinquies. Imports dupliqués ─────────────────────────────────────
 # Un identifiant importé deux fois (copier-coller d'une icône déjà présente

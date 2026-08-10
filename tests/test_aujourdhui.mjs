@@ -29,8 +29,8 @@ function extraire(nom) {
 }
 
 const NOMS = [
-  'memeJour', 'mesuresVides', 'emptyEntry', 'entryMatches', 'objectifEstCote', 'probesDuJour',
-  'ateliersDuJour', 'personnesPrevues', 'objectifsPrevusNonCotes',
+  'memeJour', 'mesuresVides', 'emptyEntry', 'entryMatches', 'trialCode', 'balanceTrials',
+  'objectifEstCote', 'probesDuJour', 'ateliersDuJour', 'personnesPrevues', 'objectifsPrevusNonCotes',
 ];
 const code = `${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')} };`;
 // eslint-disable-next-line no-new-func

@@ -54,12 +54,21 @@ const NOMS = [
   'jourLocal', 'dureeReleve', 'journeesSuivi', 'migrerEnvoisCrises',
   'grouperParJour', 'libelleJour', 'segmentAppareil', 'nomFichier', 'timeShort',
   'compteurDe', 'nomAxe', 'nomCompteur', 'classeDe', 'nomClasse',
+  // Détail par essai de l'export (buildDetailRows) et ce dont il dépend :
+  // guidances, issues d'Équilibre, phase courante, présence effective.
+  'objectiveGuidances', 'guidanceByCode', 'isIndependentCode',
+  'balanceOutcomes', 'outcomeMeta', 'trialCode', 'trialMs', 'balanceTrials',
+  'segmentSeconds', 'phaseHistory', 'currentPhase',
+  'fenetrePresence', 'fenetresPause', 'chevauchementMs', 'dureePresence',
+  'buildDetailRows',
 ];
 // lignesSuiviExport lit désormais la classe de la personne, et migrerReleves
 // pose des champs de traçabilité par défaut : CLASSE_INCONNUE et
 // TRACABILITE_RELEVE_PAR_DEFAUT sont des constantes sur une seule ligne,
 // comme COMPTEUR_INCONNU ci-dessous — même raison de passer par extraireLigne.
-const code = `const CRISIS = '#B3261E';\nconst CAT_TEAL = ${extraireLigne('CAT_TEAL')};\nconst CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};\nconst CAT_AMBER = ${extraireLigne('CAT_AMBER')};\nconst CAT_CORAL = ${extraireLigne('CAT_CORAL')};\nconst CAT_VIOLET = ${extraireLigne('CAT_VIOLET')};\nconst CAT_CYAN = ${extraireLigne('CAT_CYAN')};\nconst CAT_LILAC = ${extraireLigne('CAT_LILAC')};\nconst CAT_SLATE = ${extraireLigne('CAT_SLATE')};\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\nconst COMPTEUR_INCONNU = ${extraireLigne('COMPTEUR_INCONNU')};\nconst CLASSE_INCONNUE = ${extraireLigne('CLASSE_INCONNUE')};\nconst TRACABILITE_RELEVE_PAR_DEFAUT = ${extraireLigne('TRACABILITE_RELEVE_PAR_DEFAUT')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
+// DEFAULT_GUIDANCE et BALANCE_OUTCOMES sont des tableaux multi-lignes,
+// extraits comme buildDetailRows lui-même (extraire, pas extraireLigne).
+const code = `const CRISIS = '#B3261E';\nconst CAT_TEAL = ${extraireLigne('CAT_TEAL')};\nconst CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};\nconst CAT_AMBER = ${extraireLigne('CAT_AMBER')};\nconst CAT_CORAL = ${extraireLigne('CAT_CORAL')};\nconst CAT_VIOLET = ${extraireLigne('CAT_VIOLET')};\nconst CAT_CYAN = ${extraireLigne('CAT_CYAN')};\nconst CAT_LILAC = ${extraireLigne('CAT_LILAC')};\nconst CAT_SLATE = ${extraireLigne('CAT_SLATE')};\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\nconst COMPTEUR_INCONNU = ${extraireLigne('COMPTEUR_INCONNU')};\nconst CLASSE_INCONNUE = ${extraireLigne('CLASSE_INCONNUE')};\nconst TRACABILITE_RELEVE_PAR_DEFAUT = ${extraireLigne('TRACABILITE_RELEVE_PAR_DEFAUT')};\nconst DEFAULT_PHASES = ${extraireLigne('DEFAULT_PHASES')};\nconst PROBE_CRENEAUX = ${extraireLigne('PROBE_CRENEAUX')};\n${extraire('DEFAULT_GUIDANCE')}\n${extraire('BALANCE_OUTCOMES')}\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
 // eslint-disable-next-line no-new-func
 const {
   DEFAULT_CRITERES_SUIVI, CRITERE_INCONNU, DEFAULT_SUIVIS,
@@ -68,7 +77,7 @@ const {
   migrerReleves, migrerStudentsSuivi, migrerAxesSuivi,
   jourLocal, dureeReleve, journeesSuivi, migrerEnvoisCrises,
   grouperParJour, libelleJour, segmentAppareil, nomFichier, timeShort, PASTILLE_PAVES_MAX,
-  compteurDe, nomAxe, nomCompteur,
+  compteurDe, nomAxe, nomCompteur, buildDetailRows,
 } = new Function(code)();
 
 /* Le nombre d'axes n'est plus borné : seule la pastille de la barre du bas
@@ -338,6 +347,54 @@ t('un statut déjà posé n\'est jamais réécrit',
 t('idempotente',
   migrerEnvoisCrises(migrerEnvoisCrises([{ id: 'c1', sessionId: 'se1' }], seancesEnvoi), seancesEnvoi)[0].sentAt,
   '2026-08-03T18:00:00.000Z');
+
+/* ==================== buildDetailRows : Probe ====================
+   La feuille « Détail par essai » ignorait totalement le mode Probe : la
+   colonne « Indépendant », faite pour qu'une moyenne donne directement un
+   pourcentage, restait vide pour lui. Une ligne par probe coté, le créneau
+   en colonne « Étape » plutôt qu'un numéro d'essai, et — comme Occurrence —
+   aucune ligne pour une entrée non cotée. */
+const eleveDetail = { id: 'e1', initials: 'A.B.', classeId: null };
+const objProbe10 = { id: 'op1', name: 'Salutation', type: 'probe', config: { probesParJour: 1, useGuidance: false } };
+const objProbeGuidance = { id: 'op2', name: 'Consigne simple', type: 'probe', config: { probesParJour: 2, useGuidance: true } };
+const guidancesDetail = [
+  { code: 'I', label: 'Indépendant', color: '#000', independent: true },
+  { code: 'GT', label: 'Guidance totale', color: '#000', independent: false },
+];
+
+function seanceDetail(objId, obj, entry) {
+  return {
+    id: 'sd1', date: '2026-08-05T09:00:00.000Z', atelierId: null, mode: 'libre', intervenantId: null,
+    studentIds: ['e1'],
+    selectedObjectives: { e1: [objId] },
+    objectiveSnapshot: { [objId]: obj },
+    data: { e1: { [objId]: entry } },
+  };
+}
+
+const rows10 = buildDetailRows(
+  [seanceDetail('op1', objProbe10, { value: 1, guidance: null, creneau: 'matin' })],
+  [eleveDetail], [], [], [], guidancesDetail, null
+);
+const ligneProbe10 = rows10.find((r) => r[6] === 'Salutation');
+t('probe 1/0 coté : une ligne, type Probe', ligneProbe10[9], 'Probe');
+t('probe 1/0 coté : le créneau en colonne Étape', ligneProbe10[11], 'Matin');
+t('probe 1/0 coté à 1 : Résultat et Indépendant à 1', [ligneProbe10[12], ligneProbe10[13]], ['Réussi (1)', 1]);
+
+const rowsGuidance = buildDetailRows(
+  [seanceDetail('op2', objProbeGuidance, { value: null, guidance: 'I', creneau: 'aprem' })],
+  [eleveDetail], [], [], [], guidancesDetail, null
+);
+const ligneProbeGuidance = rowsGuidance.find((r) => r[6] === 'Consigne simple');
+t('probe par guidance : le libellé de la guidance en Résultat', ligneProbeGuidance[12], 'Indépendant');
+t('probe par guidance : code indépendant → Indépendant à 1', ligneProbeGuidance[13], 1);
+t('probe par guidance : créneau après-midi', ligneProbeGuidance[11], 'Après-midi');
+
+const rowsNonCote = buildDetailRows(
+  [seanceDetail('op1', objProbe10, { value: null, guidance: null, creneau: null })],
+  [eleveDetail], [], [], [], guidancesDetail, null
+);
+t('probe non coté : aucune ligne, comme Occurrence', rowsNonCote.some((r) => r[6] === 'Salutation'), false);
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko ? 1 : 0);
