@@ -10779,6 +10779,15 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
      à chaque remontage du widget (changement d'onglet, dépliage de la carte). */
   const [justRecorded, setJustRecorded] = useState(null);
 
+  /* En compact la bande d'essais est une colonne à hauteur bornée : sans
+     recentrage, l'essai en cours sort du champ dès le quatrième. Même principe
+     que le défilement de la bande d'intervalles. */
+  const bandeRef = useRef(null);
+  useEffect(() => {
+    const el = bandeRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [trials.length, done, compact]);
+
   function record(code) {
     let next;
     let idx;
@@ -10824,11 +10833,17 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
 
   const cursor = unlimited ? done : trials.findIndex((t) => !trialCode(t));
 
-  /* Bande des essais déjà cotés. En compact elle passe à gauche des boutons de
-     guidance au lieu d'être au-dessus : les deux blocs se partagent alors la
-     hauteur au lieu de l'additionner. */
+  /* Bande des essais déjà cotés. En compact elle devient une COLONNE étroite à
+     gauche, à hauteur bornée et défilante : elle ne prend plus qu'une bande de
+     40 px de large, et toute la largeur ainsi libérée revient aux boutons de
+     cotation. Sinon, rangée horizontale au-dessus, comme avant. */
   const bandeEssais = (
-    <div className={`flex gap-1.5 overflow-x-auto pb-1 ${compact ? 'flex-1 min-w-0' : 'mb-2.5'}`}>
+    <div
+      ref={bandeRef}
+      className={compact
+        ? 'shrink-0 w-10 flex flex-col items-center gap-1 overflow-y-auto max-h-24'
+        : 'flex gap-1.5 overflow-x-auto pb-1 mb-2.5'}
+    >
       {cells.map((t, i) => {
         const code = trialCode(t);
         const g = code ? guidanceByCode(list, code) : null;
@@ -10857,13 +10872,12 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
     </div>
   );
 
-  /* Boutons de cotation. En compact : grille de deux colonnes, collée à droite
-     de la bande d'essais — avec quatre guidances elle fait deux rangées, soit
-     à peu près la hauteur de la bande, au lieu de s'y ajouter. Sinon, rangée
-     unique sur toute la largeur, plus confortable quand la place ne manque
-     pas. */
+  /* Boutons de cotation. En compact : grille de deux colonnes qui occupe toute
+     la place laissée par la colonne d'essais. Ils sont volontairement hauts —
+     la version précédente, resserrée à l'extrême, rendait la cotation pénible
+     et provoquait des appuis à côté. */
   const boutonsGuidance = (
-    <div className={compact ? 'shrink-0 grid grid-cols-2 gap-1' : 'flex flex-wrap gap-1.5'}>
+    <div className={compact ? 'flex-1 min-w-0 grid grid-cols-2 gap-1.5' : 'flex flex-wrap gap-1.5'}>
       {list.map((g) => {
         const texte = texteLisibleSur(g.color);
         return (
@@ -10871,7 +10885,7 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
             key={g.code}
             onClick={() => record(g.code)}
             title={g.label}
-            className={`${compact ? 'min-w-[38px] py-1.5 rounded-lg' : 'flex-1 min-w-[44px] py-2.5 rounded-xl'} active:scale-95 transition-transform`}
+            className={`${compact ? 'min-w-0 py-3 rounded-xl' : 'flex-1 min-w-[44px] py-2.5 rounded-xl'} active:scale-95 transition-transform`}
             style={{ backgroundColor: g.color, color: texte }}
           >
             {/* Code seul : le libellé complet passait à la ligne dans une
@@ -10879,10 +10893,35 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
                 exactement le symptôme signalé (« plus d'empilement
                 qu'avant »). Le code seul suffit à coter, le libellé reste
                 accessible par appui long (title). */}
-            <div className={`${compact ? 'text-xs' : 'text-sm'} font-semibold`} style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
+            <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
           </button>
         );
       })}
+    </div>
+  );
+
+  /* Compteur puis « annuler » EN DESSOUS, alignés à gauche sous la colonne
+     d'essais. Côte à côte et calé à droite, « annuler » tombait juste sous les
+     boutons de guidance : l'appui accidentel était fréquent. Il a aussi sa
+     propre zone tactile plutôt qu'un texte nu de 12 px. */
+  const pied = (
+    <div className={compact ? 'mt-1.5' : 'flex items-center justify-between mt-2'}>
+      <span className="text-xs block" style={{ color: INK_SOFT }}>
+        {unlimited
+          ? `${done} essai${done !== 1 ? 's' : ''} coté${done !== 1 ? 's' : ''}`
+          : cursor === -1
+          ? `${done} essais cotés${done > planned ? ` (${planned} prévus)` : ' — série complète'}`
+          : `Essai ${cursor + 1} sur ${planned}`}
+      </span>
+      {done > 0 && (
+        <button
+          onClick={undo}
+          className={`text-xs flex items-center gap-1 ${compact ? 'mt-0.5 py-1 px-1 -ml-1' : ''}`}
+          style={{ color: INK_SOFT }}
+        >
+          <RotateCcw size={12} /> annuler
+        </button>
+      )}
     </div>
   );
 
@@ -10899,20 +10938,7 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
           {boutonsGuidance}
         </>
       )}
-      <div className={`flex items-center justify-between ${compact ? 'mt-1' : 'mt-2'}`}>
-        <span className="text-xs" style={{ color: INK_SOFT }}>
-          {unlimited
-            ? `${done} essai${done !== 1 ? 's' : ''} coté${done !== 1 ? 's' : ''}`
-            : cursor === -1
-            ? `${done} essais cotés${done > planned ? ` (${planned} prévus)` : ' — série complète'}`
-            : `Essai ${cursor + 1} sur ${planned}`}
-        </span>
-        {done > 0 && (
-          <button onClick={undo} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
-            <RotateCcw size={12} /> annuler
-          </button>
-        )}
-      </div>
+      {pied}
     </div>
   );
 }
