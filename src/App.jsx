@@ -9806,6 +9806,27 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
   );
 }
 
+/* Carte réduite au strict nécessaire pour le mode Réorganiser : de quoi
+   reconnaître l'objectif et rien de plus. Beaucoup en tiennent à l'écran, donc
+   la disposition se voit d'un coup d'œil au lieu de se deviner. */
+function PastillePlan({ obj, initiales }) {
+  const T = TYPES[obj.type] || TYPES.trials;
+  const Icone = T.icon;
+  return (
+    <div
+      className="rounded-xl border px-2.5 py-2 flex items-center gap-2"
+      style={{ borderColor: BORDER, backgroundColor: CARD }}
+    >
+      <Icone size={14} style={{ color: T.color }} className="shrink-0" />
+      {initiales && (
+        <span className="text-xs font-semibold shrink-0" style={{ fontFamily: F_DISPLAY, color: INK_SOFT }}>{initiales}</span>
+      )}
+      <span className="text-sm truncate min-w-0" style={{ color: INK }}>{obj.name}</span>
+      <GripVertical size={14} style={{ color: INK_SOFT }} className="shrink-0 ml-auto" />
+    </div>
+  );
+}
+
 function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, sessions, notify, onFinish, onAnnulerCorrection, suiteDuJour, pleinEcran, onBasculerPleinEcran }) {
   const isEdit = !!session.isEdit;
   const [currentId, setCurrentId] = useState(session.studentIds[0]);
@@ -9865,6 +9886,10 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      une valeur unique pour les deux ne voudrait rien dire. Absent = le calcul
      automatique d'avant, donc rien ne change tant qu'on n'y touche pas. */
   const [colonnesPref, setColonnesPref] = useState({});
+  /* Mode Réorganiser : la zone de cotation ne cote plus, elle se range. Plus
+     d'appui long à réussir, plus de geste à départager avec la cotation —
+     c'est le seul état où déplacer une carte ne peut pas échouer. */
+  const [reorg, setReorg] = useState(false);
   useEffect(() => {
     (async () => {
       const v = await store.getRaw('aba:colonnes');
@@ -9922,6 +9947,12 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      dessous ; c'est la toile qui répartit les cartes entre colonnes, plus le
      navigateur. */
   const carteStyle = { marginBottom: '0.75rem' };
+
+  /* En réorganisation, les pastilles sont déjà petites : le zoom de densité
+     n'a plus de sens et disparaît, ce qui remet la toile à l'échelle 1 et
+     rapproche les cartes. */
+  const toileStyle = (p) => (reorg ? undefined : p.style);
+  const toileItemStyle = reorg ? { marginBottom: '0.5rem' } : carteStyle;
 
   /* Réglage des colonnes pour l'orientation courante. `colonnesAuto` sert de
      point de départ au pas-à-pas quand on n'a encore rien imposé, et
@@ -10293,6 +10324,20 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 </button>
               </div>
             )}
+            {!isEdit && (
+              <button
+                onClick={() => setReorg((v) => !v)}
+                className="rounded-xl px-2.5 py-2 border"
+                style={{
+                  borderColor: reorg ? ACCENT : BORDER,
+                  color: reorg ? ACCENT_INK : INK_SOFT,
+                  backgroundColor: reorg ? ACCENT : CARD,
+                }}
+                title={reorg ? 'Terminer la réorganisation' : 'Réorganiser les cartes'}
+              >
+                <Move size={15} />
+              </button>
+            )}
             {!isEdit && onBasculerPleinEcran && (
               <button
                 onClick={onBasculerPleinEcran}
@@ -10387,6 +10432,20 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
       </div>
       </div>
 
+      {/* Hors de l'en-tête : celui-ci se replie en plein écran, et il faut
+          pouvoir sortir de la réorganisation depuis n'importe où. */}
+      {reorg && (
+        <div className="rounded-xl px-3 py-2.5 mb-3 flex items-center justify-between gap-2 text-sm" style={{ backgroundColor: ACCENT_WASH, border: `1px solid ${ACCENT}` }}>
+          <span className="flex items-center gap-2 min-w-0" style={{ color: INK }}>
+            <Move size={15} className="shrink-0" />
+            <span className="truncate">Réorganisation — glissez les cartes</span>
+          </span>
+          <button onClick={() => setReorg(false)} className="text-xs font-medium shrink-0 flex items-center gap-1" style={{ color: ACCENT }}>
+            <Check size={13} /> Terminer
+          </button>
+        </div>
+      )}
+
       <div
         className="flex gap-3"
         data-no-swipe
@@ -10410,6 +10469,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 const obj = session.objectiveSnapshot[oid];
                 const st = students.find((x) => x.id === sid);
                 if (!obj || !session.data[sid]) return null;
+                if (reorg) return <PastillePlan obj={obj} initiales={st ? st.initials : null} />;
                 return (
                   <ObjectiveCard
                     obj={obj}
@@ -10436,8 +10496,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                   <ToileCotation
                     repartition={repartirEnColonnes(priorityItems, p.colonnes, placement)}
                     onPlacer={placerPriorite}
-                    style={p.style}
-                    itemStyle={carteStyle}
+                    style={toileStyle(p)}
+                    itemStyle={toileItemStyle}
+                    libre={reorg}
                     renderItem={(k) => carte(k, p.compact)}
                   />
                 );
@@ -10458,8 +10519,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                     <ToileCotation
                       repartition={repartirEnColonnes(balanceKeys, pBalance.colonnes, placement)}
                       onPlacer={placerPriorite}
-                      style={pBalance.style}
-                      itemStyle={carteStyle}
+                      style={toileStyle(pBalance)}
+                      itemStyle={toileItemStyle}
+                      libre={reorg}
                       renderItem={(k) => carte(k, pBalance.compact)}
                     />
                   </div>
@@ -10469,8 +10531,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       <ToileCotation
                         repartition={repartirEnColonnes(autresKeys, pCote.colonnes, placement)}
                         onPlacer={placerPriorite}
-                        style={pCote.style}
-                        itemStyle={carteStyle}
+                        style={toileStyle(pCote)}
+                        itemStyle={toileItemStyle}
+                        libre={reorg}
                         renderItem={(k) => carte(k, pCote.compact)}
                       />
                     </div>
@@ -10490,11 +10553,13 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               <ToileCotation
                 repartition={repartirEnColonnes(objIds, pSolo.colonnes, placement)}
                 onPlacer={placerObjectifs(currentId)}
-                style={pSolo.style}
-                itemStyle={carteStyle}
+                style={toileStyle(pSolo)}
+                itemStyle={toileItemStyle}
+                libre={reorg}
                 renderItem={(oid) => {
                   const obj = session.objectiveSnapshot[oid];
                   if (!obj) return null;
+                  if (reorg) return <PastillePlan obj={obj} initiales={null} />;
                   return (
                     <ObjectiveCard
                       obj={obj}
