@@ -1571,6 +1571,7 @@ function supprimerPersonne(session, sid) {
     hidden: sansElle(session.hidden),
     presence: sansElle(session.presence),
     priorityOrder: (session.priorityOrder || []).filter((k) => k.split('|')[0] !== sid),
+    toile: filtrerToile(session.toile, (k) => (k.includes('|') ? k.split('|')[0] !== sid : encoreUtilises.has(k))),
   };
 }
 
@@ -1602,7 +1603,26 @@ function sessionPourPersonne(session, sid) {
     hidden: garder(session.hidden),
     presence: garder(session.presence),
     priorityOrder: (session.priorityOrder || []).filter((k) => k.split('|')[0] === sid),
+    toile: filtrerToile(session.toile, (k) => (k.includes('|') ? k.split('|')[0] === sid : encoreUtilises.has(k))),
   };
+}
+
+/* Filtre le placement mémorisé des cartes (session.toile, une carte
+   clé → colonne par orientation) en ne gardant que les clés retenues. Même
+   entretien que priorityOrder : une personne retirée ne doit pas laisser
+   derrière elle des placements orphelins qui ressusciteraient si un objectif
+   du même identifiant revenait. */
+function filtrerToile(toile, garderCle) {
+  if (!toile) return toile;
+  const suite = {};
+  Object.entries(toile).forEach(([orientation, placement]) => {
+    const garde = {};
+    Object.entries(placement || {}).forEach(([cle, colonne]) => {
+      if (garderCle(cle)) garde[cle] = colonne;
+    });
+    suite[orientation] = garde;
+  });
+  return suite;
 }
 
 /* Réinjecte un sous-ensemble réordonné dans la liste complète, sans toucher à
@@ -1667,6 +1687,12 @@ function chainerAtelier(session, atelierId, plan, stamp) {
     data,
     presence,
     pauses: [],
+    /* L'agencement de la zone de cotation suit l'éducateur d'un atelier au
+       suivant : c'est un réglage d'affichage, pas une donnée de séance. Les
+       objectifs qui ne sont plus à l'écran gardent leur place mémorisée sans
+       gêner — un placement sans carte ne s'affiche pas. */
+    priorityOrder: (session.priorityOrder || []).slice(),
+    toile: session.toile ? filtrerToile(session.toile, () => true) : undefined,
   };
   return { close, next };
 }
@@ -3361,6 +3387,63 @@ function deplacerDansListe(items, from, to) {
   return liste;
 }
 
+/* --- Toile de cotation ---
+   La zone de cotation n'est plus une liste que le navigateur répartit en
+   colonnes CSS : c'est une toile où chaque carte occupe la colonne qu'on lui a
+   donnée. Deux informations séparées, et c'est ce qui rend le modèle robuste :
+   l'ORDRE reste la liste à plat déjà persistée (priorityOrder,
+   selectedObjectives), le PLACEMENT est une simple carte clé → numéro de
+   colonne. Un placement dont la colonne dépasse le nombre courant est ramené
+   dans la dernière à l'affichage, sans être réécrit : revenir à la largeur
+   précédente restitue la disposition d'origine. */
+
+/* Répartit des clés ordonnées en `colonnes` listes. Une clé placée va dans sa
+   colonne (bornée), une clé sans placement va dans la colonne la moins
+   remplie — ce qui reproduit l'équilibrage d'avant tant que rien n'a été
+   déplacé à la main. */
+function repartirEnColonnes(cles, colonnes, placement) {
+  const n = Math.max(1, colonnes || 1);
+  const repartition = Array.from({ length: n }, () => []);
+  const place = placement || {};
+  (cles || []).forEach((cle) => {
+    const voulu = place[cle];
+    if (Number.isInteger(voulu)) {
+      repartition[Math.max(0, Math.min(n - 1, voulu))].push(cle);
+      return;
+    }
+    let plusCourte = 0;
+    for (let i = 1; i < n; i++) if (repartition[i].length < repartition[plusCourte].length) plusCourte = i;
+    repartition[plusCourte].push(cle);
+  });
+  return repartition;
+}
+
+/* Pose une clé dans une colonne, à un rang donné. Elle est d'abord retirée de
+   partout : une carte n'existe qu'à un seul endroit de la toile. */
+function placerDansToile(repartition, cle, colonne, index) {
+  const n = (repartition || []).length;
+  if (!n) return repartition || [];
+  const suite = repartition.map((col) => col.filter((k) => k !== cle));
+  const cible = Math.max(0, Math.min(n - 1, colonne));
+  const rang = Math.max(0, Math.min(suite[cible].length, index));
+  suite[cible].splice(rang, 0, cle);
+  return suite;
+}
+
+/* Les deux projections d'une toile : la carte des placements à mémoriser, et
+   l'ordre à plat, lu colonne par colonne, qui alimente priorityOrder et
+   selectedObjectives — donc l'export et tout le reste, qui n'ont pas à
+   connaître les colonnes. */
+function placementDepuisToile(repartition) {
+  const placement = {};
+  (repartition || []).forEach((col, i) => (col || []).forEach((cle) => { placement[cle] = i; }));
+  return placement;
+}
+
+function ordreDepuisToile(repartition) {
+  return (repartition || []).reduce((tout, col) => tout.concat(col || []), []);
+}
+
 /* Bandes de déclenchement du défilement automatique pendant un déplacement, en
    pixels depuis chaque bord. Plus grande en bas : la barre ABC/Crise y occupe
    déjà la place, le doigt s'arrête donc plus haut qu'il ne croit. */
@@ -3564,6 +3647,231 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/* Toile de cotation : les mêmes gestes que ReorderList — appui long, aperçu en
+   direct, défilement automatique aux bords — mais sur PLUSIEURS colonnes, que
+   le composant possède au lieu de les laisser au navigateur.
+
+   La différence de fond avec les colonnes CSS : rien ne se rééquilibre. Une
+   carte va dans la colonne où on la dépose et y reste, une colonne laissée
+   courte le reste. La cible est un couple (colonne, rang) : la colonne se lit
+   sur l'abscisse, le rang sur l'ordonnée par rapport aux milieux des cartes de
+   cette colonne — d'où la possibilité de déposer sous la dernière carte d'une
+   colonne courte, ou dans une colonne vide, ce qu'un repli « le plus proche
+   par le centre » ne permettait pas. */
+function ToileCotation({ repartition, renderItem, onPlacer, style, colonneStyle, itemStyle }) {
+  const containerRef = useRef(null);
+  const [dragKey, setDragKey] = useState(null);
+  const [apercu, setApercu] = useState(null);
+  const st = useRef({ timer: null, dragging: false, justDragged: false, toile: null, cle: null, raf: null, x: 0, y: 0 });
+
+  const repRef = useRef(repartition);
+  repRef.current = repartition;
+  const onPlacerRef = useRef(onPlacer);
+  onPlacerRef.current = onPlacer;
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return undefined;
+    const s = st.current;
+
+    const colonnes = () => Array.from(el.children);
+    const cartes = (colonneEl) => Array.from(colonneEl.children).filter((n) => n.dataset && n.dataset.cle);
+
+    function cleDepuisCible(target) {
+      let n = target;
+      while (n && n !== el) {
+        if (n.dataset && n.dataset.cle) return n.dataset.cle;
+        n = n.parentNode;
+      }
+      return null;
+    }
+
+    /* Colonne visée : celle dont la bande horizontale contient le doigt, sinon
+       la plus proche en abscisse — glisser au-delà du bord vise la colonne de
+       ce bord, ce qu'on attend. */
+    function colonneDepuisPoint(clientX) {
+      const cols = colonnes();
+      if (!cols.length) return 0;
+      for (let i = 0; i < cols.length; i++) {
+        const r = cols[i].getBoundingClientRect();
+        if (clientX >= r.left && clientX <= r.right) return i;
+      }
+      let best = 0;
+      let bestDist = Infinity;
+      cols.forEach((c, i) => {
+        const r = c.getBoundingClientRect();
+        const d = Math.min(Math.abs(clientX - r.left), Math.abs(clientX - r.right));
+        if (d < bestDist) { bestDist = d; best = i; }
+      });
+      return best;
+    }
+
+    /* Rang visé dans une colonne : nombre de cartes dont le milieu est
+       au-dessus du doigt. Sous la dernière carte, on obtient la fin de la
+       colonne — c'est ce qui permet de poser une carte là où il reste de la
+       place. */
+    function rangDepuisPoint(colonneIdx, clientY) {
+      const cols = colonnes();
+      const colonneEl = cols[colonneIdx];
+      if (!colonneEl) return 0;
+      const list = cartes(colonneEl);
+      let rang = 0;
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].dataset.cle === s.cle) continue;
+        const r = list[i].getBoundingClientRect();
+        if (clientY > r.top + r.height / 2) rang++;
+      }
+      return rang;
+    }
+
+    function viser() {
+      if (!s.cle) return;
+      const col = colonneDepuisPoint(s.x);
+      const rang = rangDepuisPoint(col, s.y);
+      const actuelle = s.toile.findIndex((c) => c.includes(s.cle));
+      const actuelRang = actuelle >= 0 ? s.toile[actuelle].indexOf(s.cle) : -1;
+      if (col === actuelle && rang === actuelRang) return;
+      s.toile = placerDansToile(s.toile, s.cle, col, rang);
+      setApercu(s.toile);
+    }
+
+    function boucleDefilement() {
+      if (!s.dragging) { s.raf = null; return; }
+      const h = window.innerHeight;
+      let pas = 0;
+      if (s.y < REORDER_BORD_HAUT) {
+        pas = -Math.ceil(((REORDER_BORD_HAUT - s.y) / REORDER_BORD_HAUT) * REORDER_VITESSE_MAX);
+      } else if (s.y > h - REORDER_BORD_BAS) {
+        pas = Math.ceil(((s.y - (h - REORDER_BORD_BAS)) / REORDER_BORD_BAS) * REORDER_VITESSE_MAX);
+      }
+      if (pas) {
+        const avant = window.scrollY;
+        window.scrollBy(0, pas);
+        if (window.scrollY !== avant) viser();
+      }
+      s.raf = requestAnimationFrame(boucleDefilement);
+    }
+
+    function start(e) {
+      const t = e.touches ? e.touches[0] : e;
+      const cle = cleDepuisCible(e.target);
+      if (!cle) return;
+      s.startY = t.clientY;
+      s.startX = t.clientX;
+      s.dragging = false;
+      clearTimeout(s.timer);
+      s.timer = setTimeout(() => {
+        s.dragging = true;
+        reorderDragging = true;
+        s.toile = repRef.current.map((col) => col.slice());
+        s.cle = cle;
+        s.x = s.startX;
+        s.y = s.startY;
+        setDragKey(cle);
+        setApercu(s.toile);
+        try { if (navigator.vibrate) navigator.vibrate(25); } catch (err) {}
+        s.raf = requestAnimationFrame(boucleDefilement);
+      }, 320);
+    }
+
+    function move(e) {
+      const t = e.touches ? e.touches[0] : e;
+      if (!s.dragging) {
+        if (s.timer && (Math.abs(t.clientY - s.startY) > 8 || Math.abs(t.clientX - s.startX) > 8)) {
+          clearTimeout(s.timer);
+          s.timer = null;
+        }
+        return;
+      }
+      if (e.cancelable) e.preventDefault();
+      s.x = t.clientX;
+      s.y = t.clientY;
+      viser();
+    }
+
+    function end() {
+      clearTimeout(s.timer);
+      s.timer = null;
+      if (s.raf) { cancelAnimationFrame(s.raf); s.raf = null; }
+      if (s.dragging && s.toile) {
+        const avant = repRef.current;
+        const change = s.toile.some((col, i) => {
+          const ref = avant[i] || [];
+          return col.length !== ref.length || col.some((k, j) => k !== ref[j]);
+        });
+        if (change) onPlacerRef.current(s.toile);
+        s.justDragged = true;
+        setTimeout(() => { s.justDragged = false; }, 250);
+      }
+      s.dragging = false; s.toile = null; s.cle = null;
+      reorderDragging = false;
+      setDragKey(null); setApercu(null);
+    }
+
+    function blockClick(e) {
+      if (s.justDragged) { e.stopPropagation(); e.preventDefault(); }
+    }
+
+    el.addEventListener('touchstart', start, { passive: true });
+    el.addEventListener('touchmove', move, { passive: false });
+    el.addEventListener('touchend', end, { passive: true });
+    el.addEventListener('touchcancel', end, { passive: true });
+    el.addEventListener('mousedown', start);
+    el.addEventListener('click', blockClick, true);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', end);
+    return () => {
+      clearTimeout(s.timer);
+      if (s.raf) cancelAnimationFrame(s.raf);
+      reorderDragging = false;
+      el.removeEventListener('touchstart', start);
+      el.removeEventListener('touchmove', move);
+      el.removeEventListener('touchend', end);
+      el.removeEventListener('touchcancel', end);
+      el.removeEventListener('mousedown', start);
+      el.removeEventListener('click', blockClick, true);
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', end);
+    };
+  }, []);
+
+  /* L'aperçu est abandonné si la toile source change de contenu sous lui —
+     une personne retirée, un objectif masqué : on repart de la vérité. */
+  const memeTaille = apercu
+    && apercu.length === repartition.length
+    && apercu.reduce((n, c) => n + c.length, 0) === repartition.reduce((n, c) => n + c.length, 0);
+  const affichee = memeTaille ? apercu : repartition;
+
+  return (
+    <div ref={containerRef} data-no-swipe data-reorder className="flex gap-3 items-start" style={style}>
+      {affichee.map((colonne, ci) => (
+        <div key={ci} className="flex-1 min-w-0" style={colonneStyle}>
+          {colonne.map((cle, i) => {
+            const isDragging = dragKey === cle;
+            return (
+              <div
+                key={cle}
+                data-cle={cle}
+                style={{
+                  ...itemStyle,
+                  opacity: isDragging ? 0.45 : 1,
+                  outline: isDragging ? `2px solid ${INK}` : 'none',
+                  outlineOffset: '2px',
+                  borderRadius: isDragging ? '1rem' : undefined,
+                  transition: 'opacity .15s',
+                  touchAction: dragKey !== null ? 'none' : 'auto',
+                }}
+              >
+                {renderItem(cle, i, isDragging)}
+              </div>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
@@ -4005,6 +4313,29 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
   }, [el, onLeft, onRight, enabled, onDocument, ignoreNoSwipe]);
 
   return { offset, dragging };
+}
+
+/* Orientation courante de l'appareil. La toile de cotation mémorise une
+   disposition par orientation : en tournant la tablette on change de nombre de
+   colonnes, une disposition unique n'aurait pas de sens des deux côtés. */
+function useOrientation() {
+  const [paysage, setPaysage] = useState(
+    () => typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      && window.matchMedia('(orientation: landscape)').matches
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mq = window.matchMedia('(orientation: landscape)');
+    const onChange = (e) => setPaysage(e.matches);
+    // Safari ancien ne connaît que addListener
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else mq.addListener(onChange);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', onChange);
+      else mq.removeListener(onChange);
+    };
+  }, []);
+  return paysage ? 'paysage' : 'portrait';
 }
 
 /* Pincement à deux doigts pour la densité de cotation : plus rapide que de
@@ -9467,13 +9798,13 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     return () => ro.disconnect();
   }, []);
 
-  /* Largeur réelle de la COLONNE DE CONTENU (colonneRef), pour calculer un
-     nombre de colonnes explicite plutôt que de le laisser à l'heuristique
-     columnWidth du navigateur (voir packStyle ci-dessous). Mesurée sur
+  /* Largeur réelle de la COLONNE DE CONTENU (colonneRef), d'où se déduit le
+     nombre de colonnes de la toile (voir `pack` ci-dessous). Mesurée sur
      colonneRef et non sur cotationRef : ce dernier inclut aussi le rail de
      personnes (pastilles de 56 px + gap), qui n'est pas de la place
      disponible pour les cartes — un ancien bug mesurait cotationRef et
      surestimait donc systématiquement la largeur utile. */
+  const orientation = useOrientation();
   const [largeurColonne, setLargeurColonne] = useState(0);
   useEffect(() => {
     const el = colonneRef.current;
@@ -9486,34 +9817,17 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     return () => ro.disconnect();
   }, []);
 
-  /* Disposition en colonnes plutôt qu'en lignes : une fiche courte (un
-     compteur) n'impose plus sa hauteur à la fiche voisine, et l'espace
-     laissé libre est repris par l'objectif suivant, même s'il appartient à
-     une autre personne. */
-  const gridItemStyle = {
-    breakInside: 'avoid',
-    WebkitColumnBreakInside: 'avoid',
-    pageBreakInside: 'avoid',
-    display: 'inline-block',
-    width: '100%',
-    marginBottom: '0.75rem',
-  };
-  /* Les colonnes CSS ne répartissent vraiment les fiches sur plusieurs
-     colonnes qu'à partir de trois : avec une ou deux — le cas le plus
-     courant en début de suivi, quand une personne n'a encore qu'un ou deux
-     objectifs — le navigateur les empile dans la première colonne et laisse
-     le reste de la largeur inoccupé, quelle que soit la place disponible.
-     En dessous de ce seuil, une rangée flex n'a pas ce défaut.
+  /* Chaque carte occupe toute la largeur de sa colonne et laisse un espace en
+     dessous ; c'est la toile qui répartit les cartes entre colonnes, plus le
+     navigateur. */
+  const carteStyle = { marginBottom: '0.75rem' };
+
+  /* Combien de colonnes, et faut-il resserrer les cartes.
 
      `colWidth` est la largeur RENDUE minimale d'une colonne, en pixels écran
      réels — pas en pixels de mise en page. Le nombre de colonnes se déduit de
      la largeur réellement rendue de la colonne de contenu, indépendamment du
-     zoom, au lieu d'être laissé à `columnWidth`, dont l'heuristique posait
-     une seule colonne dès qu'une carte contenait quelque chose de plus large
-     que `colWidth` — la bande de boutons de guidance du mode Essais,
-     notamment — même quand la largeur disponible permettait clairement deux
-     colonnes. `compact` descend jusqu'aux widgets pour resserrer ces mêmes
-     boutons quand la colonne obtenue est étroite.
+     zoom.
 
      Piège déjà rencontré : comparer `colWidth` à une largeur DIVISÉE par
      `zoom` (des pixels de mise en page) revient à comparer des pixels écran à
@@ -9522,7 +9836,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      à l'écran, jusqu'au texte haché lettre par lettre. `rendue` ci-dessous
      est déjà à l'échelle FINALE (mesurée après le zoom CSS) : elle se compare
      directement à `colWidth`, sans passer par `largeurColonne / zoom`. */
-  const packStyle = (count, colWidth) => {
+  const pack = (colWidth) => {
     const rendue = largeurColonne || colWidth;
     const colonnes = Math.max(1, Math.min(4, Math.floor(rendue / colWidth)));
     const largeurRendueParColonne = (rendue - (colonnes - 1) * 12) / colonnes;
@@ -9532,11 +9846,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
        on la réclame. Baisser la densité doit resserrer la carte, c'est le
        geste que l'éducateur fait et le résultat qu'il en attend. */
     const compact = largeurRendueParColonne < 200 || zoom <= 0.7;
-    if (count < 3) {
-      const baseMiseEnPage = ((rendue / zoom) - (colonnes - 1) * 12) / colonnes;
-      return { style: { zoom, display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }, itemStyle: { flex: `1 1 ${baseMiseEnPage}px`, minWidth: 0 }, compact };
-    }
-    return { style: { zoom, columnCount: colonnes, columnGap: '0.75rem' }, itemStyle: gridItemStyle, compact };
+    return { colonnes, compact, style: { zoom } };
   };
 
   /* Personnes dont les cotations sont à l'écran. Une personne repartie sort de
@@ -9577,19 +9887,30 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   });
   const autresKeys = priorityItems.filter((k) => !balanceKeys.includes(k));
 
-  function reorderPriority(sousEnsemble) {
+  /* Placement mémorisé des cartes, propre à l'orientation : portrait et
+     paysage n'ont ni la même largeur ni le même nombre de colonnes, une seule
+     disposition pour les deux ne voudrait rien dire. Lu défensivement, il n'y
+     a aucune migration de séance à l'ouverture. */
+  const placement = (session.toile && session.toile[orientation]) || {};
+  const memoriserPlacement = (nouveauPlacement, ordre, sid) => {
     setSession((s0) => {
+      const toile = { ...(s0.toile || {}), [orientation]: { ...((s0.toile || {})[orientation] || {}), ...nouveauPlacement } };
+      if (sid) {
+        const suite = reinjecterSousEnsemble(s0.selectedObjectives[sid] || [], ordre);
+        return { ...s0, toile, selectedObjectives: { ...s0.selectedObjectives, [sid]: suite } };
+      }
       const complet = s0.priorityOrder && s0.priorityOrder.length ? s0.priorityOrder : priorityItems;
-      return { ...s0, priorityOrder: reinjecterSousEnsemble(complet, sousEnsemble) };
+      return { ...s0, toile, priorityOrder: reinjecterSousEnsemble(complet, ordre) };
     });
-  }
+  };
 
-  function reorderObjectives(sid, nouvelOrdre) {
-    setSession((s0) => {
-      const suite = reinjecterSousEnsemble(s0.selectedObjectives[sid] || [], nouvelOrdre);
-      return { ...s0, selectedObjectives: { ...s0.selectedObjectives, [sid]: suite } };
-    });
-  }
+  /* Un dépôt écrit les deux projections de la toile : la colonne de chaque
+     carte, et l'ordre à plat — qui reste ce que lisent l'export et tout le
+     reste, qui n'ont pas à connaître les colonnes. */
+  const placerPriorite = (repartition) =>
+    memoriserPlacement(placementDepuisToile(repartition), ordreDepuisToile(repartition), null);
+  const placerObjectifs = (sid) => (repartition) =>
+    memoriserPlacement(placementDepuisToile(repartition), ordreDepuisToile(repartition), sid);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -9961,52 +10282,49 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 );
               };
 
-              /* Sans Équilibre, un flux unique suffit. */
+              /* Sans Équilibre, une seule toile suffit. */
               if (balanceKeys.length === 0) {
-                const pack = packStyle(priorityItems.length, 210);
+                const p = pack(210);
                 return (
-                  <ReorderList
-                    items={priorityItems}
-                    keyOf={(k) => k}
-                    onReorder={reorderPriority}
-                    style={pack.style}
-                    itemStyle={pack.itemStyle}
-                    renderItem={(k) => carte(k, pack.compact)}
+                  <ToileCotation
+                    repartition={repartirEnColonnes(priorityItems, p.colonnes, placement)}
+                    onPlacer={placerPriorite}
+                    style={p.style}
+                    itemStyle={carteStyle}
+                    renderItem={(k) => carte(k, p.compact)}
                   />
                 );
               }
 
               /* Avec Équilibre : il occupe la zone principale, les autres
-                 objectifs prioritaires passent sur le côté. Deux Équilibre ou plus
-                 se placent côte à côte dans cette zone — un seul reste étalé sur
-                 toute la largeur, cas que packStyle ne couvre pas. */
-              const packBalance = balanceKeys.length > 1
-                ? packStyle(balanceKeys.length, 260)
-                : { style: { zoom, columnWidth: '100%', columnGap: '0.75rem' }, itemStyle: gridItemStyle, compact: false };
-              const packCote = packStyle(autresKeys.length, 210);
+                 objectifs prioritaires passent sur le côté. Deux toiles
+                 distinctes : les deux zones n'ont pas la même largeur, et
+                 l'appartenance à l'une ou l'autre se déduit du type
+                 d'objectif — on ne fait donc pas passer une carte de l'une à
+                 l'autre. Un Équilibre seul reste étalé sur toute la largeur. */
+              const pBalance = balanceKeys.length > 1 ? pack(260) : { colonnes: 1, compact: false, style: { zoom } };
+              const pCote = pack(210);
 
               return (
                 <div className="flex flex-col landscape:flex-row gap-3 items-start">
                   <div className="w-full landscape:flex-[3] min-w-0">
-                    <ReorderList
-                      items={balanceKeys}
-                      keyOf={(k) => k}
-                      onReorder={reorderPriority}
-                      style={packBalance.style}
-                      itemStyle={packBalance.itemStyle}
-                      renderItem={(k) => carte(k, packBalance.compact)}
+                    <ToileCotation
+                      repartition={repartirEnColonnes(balanceKeys, pBalance.colonnes, placement)}
+                      onPlacer={placerPriorite}
+                      style={pBalance.style}
+                      itemStyle={carteStyle}
+                      renderItem={(k) => carte(k, pBalance.compact)}
                     />
                   </div>
                   {autresKeys.length > 0 && (
                     <div className="w-full landscape:flex-1 min-w-0">
                       <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Autres objectifs prioritaires</div>
-                      <ReorderList
-                        items={autresKeys}
-                        keyOf={(k) => k}
-                        onReorder={reorderPriority}
-                        style={packCote.style}
-                        itemStyle={packCote.itemStyle}
-                        renderItem={(k) => carte(k, packCote.compact)}
+                      <ToileCotation
+                        repartition={repartirEnColonnes(autresKeys, pCote.colonnes, placement)}
+                        onPlacer={placerPriorite}
+                        style={pCote.style}
+                        itemStyle={carteStyle}
+                        renderItem={(k) => carte(k, pCote.compact)}
                       />
                     </div>
                   )}
@@ -10020,14 +10338,13 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               </div>
 
               {(() => {
-                const packSolo = packStyle(objIds.length, 210);
+                const pSolo = pack(210);
                 return (
-              <ReorderList
-                items={objIds}
-                keyOf={(oid) => oid}
-                onReorder={(next) => reorderObjectives(currentId, next)}
-                style={packSolo.style}
-                itemStyle={packSolo.itemStyle}
+              <ToileCotation
+                repartition={repartirEnColonnes(objIds, pSolo.colonnes, placement)}
+                onPlacer={placerObjectifs(currentId)}
+                style={pSolo.style}
+                itemStyle={carteStyle}
                 renderItem={(oid) => {
                   const obj = session.objectiveSnapshot[oid];
                   if (!obj) return null;
@@ -10039,7 +10356,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       session={session} crises={crises} studentId={currentId} guidances={guidances}
                       hidden={hiddenFor(currentId).includes(oid)}
                       onToggleHidden={() => toggleHidden(currentId, oid)}
-                      compact={packSolo.compact}
+                      compact={pSolo.compact}
                       onExpand={() => setExpanded({ sid: currentId, oid })}
                       onChange={(p) => updateEntry(currentId, oid, p)}
                       probeBloque={probeEstBloque(currentId, oid)}
@@ -10779,6 +11096,15 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
      à chaque remontage du widget (changement d'onglet, dépliage de la carte). */
   const [justRecorded, setJustRecorded] = useState(null);
 
+  /* En compact la bande d'essais est une colonne à hauteur bornée : sans
+     recentrage, l'essai en cours sort du champ dès le quatrième. Même principe
+     que le défilement de la bande d'intervalles. */
+  const bandeRef = useRef(null);
+  useEffect(() => {
+    const el = bandeRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [trials.length, done, compact]);
+
   function record(code) {
     let next;
     let idx;
@@ -10824,11 +11150,17 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
 
   const cursor = unlimited ? done : trials.findIndex((t) => !trialCode(t));
 
-  /* Bande des essais déjà cotés. En compact elle passe à gauche des boutons de
-     guidance au lieu d'être au-dessus : les deux blocs se partagent alors la
-     hauteur au lieu de l'additionner. */
+  /* Bande des essais déjà cotés. En compact elle devient une COLONNE étroite à
+     gauche, à hauteur bornée et défilante : elle ne prend plus qu'une bande de
+     40 px de large, et toute la largeur ainsi libérée revient aux boutons de
+     cotation. Sinon, rangée horizontale au-dessus, comme avant. */
   const bandeEssais = (
-    <div className={`flex gap-1.5 overflow-x-auto pb-1 ${compact ? 'flex-1 min-w-0' : 'mb-2.5'}`}>
+    <div
+      ref={bandeRef}
+      className={compact
+        ? 'shrink-0 w-10 flex flex-col items-center gap-1 overflow-y-auto max-h-24'
+        : 'flex gap-1.5 overflow-x-auto pb-1 mb-2.5'}
+    >
       {cells.map((t, i) => {
         const code = trialCode(t);
         const g = code ? guidanceByCode(list, code) : null;
@@ -10857,13 +11189,12 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
     </div>
   );
 
-  /* Boutons de cotation. En compact : grille de deux colonnes, collée à droite
-     de la bande d'essais — avec quatre guidances elle fait deux rangées, soit
-     à peu près la hauteur de la bande, au lieu de s'y ajouter. Sinon, rangée
-     unique sur toute la largeur, plus confortable quand la place ne manque
-     pas. */
+  /* Boutons de cotation. En compact : grille de deux colonnes qui occupe toute
+     la place laissée par la colonne d'essais. Ils sont volontairement hauts —
+     la version précédente, resserrée à l'extrême, rendait la cotation pénible
+     et provoquait des appuis à côté. */
   const boutonsGuidance = (
-    <div className={compact ? 'shrink-0 grid grid-cols-2 gap-1' : 'flex flex-wrap gap-1.5'}>
+    <div className={compact ? 'flex-1 min-w-0 grid grid-cols-2 gap-1.5' : 'flex flex-wrap gap-1.5'}>
       {list.map((g) => {
         const texte = texteLisibleSur(g.color);
         return (
@@ -10871,7 +11202,7 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
             key={g.code}
             onClick={() => record(g.code)}
             title={g.label}
-            className={`${compact ? 'min-w-[38px] py-1.5 rounded-lg' : 'flex-1 min-w-[44px] py-2.5 rounded-xl'} active:scale-95 transition-transform`}
+            className={`${compact ? 'min-w-0 py-3 rounded-xl' : 'flex-1 min-w-[44px] py-2.5 rounded-xl'} active:scale-95 transition-transform`}
             style={{ backgroundColor: g.color, color: texte }}
           >
             {/* Code seul : le libellé complet passait à la ligne dans une
@@ -10879,10 +11210,35 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
                 exactement le symptôme signalé (« plus d'empilement
                 qu'avant »). Le code seul suffit à coter, le libellé reste
                 accessible par appui long (title). */}
-            <div className={`${compact ? 'text-xs' : 'text-sm'} font-semibold`} style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
+            <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
           </button>
         );
       })}
+    </div>
+  );
+
+  /* Compteur puis « annuler » EN DESSOUS, alignés à gauche sous la colonne
+     d'essais. Côte à côte et calé à droite, « annuler » tombait juste sous les
+     boutons de guidance : l'appui accidentel était fréquent. Il a aussi sa
+     propre zone tactile plutôt qu'un texte nu de 12 px. */
+  const pied = (
+    <div className={compact ? 'mt-1.5' : 'flex items-center justify-between mt-2'}>
+      <span className="text-xs block" style={{ color: INK_SOFT }}>
+        {unlimited
+          ? `${done} essai${done !== 1 ? 's' : ''} coté${done !== 1 ? 's' : ''}`
+          : cursor === -1
+          ? `${done} essais cotés${done > planned ? ` (${planned} prévus)` : ' — série complète'}`
+          : `Essai ${cursor + 1} sur ${planned}`}
+      </span>
+      {done > 0 && (
+        <button
+          onClick={undo}
+          className={`text-xs flex items-center gap-1 ${compact ? 'mt-0.5 py-1 px-1 -ml-1' : ''}`}
+          style={{ color: INK_SOFT }}
+        >
+          <RotateCcw size={12} /> annuler
+        </button>
+      )}
     </div>
   );
 
@@ -10899,20 +11255,7 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
           {boutonsGuidance}
         </>
       )}
-      <div className={`flex items-center justify-between ${compact ? 'mt-1' : 'mt-2'}`}>
-        <span className="text-xs" style={{ color: INK_SOFT }}>
-          {unlimited
-            ? `${done} essai${done !== 1 ? 's' : ''} coté${done !== 1 ? 's' : ''}`
-            : cursor === -1
-            ? `${done} essais cotés${done > planned ? ` (${planned} prévus)` : ' — série complète'}`
-            : `Essai ${cursor + 1} sur ${planned}`}
-        </span>
-        {done > 0 && (
-          <button onClick={undo} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
-            <RotateCcw size={12} /> annuler
-          </button>
-        )}
-      </div>
+      {pied}
     </div>
   );
 }

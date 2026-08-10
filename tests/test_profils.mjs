@@ -46,7 +46,7 @@ const NOMS = [
   'profilsDeLaClasse', 'axesUtilises', 'payloadProfils',
   'classeDe', 'normaliserInitiales', 'resoudreClasseImportee', 'proposerRapprochementsPersonnes',
   'nomDisponible', 'configCanonique', 'signatureObjectif', 'objectifDejaCote', 'diffObjectifsPersonne',
-  'sessionPourPersonne', 'sessionsHorsClasse', 'crisesHorsClasse', 'relevesHorsClasse', 'fusionnerSuiviRecu',
+  'sessionPourPersonne', 'filtrerToile', 'sessionsHorsClasse', 'crisesHorsClasse', 'relevesHorsClasse', 'fusionnerSuiviRecu',
 ];
 // proposerRapprochementsPersonnes appelle classeDe, qui replie sur
 // CLASSE_INCONNUE (constante sur une seule ligne, donc extraireLigne).
@@ -64,7 +64,7 @@ const {
   profilsDeLaClasse, axesUtilises, payloadProfils,
   classeDe, normaliserInitiales, resoudreClasseImportee, proposerRapprochementsPersonnes,
   nomDisponible, configCanonique, signatureObjectif, objectifDejaCote, diffObjectifsPersonne,
-  sessionPourPersonne, sessionsHorsClasse, crisesHorsClasse, relevesHorsClasse, fusionnerSuiviRecu,
+  sessionPourPersonne, filtrerToile, sessionsHorsClasse, crisesHorsClasse, relevesHorsClasse, fusionnerSuiviRecu,
 } = new Function(code)();
 
 /* ==================== profilsDeLaClasse ==================== */
