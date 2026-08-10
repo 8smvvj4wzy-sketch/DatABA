@@ -3586,7 +3586,11 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
       s.dragging = false;
       clearTimeout(s.timer);
       clearTimeout(s.timerRetour);
-      s.timerRetour = setTimeout(() => setPresseKey(keyOfRef.current(itemsRef.current[i])), REORDER_DELAI_RETOUR);
+      s.timerRetour = setTimeout(() => {
+        // La liste a pu changer sous le doigt : pas de retour visuel plutôt qu'une erreur
+        const it = itemsRef.current[i];
+        if (it !== undefined) setPresseKey(keyOfRef.current(it));
+      }, REORDER_DELAI_RETOUR);
       s.timer = setTimeout(() => {
         s.dragging = true;
         reorderDragging = true;
