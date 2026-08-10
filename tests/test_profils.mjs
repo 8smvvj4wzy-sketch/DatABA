@@ -1,6 +1,6 @@
 /* Profils répartis entre tablettes : sélection et payload d'export (PR1),
    rapprochement des personnes (PR3), signature et diff des objectifs (PR5),
-   fusion du suivi inter-groupes (PR9). Même principe que les autres suites :
+   fusion du suivi inter-classes (PR9). Même principe que les autres suites :
    les fonctions sont extraites de src/App.jsx et évaluées telles quelles,
    jamais recopiées. */
 
@@ -43,17 +43,17 @@ function extraireLigne(nom) {
 }
 
 const NOMS = [
-  'profilsDuGroupe', 'axesUtilises', 'payloadProfils',
-  'groupeDe', 'normaliserInitiales', 'resoudreGroupeImporte', 'proposerRapprochementsPersonnes',
+  'profilsDeLaClasse', 'axesUtilises', 'payloadProfils',
+  'classeDe', 'normaliserInitiales', 'resoudreClasseImportee', 'proposerRapprochementsPersonnes',
   'nomDisponible', 'configCanonique', 'signatureObjectif', 'objectifDejaCote', 'diffObjectifsPersonne',
-  'sessionPourPersonne', 'sessionsHorsGroupe', 'crisesHorsGroupe', 'relevesHorsGroupe', 'fusionnerSuiviRecu',
+  'sessionPourPersonne', 'sessionsHorsClasse', 'crisesHorsClasse', 'relevesHorsClasse', 'fusionnerSuiviRecu',
 ];
-// proposerRapprochementsPersonnes appelle groupeDe, qui replie sur
-// GROUPE_INCONNU (constante sur une seule ligne, donc extraireLigne).
+// proposerRapprochementsPersonnes appelle classeDe, qui replie sur
+// CLASSE_INCONNUE (constante sur une seule ligne, donc extraireLigne).
 // configCanonique dépend de trois listes de types, également sur une seule
 // ligne — PERCENT_TYPES doit être définie avant MASTERY_TYPES, qui la
 // référence (`[...PERCENT_TYPES, 'occurrence']`).
-const code = `const GROUPE_INCONNU = ${extraireLigne('GROUPE_INCONNU')};
+const code = `const CLASSE_INCONNUE = ${extraireLigne('CLASSE_INCONNUE')};
 const PERCENT_TYPES = ${extraireLigne('PERCENT_TYPES')};
 const MASTERY_TYPES = ${extraireLigne('MASTERY_TYPES')};
 const USES_GUIDANCE = ${extraireLigne('USES_GUIDANCE')};
@@ -61,26 +61,26 @@ ${NOMS.map(extraire).join('\n')}
 return { ${NOMS.join(', ')} };`;
 // eslint-disable-next-line no-new-func
 const {
-  profilsDuGroupe, axesUtilises, payloadProfils,
-  groupeDe, normaliserInitiales, resoudreGroupeImporte, proposerRapprochementsPersonnes,
+  profilsDeLaClasse, axesUtilises, payloadProfils,
+  classeDe, normaliserInitiales, resoudreClasseImportee, proposerRapprochementsPersonnes,
   nomDisponible, configCanonique, signatureObjectif, objectifDejaCote, diffObjectifsPersonne,
-  sessionPourPersonne, sessionsHorsGroupe, crisesHorsGroupe, relevesHorsGroupe, fusionnerSuiviRecu,
+  sessionPourPersonne, sessionsHorsClasse, crisesHorsClasse, relevesHorsClasse, fusionnerSuiviRecu,
 } = new Function(code)();
 
-/* ==================== profilsDuGroupe ==================== */
+/* ==================== profilsDeLaClasse ==================== */
 
 const parc = [
-  { id: 'a', initials: 'A.B.', groupeId: 'g1' },
-  { id: 'b', initials: 'C.D.', groupeId: 'g2' },
-  { id: 'c', initials: 'E.F.', groupeId: null },
-  { id: 'd', initials: 'G.H.' }, // pas encore migrée : groupeId absent
+  { id: 'a', initials: 'A.B.', classeId: 'g1' },
+  { id: 'b', initials: 'C.D.', classeId: 'g2' },
+  { id: 'c', initials: 'E.F.', classeId: null },
+  { id: 'd', initials: 'G.H.' }, // pas encore migrée : classeId absent
 ];
 
-t('ne garde que le groupe demandé', profilsDuGroupe(parc, 'g1').map((s) => s.id), ['a']);
-t('une personne sans groupe (null) n\'est jamais exportée', profilsDuGroupe(parc, null).map((s) => s.id), []);
-t('une personne sans groupe (absent) n\'est jamais exportée, même avec un groupeId vide en argument', profilsDuGroupe(parc, undefined).map((s) => s.id), []);
-t('aucun match : liste vide', profilsDuGroupe(parc, 'g9'), []);
-t('liste absente : pas de plantage', profilsDuGroupe(undefined, 'g1'), []);
+t('ne garde que la classe demandée', profilsDeLaClasse(parc, 'g1').map((s) => s.id), ['a']);
+t('une personne sans classe (null) n\'est jamais exportée', profilsDeLaClasse(parc, null).map((s) => s.id), []);
+t('une personne sans classe (absent) n\'est jamais exportée, même avec un classeId vide en argument', profilsDeLaClasse(parc, undefined).map((s) => s.id), []);
+t('aucun match : liste vide', profilsDeLaClasse(parc, 'g9'), []);
+t('liste absente : pas de plantage', profilsDeLaClasse(undefined, 'g1'), []);
 
 /* ==================== axesUtilises ==================== */
 
@@ -103,23 +103,30 @@ t('liste d\'axes absente : pas de plantage', axesUtilises(studentsAvecAxes, unde
 /* ==================== payloadProfils ==================== */
 
 const payload = payloadProfils({
-  students: [{ id: 'a', initials: 'A.B.', groupeId: 'g1' }],
-  groupes: [{ id: 'g1', name: 'Classe 1' }, { id: 'g2', name: 'Classe 2' }],
+  students: [{ id: 'a', initials: 'A.B.', classeId: 'g1' }],
+  classes: [{ id: 'g1', name: 'Classe 1' }, { id: 'g2', name: 'Classe 2' }],
   axesSuivi: [{ id: 'principal', nom: 'Suivi de stabilité', criteres: [] }],
   appareil: 'Tablette 1',
-  portee: 'groupe',
+  portee: 'classe',
   maintenant: '2026-08-06T09:00:00.000Z',
 });
 
 t('format et version', [payload.format, payload.version], ['aba-profils', 1]);
 t('horodatage dérivé de maintenant', payload.exportedAt, '2026-08-06T09:00:00.000Z');
-t('portee transmise telle quelle', payload.portee, 'groupe');
-t('la liste COMPLÈTE des groupes voyage, pas seulement celui exporté', payload.groupes.map((g) => g.id), ['g1', 'g2']);
+t('portee transmise telle quelle', payload.portee, 'classe');
+t('la liste COMPLÈTE des classes voyage, pas seulement celle exportée', payload.classes.map((g) => g.id), ['g1', 'g2']);
 t('les personnes et axes déjà filtrés par l\'appelant sont repris tels quels', [payload.students.length, payload.axesSuivi.length], [1, 1]);
 t('ni ateliers ni emploi du temps dans le payload', ['ateliers' in payload, 'emploiDuTemps' in payload], [false, false]);
 
+/* Alias de compatibilité pour un DatABA Manager pas encore mis à jour vers le
+   renommage Groupe → Classe : `groupes` voyage en plus de `classes`, et
+   chaque personne porte `groupeId` en plus de `classeId` — jamais à leur
+   place. */
+t('alias groupes = classes', payload.groupes, payload.classes);
+t('alias groupeId par personne, en plus de classeId', payload.students[0].groupeId, payload.students[0].classeId);
+
 const payloadComplet = payloadProfils({
-  students: [], groupes: [], axesSuivi: [], appareil: 'Centrale', portee: 'complet', maintenant: '2026-08-06T09:00:00.000Z',
+  students: [], classes: [], axesSuivi: [], appareil: 'Centrale', portee: 'complet', maintenant: '2026-08-06T09:00:00.000Z',
 });
 t('portee complet acceptée telle quelle', payloadComplet.portee, 'complet');
 
@@ -129,49 +136,49 @@ t('points, espaces et casse ignorés', [normaliserInitiales('A.B.'), normaliserI
 t('diacritiques retirés', normaliserInitiales('É.À.'), 'EA');
 t('chaîne vide ou absente', [normaliserInitiales(''), normaliserInitiales(undefined)], ['', '']);
 
-/* ==================== resoudreGroupeImporte ==================== */
+/* ==================== resoudreClasseImportee ==================== */
 
-const groupesLocaux = [{ id: 'gl1', name: 'Classe 1' }, { id: 'gl2', name: 'Classe 2' }];
+const classesLocales = [{ id: 'gl1', name: 'Classe 1' }, { id: 'gl2', name: 'Classe 2' }];
 
-t('résolution par nom, id local renvoyé', resoudreGroupeImporte(groupesLocaux, 'Classe 2'), 'gl2');
-t('aucun groupe local du même nom : null, jamais l\'id importé', resoudreGroupeImporte(groupesLocaux, 'Classe 9'), null);
-t('liste locale absente : pas de plantage', resoudreGroupeImporte(undefined, 'Classe 1'), null);
+t('résolution par nom, id local renvoyé', resoudreClasseImportee(classesLocales, 'Classe 2'), 'gl2');
+t('aucune classe locale du même nom : null, jamais l\'id importé', resoudreClasseImportee(classesLocales, 'Classe 9'), null);
+t('liste locale absente : pas de plantage', resoudreClasseImportee(undefined, 'Classe 1'), null);
 
 /* ==================== proposerRapprochementsPersonnes ==================== */
 
-const groupesImportesRappro = [{ id: 'gi1', name: 'Classe 1' }, { id: 'gi2', name: 'Classe 2' }];
-const groupesLocauxRappro = [{ id: 'gl1', name: 'Classe 1' }, { id: 'gl2', name: 'Classe 2' }];
+const classesImporteesRappro = [{ id: 'gi1', name: 'Classe 1' }, { id: 'gi2', name: 'Classe 2' }];
+const classesLocalesRappro = [{ id: 'gl1', name: 'Classe 1' }, { id: 'gl2', name: 'Classe 2' }];
 
 const studentsLocauxRappro = [
-  { id: 'loc-a', initials: 'A.B.', groupeId: 'gl1' },
-  { id: 'loc-b', initials: 'A.B.', groupeId: 'gl2' }, // homonyme, autre groupe
+  { id: 'loc-a', initials: 'A.B.', classeId: 'gl1' },
+  { id: 'loc-b', initials: 'A.B.', classeId: 'gl2' }, // homonyme, autre classe
 ];
 
 t('id déjà présent localement : déjà aligné, silencieux', proposerRapprochementsPersonnes(
-  [{ id: 'loc-a', initials: 'A.B.', groupeId: 'gi1' }], studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro
-), [{ importe: { id: 'loc-a', initials: 'A.B.', groupeId: 'gi1' }, statut: 'deja-aligne', candidatLocalId: 'loc-a' }]);
+  [{ id: 'loc-a', initials: 'A.B.', classeId: 'gi1' }], studentsLocauxRappro, classesImporteesRappro, classesLocalesRappro
+), [{ importe: { id: 'loc-a', initials: 'A.B.', classeId: 'gi1' }, statut: 'deja-aligne', candidatLocalId: 'loc-a' }]);
 
 const rapproSansIdConnu = proposerRapprochementsPersonnes(
-  [{ id: 'imp-x', initials: 'A.B.', groupeId: 'gi1' }], studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro
+  [{ id: 'imp-x', initials: 'A.B.', classeId: 'gi1' }], studentsLocauxRappro, classesImporteesRappro, classesLocalesRappro
 );
-t('mêmes initiales ET même groupe résolu : candidat proposé, pas appliqué', [rapproSansIdConnu[0].statut, rapproSansIdConnu[0].candidatLocalId], ['a-confirmer', 'loc-a']);
+t('mêmes initiales ET même classe résolue : candidat proposé, pas appliqué', [rapproSansIdConnu[0].statut, rapproSansIdConnu[0].candidatLocalId], ['a-confirmer', 'loc-a']);
 
-const rapproAutreGroupe = proposerRapprochementsPersonnes(
-  [{ id: 'imp-y', initials: 'A.B.', groupeId: 'gi2' }], studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro
+const rapproAutreClasse = proposerRapprochementsPersonnes(
+  [{ id: 'imp-y', initials: 'A.B.', classeId: 'gi2' }], studentsLocauxRappro, classesImporteesRappro, classesLocalesRappro
 );
-t('même initiales mais groupe résolu différent : candidate l\'homonyme du bon groupe, pas l\'autre', rapproAutreGroupe[0].candidatLocalId, 'loc-b');
+t('même initiales mais classe résolue différente : candidate l\'homonyme de la bonne classe, pas l\'autre', rapproAutreClasse[0].candidatLocalId, 'loc-b');
 
 const rapproNouvelle = proposerRapprochementsPersonnes(
-  [{ id: 'imp-z', initials: 'Z.Z.', groupeId: 'gi1' }], studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro
+  [{ id: 'imp-z', initials: 'Z.Z.', classeId: 'gi1' }], studentsLocauxRappro, classesImporteesRappro, classesLocalesRappro
 );
 t('aucune correspondance : nouvelle personne', [rapproNouvelle[0].statut, rapproNouvelle[0].candidatLocalId], ['nouvelle', null]);
 
-const rapproGroupeInconnuLocalement = proposerRapprochementsPersonnes(
-  [{ id: 'imp-w', initials: 'A.B.', groupeId: 'gi-fantome' }], studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro
+const rapproClasseInconnueLocalement = proposerRapprochementsPersonnes(
+  [{ id: 'imp-w', initials: 'A.B.', classeId: 'gi-fantome' }], studentsLocauxRappro, classesImporteesRappro, classesLocalesRappro
 );
-t('groupe importé introuvable dans la liste importée : aucun candidat, plutôt que de risquer un mélange', rapproGroupeInconnuLocalement[0].statut, 'nouvelle');
+t('classe importée introuvable dans la liste importée : aucun candidat, plutôt que de risquer un mélange', rapproClasseInconnueLocalement[0].statut, 'nouvelle');
 
-t('liste importée absente : pas de plantage', proposerRapprochementsPersonnes(undefined, studentsLocauxRappro, groupesImportesRappro, groupesLocauxRappro), []);
+t('liste importée absente : pas de plantage', proposerRapprochementsPersonnes(undefined, studentsLocauxRappro, classesImporteesRappro, classesLocalesRappro), []);
 
 /* ==================== nomDisponible ==================== */
 
@@ -261,30 +268,30 @@ t('sessionPourPersonne : priorityOrder filtré', projA.priorityOrder, ['a|oa1'])
 t('sessionPourPersonne : personne absente de la séance → studentIds vide', sessionPourPersonne(seanceMixte, 'z').studentIds, []);
 t('sessionPourPersonne : séance absente, pas de plantage', sessionPourPersonne(null, 'a'), null);
 
-/* ==================== sessionsHorsGroupe / crisesHorsGroupe / relevesHorsGroupe ==================== */
+/* ==================== sessionsHorsClasse / crisesHorsClasse / relevesHorsClasse ==================== */
 
-const studentsGroupesTest = [
-  { id: 'a', initials: 'A', groupeId: 'g1' },
-  { id: 'b', initials: 'B', groupeId: 'g2' },
-  { id: 'c', initials: 'C', groupeId: null },
+const studentsClassesTest = [
+  { id: 'a', initials: 'A', classeId: 'g1' },
+  { id: 'b', initials: 'B', classeId: 'g2' },
+  { id: 'c', initials: 'C', classeId: null },
 ];
 const seanceTrois = {
   ...seanceMixte, studentIds: ['a', 'b', 'c'],
   selectedObjectives: { a: ['oa1'], b: ['ob1'], c: [] },
   data: { a: {}, b: {}, c: {} }, presence: {}, notes: {}, hidden: {},
 };
-const horsGroupe = sessionsHorsGroupe([seanceTrois], studentsGroupesTest, 'g1');
+const horsClasse = sessionsHorsClasse([seanceTrois], studentsClassesTest, 'g1');
 
-t('sessionsHorsGroupe : une ligne pour la personne d\'un autre groupe', horsGroupe.length, 1);
-t('sessionsHorsGroupe : projetée sur la bonne personne, ni le même groupe ni la personne sans groupe', horsGroupe[0].studentIds, ['b']);
-t('sessionsHorsGroupe : sans groupeAppareil, rien ne part', sessionsHorsGroupe([seanceTrois], studentsGroupesTest, null), []);
+t('sessionsHorsClasse : une ligne pour la personne d\'une autre classe', horsClasse.length, 1);
+t('sessionsHorsClasse : projetée sur la bonne personne, ni la même classe ni la personne sans classe', horsClasse[0].studentIds, ['b']);
+t('sessionsHorsClasse : sans classeAppareil, rien ne part', sessionsHorsClasse([seanceTrois], studentsClassesTest, null), []);
 
 const crisesTest = [{ id: 'cr1', studentId: 'a' }, { id: 'cr2', studentId: 'b' }, { id: 'cr3', studentId: 'c' }];
-t('crisesHorsGroupe : seule la crise de l\'autre groupe part', crisesHorsGroupe(crisesTest, studentsGroupesTest, 'g1').map((c) => c.id), ['cr2']);
-t('crisesHorsGroupe : sans groupeAppareil, rien ne part', crisesHorsGroupe(crisesTest, studentsGroupesTest, null), []);
+t('crisesHorsClasse : seule la crise de l\'autre classe part', crisesHorsClasse(crisesTest, studentsClassesTest, 'g1').map((c) => c.id), ['cr2']);
+t('crisesHorsClasse : sans classeAppareil, rien ne part', crisesHorsClasse(crisesTest, studentsClassesTest, null), []);
 
 const relevesTest = [{ id: 'r1', studentId: 'a' }, { id: 'r2', studentId: 'b' }];
-t('relevesHorsGroupe : seul le relevé de l\'autre groupe part', relevesHorsGroupe(relevesTest, studentsGroupesTest, 'g1').map((r) => r.id), ['r2']);
+t('relevesHorsClasse : seul le relevé de l\'autre classe part', relevesHorsClasse(relevesTest, studentsClassesTest, 'g1').map((r) => r.id), ['r2']);
 
 /* ==================== fusionnerSuiviRecu ==================== */
 

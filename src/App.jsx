@@ -7,7 +7,7 @@ import {
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
   ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, GripVertical, CalendarClock, CalendarDays, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
-  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon, Info, School,
+  Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon, Info, School, CheckCircle2,
 } from 'lucide-react';
 
 /* ==================== Design tokens ====================
@@ -183,6 +183,7 @@ const TYPES = {
   interval: { label: 'Intervalles', short: 'Intervalles', icon: LayoutGrid, color: CAT_LILAC },
   chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: CAT_CYAN },
   balance: { label: 'Équilibre', short: 'Équilibre', icon: Route, color: CAT_INDIGO },
+  probe: { label: 'Probe (1 / 0)', short: 'Probe', icon: CheckCircle2, color: CAT_AMBER },
 };
 
 /* Couleur commune à tout ce qui mesure une durée : le chronomètre par essai
@@ -306,16 +307,28 @@ const DEFAULT_INTERVAL_LEVELS = [
 const LEVEL_COLORS = [CAT_TEAL, CAT_INDIGO, CAT_AMBER, CAT_CORAL, CAT_VIOLET, CAT_CYAN, CAT_LILAC, CAT_SLATE];
 
 /* Types dont le score est un pourcentage : eux seuls portent des cibles successives */
-const PERCENT_TYPES = ['trials', 'interval', 'chaining', 'balance'];
+const PERCENT_TYPES = ['trials', 'interval', 'chaining', 'balance', 'probe'];
 /* Types admettant un critère d'acquisition. Le comptage d'occurrences en a un
    lui aussi, mais sur un nombre brut et souvent dans l'autre sens : un
    comportement problème est acquis quand il passe *sous* le seuil. */
 const MASTERY_TYPES = [...PERCENT_TYPES, 'occurrence'];
-/* Types dont la cotation repose sur des niveaux de guidance */
-const USES_GUIDANCE = ['trials', 'chaining'];
+/* Types dont la cotation repose sur des niveaux de guidance. Pour Probe,
+   c'est une option du formulaire (`config.useGuidance`) plutôt qu'un mode
+   imposé — la cotation 1/0 seule reste la voie par défaut. */
+const USES_GUIDANCE = ['trials', 'chaining', 'probe'];
 /* `sens` : 'min' = au moins le seuil (le défaut historique, et le seul sens qui
    ait du sens pour un pourcentage de réussite), 'max' = au plus le seuil. */
 const DEFAULT_MASTERY = { threshold: 80, sessions: 3, unit: 'sessions', sens: 'min' };
+/* Probe se valide en général par 3 jours consécutifs à « réussi » — un
+   critère par JOUR, pas par séance : plusieurs probes le même jour ne
+   comptent que pour un point (voir objectivePoints/toDayPoints, déjà conçus
+   pour cette unité). */
+const DEFAULT_MASTERY_PROBE = { threshold: 100, sessions: 3, unit: 'days', sens: 'min' };
+/* Fréquences de probe possibles par jour, et le libellé de chaque créneau
+   quand il y en a deux (matin avant 13h, après-midi ensuite — heure locale,
+   jamais UTC, même principe que jourLocal). */
+const PROBE_FREQUENCES = [1, 2];
+const PROBE_CRENEAUX = { matin: 'Matin', aprem: 'Après-midi' };
 
 /* ==================== Sécurité : code PIN et sauvegarde chiffrée ====================
    Tout se fait avec l'API Web Crypto du navigateur, sans aucun serveur.
@@ -953,6 +966,7 @@ function emptyEntry(obj) {
     if (obj.type === 'interval') return { marks: {}, segments: [] };
     if (obj.type === 'chaining') return { steps: {} };
     if (obj.type === 'balance') return { trials: [{ steps: {} }] };
+    if (obj.type === 'probe') return { value: null, guidance: null, creneau: null };
     return null;
   })();
   if (!base) return {};
@@ -977,6 +991,7 @@ function entryMatches(obj, entry) {
   if (obj.type === 'interval') return !!entry.marks;
   if (obj.type === 'chaining') return !!entry.steps;
   if (obj.type === 'balance') return Array.isArray(entry.trials) || !!entry.steps;
+  if (obj.type === 'probe') return entry.value === 0 || entry.value === 1 || 'guidance' in entry;
   return false;
 }
 
@@ -1146,7 +1161,7 @@ function personnesAvecEquilibre(students) {
 }
 
 /* Préremplissage complet d'un atelier au moment où on l'ouvre pour lancer une
-   séance : la classe prévue ce jour-là, avec pour chacun ses objectifs
+   séance : les personnes prévues ce jour-là, avec pour chacune ses objectifs
    mémorisés (les nouveaux depuis la mémorisation cochés d'office), à défaut
    ses prioritaires, à défaut tous. Extraite pour que le lancement rapide
    (bouton ▶ sur une ligne repliée) et le dépli complet calculent exactement
@@ -1198,6 +1213,10 @@ function descriptionObjectif(obj) {
   if (obj.type === 'trials') s += obj.config.trialCount ? ` · ${obj.config.trialCount} essais prévus` : ' · essais sans limite';
   if (obj.type === 'interval') s += ` · toutes les ${fmtDuration(intervalStepSec(obj) * 1000)} · ${INTERVAL_MODE_SHORT[obj.config.intervalMode] || 'momentané'} · ${(obj.config.levels || []).length} niveaux`;
   if (obj.type === 'chaining' || obj.type === 'balance') s += ` · ${(obj.config.steps || []).length} étapes`;
+  if (obj.type === 'probe') {
+    const parJour = obj.config.probesParJour || 1;
+    s += ` · ${parJour} par jour${parJour > 1 ? ' (matin / après-midi)' : ''}${obj.config.useGuidance ? ' · par niveaux de guidance' : ' · 1 ou 0'}`;
+  }
   if (obj.config.mastery) s += ` · acquis ${libelleSeuil(obj)} sur ${obj.config.mastery.sessions} ${obj.config.mastery.unit === 'days' ? 'jours' : 'séances'}`;
   if (obj.config.avecCompteur) s += ' · compteur';
   if (obj.config.avecChrono) {
@@ -1303,6 +1322,92 @@ function signatureObjectif(obj) {
    orphelins. */
 function objectifDejaCote(sessions, objectiveId) {
   return (sessions || []).some((se) => se && se.objectiveSnapshot && Object.prototype.hasOwnProperty.call(se.objectiveSnapshot, objectiveId));
+}
+
+/* Probes déjà faites AUJOURD'HUI pour un objectif d'une personne, toutes
+   séances confondues — un même objectif Probe peut revenir dans plusieurs
+   ateliers le même jour, et compte pour un seul quota, pas un par atelier.
+   `sessionCourante` s'ajoute aux séances déjà enregistrées : la séance en
+   cours n'est écrite qu'à sa fin. Le nombre de CRÉNEAUX distincts déjà cotés
+   borne le quota (config.probesParJour), pas le nombre de cotations — deux
+   probes au même créneau ne comptent qu'une fois. */
+function probesDuJour(sessions, sessionCourante, studentId, objectiveId, ref) {
+  const creneaux = new Set();
+  const examiner = (se) => {
+    if (!se || !memeJour(new Date(se.date), ref)) return;
+    const obj = se.objectiveSnapshot && se.objectiveSnapshot[objectiveId];
+    if (!obj || obj.type !== 'probe') return;
+    const entry = se.data && se.data[studentId] && se.data[studentId][objectiveId];
+    if (!entry) return;
+    const cote = obj.config.useGuidance ? !!entry.guidance : (entry.value === 0 || entry.value === 1);
+    if (!cote) return;
+    creneaux.add(entry.creneau || 'matin');
+  };
+  (sessions || []).forEach(examiner);
+  examiner(sessionCourante);
+  return { faites: creneaux.size, creneaux: Array.from(creneaux) };
+}
+
+/* Une cotation a-t-elle vraiment été saisie, au-delà de la forme vide posée
+   par emptyEntry ? entryMatches ne vérifie que la FORME (toujours vraie une
+   fois l'entrée créée, qu'on ait coté quelque chose ou non — voir son usage
+   ailleurs) ; ici on compare au contenu réellement vierge. */
+function objectifEstCote(obj, entry) {
+  if (!entry || !entryMatches(obj, entry)) return false;
+  return JSON.stringify(entry) !== JSON.stringify(emptyEntry(obj));
+}
+
+/* Objectifs prévus par l'emploi du temps du jour et pas encore cotés
+   aujourd'hui — pour la fenêtre « Prévus non cotés » de l'écran Suivi. Un
+   même objectif présent dans plusieurs ateliers du jour ne ressort qu'une
+   fois, avec la liste de ces ateliers. `sessionCourante` s'ajoute à
+   `sessions`, même principe que probesDuJour : une séance n'est écrite dans
+   l'historique qu'à sa fin, et un atelier en cours ne doit pas réapparaître
+   comme « non coté » sous prétexte que rien n'est encore enregistré. */
+function objectifsPrevusNonCotes(students, ateliers, emploiDuTemps, sessions, sessionCourante, maintenant) {
+  const ref = new Date(maintenant);
+  const jour = ref.getDay();
+  const duJour = ateliersDuJour(emploiDuTemps, ateliers, jour);
+
+  // studentId -> objectiveId -> Set(nom d'atelier)
+  const prevus = {};
+  duJour.forEach((atelier) => {
+    personnesPrevues(atelier, jour).forEach((sid) => {
+      const oids = (atelier.usualObjectives || {})[sid] || [];
+      if (!oids.length) return;
+      if (!prevus[sid]) prevus[sid] = new Map();
+      oids.forEach((oid) => {
+        if (!prevus[sid].has(oid)) prevus[sid].set(oid, new Set());
+        prevus[sid].get(oid).add(atelier.name);
+      });
+    });
+  });
+
+  const toutes = sessionCourante ? [...(sessions || []), sessionCourante] : (sessions || []);
+  const duJourSessions = toutes.filter((se) => se && memeJour(new Date(se.date), ref));
+
+  const resultat = [];
+  (students || []).forEach((st) => {
+    const objectifsPersonne = prevus[st.id];
+    if (!objectifsPersonne) return;
+    const lignes = [];
+    objectifsPersonne.forEach((ateliersSet, oid) => {
+      const obj = (st.objectives || []).find((o) => o.id === oid);
+      if (!obj) return;
+      if (obj.type === 'probe') {
+        const quota = obj.config.probesParJour || 1;
+        const { faites } = probesDuJour(duJourSessions, null, st.id, oid, ref);
+        if (faites >= quota) return;
+        lignes.push({ objectifId: oid, nom: obj.name, type: obj.type, ateliers: Array.from(ateliersSet), probeReste: quota - faites, probeQuota: quota });
+        return;
+      }
+      const dejaCote = duJourSessions.some((se) => objectifEstCote(obj, se.data && se.data[st.id] && se.data[st.id][oid]));
+      if (dejaCote) return;
+      lignes.push({ objectifId: oid, nom: obj.name, type: obj.type, ateliers: Array.from(ateliersSet), probeReste: null, probeQuota: null });
+    });
+    if (lignes.length) resultat.push({ studentId: st.id, initials: st.initials, objectifs: lignes });
+  });
+  return resultat;
 }
 
 /* Compare les objectifs importés d'une personne à ceux de son homologue
@@ -1444,10 +1549,10 @@ function supprimerPersonne(session, sid) {
 }
 
 /* Symétrique inverse de supprimerPersonne : au lieu de retirer une personne
-   d'une séance, ne garde qu'elle. Une séance mixte (deux groupes dans le même
+   d'une séance, ne garde qu'elle. Une séance mixte (deux classes dans le même
    atelier) ne doit jamais transmettre à une autre tablette les données d'un
    participant qu'elle n'a pas à détenir — c'est la brique de base du renvoi
-   du suivi hors groupe (sessionsHorsGroupe). */
+   du suivi hors classe (sessionsHorsClasse). */
 function sessionPourPersonne(session, sid) {
   if (!session) return session;
   const garder = (obj) => {
@@ -1711,6 +1816,16 @@ function jourLocal(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/* Créneau local d'un horodatage pour un objectif Probe coté deux fois par
+   jour : 'matin' avant 13h heure locale, 'aprem' ensuite. Heure locale,
+   jamais UTC — même principe que jourLocal, pour ne pas faire basculer un
+   probe de créneau selon le fuseau du navigateur. */
+function creneauProbe(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.getHours() < 13 ? 'matin' : 'aprem';
+}
+
 /* L'intervenant en poste n'est valable que pour le jour où il a été choisi :
    périmé dès que la date locale change, il redevient vide et se redemande
    plutôt que d'attribuer silencieusement les relevés du lendemain à
@@ -1827,12 +1942,12 @@ function migrerEnvoisCrises(crises, sessions) {
    essai », qui restent vides plutôt qu'à zéro pour ne pas fausser les
    moyennes. */
 /* Trois colonnes ajoutées en bout de ligne, communes aux deux formes de
-   relevé : le groupe de la personne (pas celui de la tablette qui exporte —
-   une personne cotée hors de son groupe garde le sien), et le contexte du
+   relevé : la classe de la personne (pas celle de la tablette qui exporte —
+   une personne cotée hors de sa classe garde la sienne), et le contexte du
    geste tel qu'enregistré par `contexteReleve`. Un relevé plus ancien que la
    traçabilité, ou pris hors séance, laisse ces cases vides plutôt que de
    deviner. */
-function lignesSuiviExport(releves, students, suivis, studentFilter, groupes, intervenants, ateliers) {
+function lignesSuiviExport(releves, students, suivis, studentFilter, classes, intervenants, ateliers) {
   const keep = (sid) => !studentFilter || studentFilter.includes(sid);
   const intervenantName = (id) => (id && ((intervenants || []).find((i) => i.id === id) || {}).name) || '';
   const atelierName = (id) => (id && ((ateliers || []).find((a) => a.id === id) || {}).name) || '';
@@ -1843,7 +1958,7 @@ function lignesSuiviExport(releves, students, suivis, studentFilter, groupes, in
   return tries.map((r, i) => {
     const st = (students || []).find((s) => s.id === r.studentId);
     const d = new Date(r.timestamp);
-    const contexte = [nomGroupe(groupes, st && st.groupeId), intervenantName(r.intervenantId), atelierName(r.atelierId)];
+    const contexte = [nomClasse(classes, st && st.classeId), intervenantName(r.intervenantId), atelierName(r.atelierId)];
     // Un compteur n'a ni durée (chaque appui est ponctuel) ni critère : une
     // ligne à part, plutôt que de forcer sa forme dans celle d'un relevé de
     // suivi continu.
@@ -1932,54 +2047,60 @@ function migrerStudentsSuivi(students) {
   });
 }
 
-/* `student.groupeId` : absent des tablettes déjà en service, ajouté à `null`
+/* `student.classeId` : absent des tablettes déjà en service, ajouté à `null`
    plutôt que deviné — c'est cette valeur qui garde une personne visible sur
-   toutes les tablettes tant que son groupe n'est pas renseigné. Idempotente,
-   même principe que migrerStudentsSuivi. */
-function migrerStudentsGroupe(students) {
-  return (students || []).map((s) => ('groupeId' in s ? s : { ...s, groupeId: null }));
+   toutes les tablettes tant que sa classe n'est pas renseignée. Idempotente,
+   même principe que migrerStudentsSuivi. Reprend aussi l'ancien
+   `groupeId` (renommage Groupe → Classe) tant qu'il traîne sur une
+   personne restaurée depuis une sauvegarde d'avant le renommage. */
+function migrerStudentsClasse(students) {
+  return (students || []).map((s) => {
+    if ('classeId' in s) return s;
+    const { groupeId, ...rest } = s;
+    return { ...rest, classeId: groupeId !== undefined ? groupeId : null };
+  });
 }
 
 /* Personnes affichées sur l'écran Suivi de cette tablette. Deux replis
    volontaires, sans lesquels la mise à jour viderait l'écran le jour de sa
-   mise en ligne : une tablette pas encore rattachée à un groupe voit tout le
-   monde, et une personne sans groupe reste visible partout tant qu'elle n'est
-   pas rangée. Le filtre ne se referme donc qu'à mesure que les groupes sont
-   réellement configurés — jamais d'un coup, jamais par défaut. */
-function personnesVisibles(students, groupeAppareil) {
-  if (!groupeAppareil) return students || [];
-  return (students || []).filter((s) => !s.groupeId || s.groupeId === groupeAppareil);
+   mise en ligne : une tablette pas encore rattachée à une classe voit tout le
+   monde, et une personne sans classe reste visible partout tant qu'elle n'est
+   pas rangée. Le filtre ne se referme donc qu'à mesure que les classes sont
+   réellement configurées — jamais d'un coup, jamais par défaut. */
+function personnesVisibles(students, classeAppareil) {
+  if (!classeAppareil) return students || [];
+  return (students || []).filter((s) => !s.classeId || s.classeId === classeAppareil);
 }
 
-/* Repli pour un groupe supprimé alors que des personnes le portent encore :
+/* Repli pour une classe supprimée alors que des personnes la portent encore :
    jamais de suppression en cascade, même principe que CRITERE_INCONNU. Un
-   `groupeId` absent (aucun groupe assigné) est distinct d'un groupe
-   supprimé — seul le second replie sur GROUPE_INCONNU. */
-const GROUPE_INCONNU = { id: null, name: 'Groupe retiré' };
-function groupeDe(groupes, id) {
+   `classeId` absent (aucune classe assignée) est distinct d'une classe
+   supprimée — seul le second replie sur CLASSE_INCONNUE. */
+const CLASSE_INCONNUE = { id: null, name: 'Classe retirée' };
+function classeDe(classes, id) {
   if (!id) return null;
-  return (groupes || []).find((g) => g && g.id === id) || GROUPE_INCONNU;
+  return (classes || []).find((g) => g && g.id === id) || CLASSE_INCONNUE;
 }
-function nomGroupe(groupes, id) {
-  const g = groupeDe(groupes, id);
+function nomClasse(classes, id) {
+  const g = classeDe(classes, id);
   return g ? g.name : '';
 }
 
 /* Personnes exportées vers une autre tablette : filtre STRICT, à l'inverse de
-   personnesVisibles qui garde une personne sans groupe partout. Ici l'absence
-   de groupe ne doit jamais faire partir une personne dans « mes profils » —
-   l'ambiguïté de propriété serait pire qu'une omission. Un `groupeId` vide en
+   personnesVisibles qui garde une personne sans classe partout. Ici l'absence
+   de classe ne doit jamais faire partir une personne dans « mes profils » —
+   l'ambiguïté de propriété serait pire qu'une omission. Un `classeId` vide en
    argument (tablette pas encore rattachée) renvoie donc toujours une liste
-   vide, même si des personnes locales partagent ce même « aucun groupe » —
-   « exporter les profils de mon groupe » n'a pas de sens sans groupe. */
-function profilsDuGroupe(students, groupeId) {
-  if (!groupeId) return [];
-  return (students || []).filter((s) => s.groupeId === groupeId);
+   vide, même si des personnes locales partagent cette même « aucune classe » —
+   « exporter les profils de ma classe » n'a pas de sens sans classe. */
+function profilsDeLaClasse(students, classeId) {
+  if (!classeId) return [];
+  return (students || []).filter((s) => s.classeId === classeId);
 }
 
 /* Les seuls axes de suivi continu réellement référencés par les personnes
    exportées — pas tout le référentiel de la tablette source, qui peut porter
-   des axes propres à d'autres groupes. */
+   des axes propres à d'autres classes. */
 function axesUtilises(students, axesSuivi) {
   const ids = new Set();
   (students || []).forEach((s) => (s.suivisActifs || []).forEach((id) => ids.add(id)));
@@ -1987,39 +2108,44 @@ function axesUtilises(students, axesSuivi) {
 }
 
 /* Fichier destiné à une autre tablette : les profils (personnes + objectifs)
-   d'un groupe, ou le référentiel complet lors d'une rediffusion depuis la
-   tablette centrale (`portee: 'complet'`). La liste COMPLÈTE des groupes
+   d'une classe, ou le référentiel complet lors d'une rediffusion depuis la
+   tablette centrale (`portee: 'complet'`). La liste COMPLÈTE des classes
    voyage toujours, quelle que soit la portée : c'est elle qui permet de
-   résoudre un groupe importé par son nom plutôt que par un id qui n'a aucun
-   sens sur la tablette qui reçoit (voir resoudreGroupeImporte). Ni ateliers,
+   résoudre une classe importée par son nom plutôt que par un id qui n'a aucun
+   sens sur la tablette qui reçoit (voir resoudreClasseImportee). Ni ateliers,
    ni emploi du temps, ni les listes d'objectifs propres à un atelier — hors
    périmètre d'un profil de personne, déjà exclues d'exportConfig pour la
    même raison. */
-function payloadProfils({ students, groupes, axesSuivi, appareil, portee, maintenant }) {
+function payloadProfils({ students, classes, axesSuivi, appareil, portee, maintenant }) {
   return {
     format: 'aba-profils',
     version: 1,
     exportedAt: new Date(maintenant).toISOString(),
     appareil,
     portee,
-    groupes,
-    students,
+    classes,
+    // Alias de compatibilité pour un DatABA Manager pas encore mis à jour vers
+    // le renommage Groupe → Classe — même principe que
+    // releverAliasStabilite : la clé historique voyage en plus de la nouvelle,
+    // jamais à sa place.
+    groupes: classes,
+    students: (students || []).map((s) => ({ ...s, groupeId: s.classeId })),
     axesSuivi,
   };
 }
 
-/* Séances contenant au moins une personne d'un autre groupe que celui de
+/* Séances contenant au moins une personne d'une autre classe que celle de
    cette tablette, projetées via sessionPourPersonne — une ligne par personne
    concernée, jamais la séance entière : une séance mixte ne doit repartir que
-   pour son propriétaire. Une personne sans groupe reste sur place, propriété
+   pour son propriétaire. Une personne sans classe reste sur place, propriété
    non tranchée, on ne devine pas — même principe que personnesVisibles. */
-function sessionsHorsGroupe(sessions, students, groupeAppareil) {
-  if (!groupeAppareil) return [];
+function sessionsHorsClasse(sessions, students, classeAppareil) {
+  if (!classeAppareil) return [];
   const resultats = [];
   (sessions || []).forEach((se) => {
     (se.studentIds || []).forEach((sid) => {
       const st = (students || []).find((s) => s.id === sid);
-      if (st && st.groupeId && st.groupeId !== groupeAppareil) resultats.push(sessionPourPersonne(se, sid));
+      if (st && st.classeId && st.classeId !== classeAppareil) resultats.push(sessionPourPersonne(se, sid));
     });
   });
   return resultats;
@@ -2027,18 +2153,18 @@ function sessionsHorsGroupe(sessions, students, groupeAppareil) {
 
 /* crisis.studentId et releve.studentId sont déjà singuliers : un simple
    filtre suffit, pas de projection comme pour les séances. */
-function crisesHorsGroupe(crises, students, groupeAppareil) {
-  if (!groupeAppareil) return [];
+function crisesHorsClasse(crises, students, classeAppareil) {
+  if (!classeAppareil) return [];
   return (crises || []).filter((c) => {
     const st = (students || []).find((s) => s.id === c.studentId);
-    return !!(st && st.groupeId && st.groupeId !== groupeAppareil);
+    return !!(st && st.classeId && st.classeId !== classeAppareil);
   });
 }
-function relevesHorsGroupe(releves, students, groupeAppareil) {
-  if (!groupeAppareil) return [];
+function relevesHorsClasse(releves, students, classeAppareil) {
+  if (!classeAppareil) return [];
   return (releves || []).filter((r) => {
     const st = (students || []).find((s) => s.id === r.studentId);
-    return !!(st && st.groupeId && st.groupeId !== groupeAppareil);
+    return !!(st && st.classeId && st.classeId !== classeAppareil);
   });
 }
 
@@ -2110,31 +2236,32 @@ function normaliserInitiales(txt) {
     .toUpperCase();
 }
 
-/* Un groupe importé ne se résout JAMAIS par son id brut — les groupes ne sont
-   pas remappés à l'import (contrairement aux ateliers, voir importConfig) et
-   un id d'origine n'a aucun sens sur la tablette qui reçoit. La résolution se
-   fait par nom, seule information stable entre deux tablettes. */
-function resoudreGroupeImporte(groupesLocaux, nomGroupeImporte) {
-  const local = (groupesLocaux || []).find((g) => g && g.name === nomGroupeImporte);
+/* Une classe importée ne se résout JAMAIS par son id brut — les classes ne
+   sont pas remappées à l'import (contrairement aux ateliers, voir
+   importConfig) et un id d'origine n'a aucun sens sur la tablette qui reçoit.
+   La résolution se fait par nom, seule information stable entre deux
+   tablettes. */
+function resoudreClasseImportee(classesLocales, nomClasseImportee) {
+  const local = (classesLocales || []).find((g) => g && g.name === nomClasseImportee);
   return local ? local.id : null;
 }
 
 /* Propose un rapprochement pour chaque personne importée, ne l'applique
    jamais : un id déjà présent localement est un signe fiable (import répété,
-   tablette déjà alignée) ; sinon, mêmes initiales normalisées ET même groupe
-   résolu ne valent que comme suggestion. Deux vrais homonymes du même groupe
-   produisent la même proposition — limite assumée, à corriger à la main dans
-   l'écran de rapprochement. */
-function proposerRapprochementsPersonnes(studentsImportes, studentsLocaux, groupesImportes, groupesLocaux) {
+   tablette déjà alignée) ; sinon, mêmes initiales normalisées ET même classe
+   résolue ne valent que comme suggestion. Deux vrais homonymes de la même
+   classe produisent la même proposition — limite assumée, à corriger à la
+   main dans l'écran de rapprochement. */
+function proposerRapprochementsPersonnes(studentsImportes, studentsLocaux, classesImportees, classesLocales) {
   return (studentsImportes || []).map((importe) => {
     if ((studentsLocaux || []).some((s) => s.id === importe.id)) {
       return { importe, statut: 'deja-aligne', candidatLocalId: importe.id };
     }
-    const groupeImp = groupeDe(groupesImportes, importe.groupeId);
-    const groupeResolu = groupeImp ? resoudreGroupeImporte(groupesLocaux, groupeImp.name) : null;
+    const classeImp = classeDe(classesImportees, importe.classeId);
+    const classeResolue = classeImp ? resoudreClasseImportee(classesLocales, classeImp.name) : null;
     const cible = normaliserInitiales(importe.initials);
     const candidat = (studentsLocaux || []).find(
-      (s) => normaliserInitiales(s.initials) === cible && (s.groupeId || null) === groupeResolu
+      (s) => normaliserInitiales(s.initials) === cible && (s.classeId || null) === classeResolue
     );
     if (candidat) return { importe, statut: 'a-confirmer', candidatLocalId: candidat.id };
     return { importe, statut: 'nouvelle', candidatLocalId: null };
@@ -2283,7 +2410,7 @@ function planifierJour(emploiDuTemps, ateliers, sessions, maintenant) {
 }
 
 /* ==================== Personnes prévues, par jour ====================
-   Un même atelier — le sport, typiquement — n'accueille pas le même groupe
+   Un même atelier — le sport, typiquement — n'accueille pas la même classe
    selon le jour. Plutôt qu'une liste par case de l'emploi du temps, qu'il
    faudrait ressaisir même quand rien ne change, l'atelier garde sa liste
    commune (`usualStudentIds`) et ne porte une variante que pour les jours qui
@@ -2322,8 +2449,8 @@ function joursAjustes(atelier, jours) {
 }
 
 /* Résumé d'un atelier pour sa ligne repliée dans PanneauEmploiDuTemps : les
-   jours où il a lieu, l'effectif de sa classe habituelle, et les jours qui
-   s'en écartent. */
+   jours où il a lieu, son effectif habituel, et les jours qui s'en
+   écartent. */
 function resumeAtelier(atelier, emploiDuTemps, students) {
   const jours = JOURS.filter((j) => ((emploiDuTemps && emploiDuTemps[String(j.k)]) || []).includes(atelier.id)).map((j) => j.k);
   const studentIds = (atelier.usualStudentIds || []).filter((sid) => (students || []).some((s) => s.id === sid));
@@ -2338,7 +2465,7 @@ function resumeAtelier(atelier, emploiDuTemps, students) {
    visuelle, elle rendait le reste inaccessible. Un jour replié ne coûte rien à
    l'affichage, il n'y a donc plus de raison de tronquer quoi que ce soit. */
 function grouperParJour(items, dateDe) {
-  const groupes = [];
+  const classes = [];
   const index = {};
   (items || []).forEach((it) => {
     const d = new Date(dateDe(it));
@@ -2346,12 +2473,12 @@ function grouperParJour(items, dateDe) {
     const cle = valide ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : '0000-00-00';
     if (!index[cle]) {
       index[cle] = { cle, date: valide ? d : null, items: [] };
-      groupes.push(index[cle]);
+      classes.push(index[cle]);
     }
     index[cle].items.push(it);
   });
-  groupes.sort((a, b) => (a.cle < b.cle ? 1 : a.cle > b.cle ? -1 : 0));
-  return groupes;
+  classes.sort((a, b) => (a.cle < b.cle ? 1 : a.cle > b.cle ? -1 : 0));
+  return classes;
 }
 
 function libelleJour(d, maintenant) {
@@ -2440,6 +2567,15 @@ function summarize(obj, entry, guidances) {
       detail: `${detail}${st.renforts.length ? ` — renforcé : ${st.renforts.join(', ')}` : ''}`,
     };
   }
+  if (obj.type === 'probe') {
+    if (obj.config.useGuidance) {
+      if (!entry.guidance) return { result: 'Non coté', detail: '' };
+      const g = guidanceByCode(gList, entry.guidance);
+      return { result: g ? g.label : entry.guidance, detail: entry.creneau ? (PROBE_CRENEAUX[entry.creneau] || '') : '' };
+    }
+    if (entry.value !== 0 && entry.value !== 1) return { result: 'Non coté', detail: '' };
+    return { result: entry.value === 1 ? 'Réussi (1)' : 'Non réussi (0)', detail: entry.creneau ? (PROBE_CRENEAUX[entry.creneau] || '') : '' };
+  }
   return { result: '—', detail: '' };
 }
 
@@ -2471,6 +2607,14 @@ function objectiveScore(obj, entry, guidances) {
     const st = balanceStats(obj, entry);
     if (!st.notes) return null;
     return { value: st.pct, percent: true, unit: '%' };
+  }
+  if (obj.type === 'probe') {
+    if (obj.config.useGuidance) {
+      if (!entry.guidance) return null;
+      return { value: isIndependentCode(gList, entry.guidance) ? 100 : 0, percent: true, unit: '%' };
+    }
+    if (entry.value !== 0 && entry.value !== 1) return null;
+    return { value: entry.value * 100, percent: true, unit: '%' };
   }
   return null;
 }
@@ -2630,13 +2774,13 @@ function advanceMasteredTargets(students, sessions, guidances) {
    sa propre ligne. La colonne "Indépendant" vaut 1 ou 0 : une moyenne dessus
    donne directement un pourcentage, sans formule à écrire. Les étapes
    manquées restent hors de cette colonne, comme dans les calculs de l'appli. */
-function buildDetailRows(sessions, students, ateliers, intervenants, groupes, guidances, studentFilter) {
+function buildDetailRows(sessions, students, ateliers, intervenants, classes, guidances, studentFilter) {
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
   const intervenantName = (id) => (intervenants.find((i) => i.id === id) || {}).name || '—';
-  const groupName = (sid) => nomGroupe(groupes, (students.find((s) => s.id === sid) || {}).groupeId) || '—';
+  const classeName = (sid) => nomClasse(classes, (students.find((s) => s.id === sid) || {}).classeId) || '—';
 
-  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Groupe', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)', 'Compteur', 'Chrono (s)']];
+  const rows = [['Date', 'Heure', 'Atelier', 'Intervenant', 'Personne accompagnée', 'Classe', 'Objectif', 'Cible', 'Phase', 'Type', 'N°', 'Étape', 'Résultat', 'Indépendant', 'Demande', 'Renforcé', 'Durée (s)', 'Compteur', 'Chrono (s)']];
 
   /* Mesure auxiliaire capturée pour cet essai (relance à chaque essai) — vide
      tant que rien n'a été relancé sous cette clé, jamais un zéro par défaut. */
@@ -2654,7 +2798,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, groupes, gu
       sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Équilibre' : 'Séance libre',
       intervenantName(sess.intervenantId),
       studentName(sid),
-      groupName(sid),
+      classeName(sid),
       obj.name,
       obj.activeTargetName || '—',
       obj.activePhaseName || currentPhase(obj).name,
@@ -2757,7 +2901,7 @@ function buildDetailRows(sessions, students, ateliers, intervenants, groupes, gu
   return rows;
 }
 
-function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], groupes = [], guidances, studentFilter, releves = [], axesSuivi = []) {
+function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], classes = [], guidances, studentFilter, releves = [], axesSuivi = []) {
   const keepStudent = (sid) => !studentFilter || studentFilter.includes(sid);
   const studentName = (id) => (students.find((s) => s.id === id) || {}).initials || '?';
   const atelierName = (id) => (ateliers.find((a) => a.id === id) || {}).name || '—';
@@ -2809,7 +2953,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 40 }, { wch: 9 }, { wch: 10 }, { wch: 12 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Cotations');
 
-  const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, groupes, guidances, studentFilter);
+  const detailRows = buildDetailRows(sessions, students, ateliers, intervenants, classes, guidances, studentFilter);
   const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
   wsDetail['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 14 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 20 }, { wch: 7 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 11 }];
   wsDetail['!freeze'] = { xSplit: 0, ySplit: 1 };
@@ -2872,8 +3016,8 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   /* Suivi continu : une ligne par relevé, avec son heure et sa durée jusqu'au
      relevé suivant du même couple personne/suivi. Toujours créée, même vide,
      pour que le nombre de feuilles ne varie pas d'un rapport à l'autre. */
-  const suiviRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Suivi', 'Critère', 'Durée (min)', 'Groupe', 'Intervenant', 'Atelier']];
-  const lignesSuivi = lignesSuiviExport(releves, students, axesSuivi, studentFilter, groupes, intervenants, ateliers);
+  const suiviRows = [['Date', 'Heure', 'Jour', 'Personne accompagnée', 'Suivi', 'Critère', 'Durée (min)', 'Classe', 'Intervenant', 'Atelier']];
+  const lignesSuivi = lignesSuiviExport(releves, students, axesSuivi, studentFilter, classes, intervenants, ateliers);
   if (lignesSuivi.length) {
     lignesSuivi.forEach((l) => suiviRows.push(l));
   } else {
@@ -3034,9 +3178,9 @@ function Field({ value, onChange, placeholder, onEnter, autoFocus, className = '
   );
 }
 
-function Card({ children, className = '' }) {
+function Card({ children, className = '', style }) {
   return (
-    <div className={`rounded-2xl border p-4 ${className}`} style={{ borderColor: BORDER, backgroundColor: CARD }}>
+    <div className={`rounded-2xl border p-4 ${className}`} style={{ borderColor: BORDER, backgroundColor: CARD, ...style }}>
       {children}
     </div>
   );
@@ -3563,13 +3707,19 @@ function ListeParJour({ items, dateDe, renderItem }) {
 }
 
 /* Densités d'affichage de la zone de cotation. Réduire fait tenir plus
-   d'objectifs à l'écran, au prix de boutons plus petits. */
+   d'objectifs à l'écran, au prix de boutons plus petits. Ce sont désormais
+   des PALIERS : le bouton saute de l'un à l'autre, mais le pincement à deux
+   doigts (usePinchDensite) fixe n'importe quelle valeur intermédiaire dans
+   les mêmes bornes. */
 const ZOOM_LEVELS = [
   { v: 1, l: '100 %' },
   { v: 0.85, l: '85 %' },
   { v: 0.7, l: '70 %' },
   { v: 0.6, l: '60 %' },
+  { v: 0.5, l: '50 %' },
 ];
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 1;
 
 /* ==================== Navigation par balayage ====================
    Ordre des onglets, utilisé pour savoir vers quel écran glisser. Gestion et
@@ -3628,14 +3778,15 @@ function LogoDatABA({ height = 30 }) {
   );
 }
 
-/* Les dix panneaux du tiroir latéral. Source unique : autrefois écrits en
+/* Les neuf panneaux du tiroir latéral. Source unique : autrefois écrits en
    dur dans le JSX du tiroir en plus du `switch` de rendu, ce qui obligeait à
-   maintenir deux listes en parallèle à chaque ajout ou retrait de panneau. */
+   maintenir deux listes en parallèle à chaque ajout ou retrait de panneau.
+   Les classes ont quitté cette liste : l'outil vit désormais dans le panneau
+   Personnes accompagnées, qu'il divise directement. */
 const PANNEAUX = [
   { k: 'personnes', label: 'Personnes accompagnées', icon: Users },
   { k: 'ateliers', label: 'Ateliers et emploi du temps', icon: CalendarDays },
   { k: 'intervenants', label: 'Intervenants', icon: UserCog },
-  { k: 'groupes', label: 'Groupes', icon: School },
   { k: 'modeles', label: "Modèles d'objectifs", icon: BookmarkPlus },
   { k: 'guidances', label: 'Guidances', icon: SlidersHorizontal },
   { k: 'abc', label: 'Réponses ABC', icon: AlertTriangle },
@@ -3690,7 +3841,12 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
 
     function start(e) {
       if (e.touches.length !== 1 || reorderDragging || ownsHorizontalGesture(e.target, boundary, ignoreNoSwipe)) {
+        // Un second doigt qui se pose (pincement de densité, notamment)
+        // abandonne le balayage plutôt que de laisser un décalage résiduel à
+        // l'écran jusqu'au relâchement.
         state.current = null;
+        setDragging(false);
+        setOffset(0);
         return;
       }
       const t = e.touches[0];
@@ -3745,6 +3901,59 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
   }, [el, onLeft, onRight, enabled, onDocument, ignoreNoSwipe]);
 
   return { offset, dragging };
+}
+
+/* Pincement à deux doigts pour la densité de cotation : plus rapide que de
+   cycler les paliers de ZOOM_LEVELS un par un pour atteindre une valeur
+   précise. La valeur suit le ratio de distance entre les deux doigts depuis
+   le début du geste, appliqué à la densité au moment où le second doigt
+   s'est posé — pas à ZOOM_MAX — pour repartir d'où on en était plutôt que de
+   sauter. Même schéma de suivi d'élément que useVerticalDismiss : l'élément
+   peut n'apparaître qu'à un rendu ultérieur. */
+function usePinchDensite(ref, { valeur, onChange, min = ZOOM_MIN, max = ZOOM_MAX, enabled = true }) {
+  const [el, setEl] = useState(null);
+  const state = useRef(null);
+  const valeurRef = useRef(valeur);
+  valeurRef.current = valeur;
+
+  useEffect(() => {
+    setEl(ref && ref.current ? ref.current : null);
+  });
+
+  useEffect(() => {
+    if (!el || !enabled) return undefined;
+
+    const distance = (touches) => Math.hypot(
+      touches[0].clientX - touches[1].clientX,
+      touches[0].clientY - touches[1].clientY
+    );
+
+    function start(e) {
+      if (e.touches.length !== 2) { state.current = null; return; }
+      state.current = { d0: distance(e.touches), v0: valeurRef.current };
+    }
+    function move(e) {
+      if (!state.current || e.touches.length !== 2) return;
+      if (e.cancelable) e.preventDefault();
+      const ratio = distance(e.touches) / state.current.d0;
+      const next = Math.min(max, Math.max(min, state.current.v0 * ratio));
+      onChange(Math.round(next * 100) / 100);
+    }
+    function end(e) {
+      if (e.touches.length < 2) state.current = null;
+    }
+
+    el.addEventListener('touchstart', start, { passive: true });
+    el.addEventListener('touchmove', move, { passive: false });
+    el.addEventListener('touchend', end, { passive: true });
+    el.addEventListener('touchcancel', end, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', start);
+      el.removeEventListener('touchmove', move);
+      el.removeEventListener('touchend', end);
+      el.removeEventListener('touchcancel', end);
+    };
+  }, [el, enabled, onChange, min, max]);
 }
 
 /* Glissement vertical de haut en bas, engagé depuis une zone de préhension
@@ -3930,6 +4139,12 @@ function AbaApp() {
      null à chaque ouverture depuis le tiroir ou chaque retour à un onglet —
      il ne doit jamais survivre à un changement d'écran non lié. */
   const [focusEcran, setFocusEcran] = useState(null);
+  /* Pile des écrans de tiroir traversés par un lien croisé (ex. Personnes →
+     Guidances) : un balayage retour depuis Guidances revient à Personnes,
+     pas à l'onglet du dessous — sinon le lien croisé serait à sens unique.
+     Vidée dès qu'on quitte cette chaîne (onglet direct, ou Menu). Bornée à 5
+     niveaux : un aller-retour répété ne doit pas la faire enfler sans fin. */
+  const [pileEcrans, setPileEcrans] = useState([]);
   const [tiroir, setTiroir] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [security, setSecurity] = useState({ pinHash: null, pinSalt: null });
@@ -3944,11 +4159,11 @@ function AbaApp() {
      ordonnés. Un même atelier peut figurer sur plusieurs jours. */
   const [emploiDuTemps, setEmploiDuTemps] = useState({});
   const [intervenants, setIntervenants] = useState([]);
-  /* Groupes (classes) : ce qui distingue deux personnes aux mêmes initiales
+  /* Classes (`classes`) : ce qui distingue deux personnes aux mêmes initiales
      dans des classes différentes, et ce qui décide, tablette par tablette, de
      ce qui s'affiche sur l'écran Suivi. Configuration de premier niveau, comme
      intervenants et ateliers. */
-  const [groupes, setGroupes] = useState([]);
+  const [classes, setClasses] = useState([]);
   const [guidances, setGuidances] = useState(DEFAULT_GUIDANCE);
   const [objectiveTemplates, setObjectiveTemplates] = useState([]);
   const [abcOptions, setAbcOptions] = useState(DEFAULT_ABC);
@@ -3959,10 +4174,10 @@ function AbaApp() {
      dans son nom : sans lui, un dossier de sauvegardes ne dit pas de quelle
      tablette vient quoi. */
   const [appareil, setAppareil] = useState('');
-  /* Groupe auquel CETTE tablette est rattachée — distinct du groupe d'une
-     personne. C'est lui qui filtre l'écran Suivi (personnesVisibles) : vide,
-     rien n'est filtré. Choisi dans PanneauDonnees. */
-  const [groupeAppareil, setGroupeAppareil] = useState('');
+  /* Classe à laquelle CETTE tablette est rattachée — distincte de la classe
+     d'une personne. C'est elle qui filtre l'écran Suivi (personnesVisibles) :
+     vide, rien n'est filtré. Choisie dans PanneauDonnees. */
+  const [classeAppareil, setClasseAppareil] = useState('');
   /* Intervenant en poste : { intervenantId, jour } — n'attribue les relevés
      pris hors séance qu'à condition d'être encore valide pour aujourd'hui
      (posteValide). Choisi dans PanneauDonnees, périmé au changement de jour
@@ -4030,18 +4245,26 @@ function AbaApp() {
       setDir(ecran ? 0 : Math.sign(j - i));
       setEcran(null);
       setFocusEcran(null);
+      setPileEcrans([]);
       setTab(k);
     },
     [tab, ecran]
   );
 
   /* Lien croisé : ouvre un panneau du tiroir déjà positionné sur une personne
-     ou un objectif précis (`focus`), au lieu de sa liste. */
+     ou un objectif précis (`focus`), au lieu de sa liste. Si un autre écran
+     de tiroir est déjà ouvert, il part sur la pile — c'est lui que le
+     balayage retour rouvrira, pas l'onglet du dessous. */
   const ouvrirEcran = React.useCallback((k, focus = null) => {
+    setEcran((actuel) => {
+      if (actuel && actuel !== k) {
+        setPileEcrans((p) => [...p.slice(-4), { k: actuel, focus: focusEcran }]);
+      }
+      return k;
+    });
     setFocusEcran(focus);
-    setEcran(k);
     setTiroir(false);
-  }, []);
+  }, [focusEcran]);
 
   /* La barre est figée une fois les cotations lancées, pas avant : l'écran de
      configuration n'a rien à protéger d'un balayage accidentel. Seule la
@@ -4051,17 +4274,29 @@ function AbaApp() {
 
   /* Bouton « Menu » de tous les onglets (Suivi, Session hors cotation, Export)
      et bouton « ‹ Menu » des écrans ouverts depuis le tiroir : une seule
-     action, ouvrir le tiroir, quel que soit l'endroit d'où elle part. */
-  const ouvrirMenu = React.useCallback(() => { setEcran(null); setFocusEcran(null); setTiroir(true); }, []);
+     action, ouvrir le tiroir, quel que soit l'endroit d'où elle part. Vide
+     aussi la pile de lien croisé : depuis le tiroir, on repart à zéro. */
+  const ouvrirMenu = React.useCallback(() => { setEcran(null); setFocusEcran(null); setPileEcrans([]); setTiroir(true); }, []);
 
   const onLeft = React.useCallback(() => {
     if (tiroir) { if (TIROIR_FERME_AU_BALAYAGE) setTiroir(false); return; }
+    // Écran atteint par un lien croisé depuis un autre écran de tiroir : le
+    // retour dépile plutôt que de fermer sec, sinon le lien croisé serait à
+    // sens unique (ex. Personnes → Guidances ne saurait pas revenir à
+    // Personnes, seulement à l'onglet Session ou Suivi du dessous).
+    if (pileEcrans.length) {
+      const precedent = pileEcrans[pileEcrans.length - 1];
+      setPileEcrans((p) => p.slice(0, -1));
+      setEcran(precedent.k);
+      setFocusEcran(precedent.focus);
+      return;
+    }
     // Depuis un écran ouvert par le tiroir : retour direct à l'onglet
     // d'origine (celui d'où le bouton Menu ou le balayage a été déclenché),
     // sans repasser par le tiroir — `tab` n'a jamais changé entre-temps.
     if (ecran) { setEcran(null); setFocusEcran(null); return; }
     goTab(1);
-  }, [tiroir, ecran, goTab]);
+  }, [tiroir, ecran, pileEcrans, goTab]);
 
   /* Depuis Suivi — l'extrémité gauche — il n'y a pas d'onglet précédent : le
      balayage vers la droite y est libre, c'est lui qui ouvre le tiroir. Depuis
@@ -4112,6 +4347,39 @@ function AbaApp() {
     };
   }, []);
 
+  /* Filet de sécurité : `focusout` n'est pas toujours émis quand le champ
+     focalisé est retiré du DOM plutôt que perdre le focus normalement —
+     fermeture d'une Modale, d'une feuille, repli d'une carte. WebKit en
+     particulier en oublie certains. La barre restait alors masquée jusqu'au
+     rechargement : le bug le plus souvent remonté (« la barre du bas
+     disparaît sans raison, ouvrir/fermer l'app la remet »). Tant que
+     saisieEnCours est vrai, on revérifie périodiquement que l'élément
+     focalisé est bien un champ encore attaché au document, et à chaque
+     retour au premier plan. */
+  useEffect(() => {
+    if (!saisieEnCours) return undefined;
+    const estChampConnecte = () => {
+      const el = document.activeElement;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.isConnected;
+    };
+    const revalider = () => { if (!estChampConnecte()) setSaisieEnCours(false); };
+    const id = setInterval(revalider, 500);
+    document.addEventListener('visibilitychange', revalider);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', revalider);
+    };
+  }, [saisieEnCours]);
+
+  /* Même filet à chaque changement d'onglet ou d'écran : un champ focalisé
+     avant la navigation (ex. un champ de recherche resté monté ailleurs) ne
+     doit pas garder la barre masquée sur le nouvel écran. */
+  useEffect(() => {
+    const el = document.activeElement;
+    const champActif = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.isConnected;
+    if (!champActif) setSaisieEnCours(false);
+  }, [tab, ecran]);
+
   /* --- chargement ---
      Les réglages de sécurité se lisent en clair, avant tout déverrouillage.
      Les données, elles, ne sont chargées qu'une fois la clé dérivée du code. */
@@ -4152,13 +4420,15 @@ function AbaApp() {
       try {
         const d = JSON.parse(config);
         nbPersonnes = (d.students || []).length;
-        setStudents(migrerStudentsGroupe(migrerStudentsSuivi(d.students || [])));
+        setStudents(migrerStudentsClasse(migrerStudentsSuivi(d.students || [])));
         setAteliers(d.ateliers || []);
         setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
         setIntervenants(d.intervenants || []);
-        setGroupes(d.groupes || []);
+        // Repli sur l'ancien nom de clé (`groupes`) pour une tablette dont le
+        // stockage n'a pas encore traversé le renommage Groupe → Classe.
+        setClasses(d.classes || d.groupes || []);
         setAppareil(d.appareil || '');
-        setGroupeAppareil(d.groupeAppareil || '');
+        setClasseAppareil(d.classeAppareil || d.groupeAppareil || '');
         retention = d.retentionMonths || 0;
         setRetentionMonths(retention);
         if (Array.isArray(d.guidances) && d.guidances.length) {
@@ -4337,7 +4607,7 @@ function AbaApp() {
   /* Réécrit toutes les données avec la clé courante — utilisé après un
      changement de code, puisque l'ancienne clé ne déchiffrerait plus rien. */
   async function persistAll() {
-    await store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, groupes, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, groupeAppareil }));
+    await store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, classes, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, classeAppareil }));
     moisEcrits.current = {};
     await persistSessions(sessions);
     await store.set('aba:crises', JSON.stringify(crises));
@@ -4413,8 +4683,8 @@ function AbaApp() {
   /* --- sauvegardes --- */
   useEffect(() => {
     if (!loaded) return;
-    store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, groupes, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, groupeAppareil }));
-  }, [students, ateliers, emploiDuTemps, intervenants, groupes, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, groupeAppareil, loaded]);
+    store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, classes, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, classeAppareil }));
+  }, [students, ateliers, emploiDuTemps, intervenants, classes, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, classeAppareil, loaded]);
   /* Empreinte du dernier enregistrement de chaque mois, pour n'écrire que ce
      qui a réellement changé. */
   const moisEcrits = useRef({});
@@ -4479,12 +4749,12 @@ function AbaApp() {
   }
 
   /* --- gestion --- */
-  const addStudent = (initials, groupeId = null) => setStudents((s) => [...s, { id: uid(), initials, groupeId, objectives: [] }]);
+  const addStudent = (initials, classeId = null) => setStudents((s) => [...s, { id: uid(), initials, classeId, objectives: [] }]);
   const removeStudent = (id) => setStudents((s) => s.filter((x) => x.id !== id));
   const renameStudent = (id, initials) => setStudents((s) => s.map((x) => (x.id === id ? { ...x, initials } : x)));
-  /* Distinct de renameStudent : le groupe conditionne l'écran Suivi
+  /* Distinct de renameStudent : la classe conditionne l'écran Suivi
      (personnesVisibles), pas juste l'affichage d'une fiche. */
-  const setStudentGroupe = (id, groupeId) => setStudents((s) => s.map((x) => (x.id === id ? { ...x, groupeId } : x)));
+  const setStudentClasse = (id, classeId) => setStudents((s) => s.map((x) => (x.id === id ? { ...x, classeId } : x)));
   const addAtelier = (name) => setAteliers((a) => [...a, { id: uid(), name }]);
   const removeAtelier = (id) => {
     setAteliers((a) => a.filter((x) => x.id !== id));
@@ -4568,23 +4838,37 @@ function AbaApp() {
   const addIntervenant = (name) => setIntervenants((l) => [...l, { id: uid(), name }]);
   const removeIntervenant = (id) => setIntervenants((l) => l.filter((x) => x.id !== id));
   const renameIntervenant = (id, name) => setIntervenants((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
-  /* Suppression jamais en cascade : une personne qui portait ce groupe le
-     garde, affiché en « Groupe retiré » (GROUPE_INCONNU) partout où il est
+  /* Suppression jamais en cascade : une personne qui portait cette classe la
+     garde, affichée en « Classe retirée » (CLASSE_INCONNUE) partout où c'est
      lu — même principe que la suppression d'un intervenant ou d'un axe de
-     suivi. */
-  const addGroupe = (name) => setGroupes((l) => [...l, { id: uid(), name }]);
-  const removeGroupe = (id) => setGroupes((l) => l.filter((x) => x.id !== id));
-  const renameGroupe = (id, name) => setGroupes((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
-  /* Depuis la fiche d'une personne : crée le groupe et l'affecte dans le même
+     suivi. Pas de création à vide séparée : creerClasseEtAffecter et
+     creerClasseAvecMembres, plus bas, couvrent les deux points d'entrée de
+     création (une personne, ou plusieurs depuis le panneau Personnes) — une
+     classe sans aucun membre au départ passe par cette dernière avec une
+     liste vide. */
+  const removeClasse = (id) => setClasses((l) => l.filter((x) => x.id !== id));
+  const renameClasse = (id, name) => setClasses((l) => l.map((x) => (x.id === id ? { ...x, name } : x)));
+  /* Depuis la fiche d'une personne : crée la classe et l'affecte dans le même
      geste, l'id étant généré ici plutôt que dans deux actions dépendantes qui
      liraient un état pas encore à jour. Second point d'entrée de création de
-     groupe, assumé : un geste humain explicite sur une fiche n'a rien à voir
+     classe, assumé : un geste humain explicite sur une fiche n'a rien à voir
      avec la création automatique et silencieuse interdite à l'import (voir
-     resoudreGroupeImporte, qui ne crée jamais de groupe). */
-  const creerGroupeEtAffecter = (studentId, name) => {
+     resoudreClasseImportee, qui ne crée jamais de classe). */
+  const creerClasseEtAffecter = (studentId, name) => {
     const id = uid();
-    setGroupes((l) => [...l, { id, name }]);
-    setStudents((s) => s.map((x) => (x.id === studentId ? { ...x, groupeId: id } : x)));
+    setClasses((l) => [...l, { id, name }]);
+    setStudents((s) => s.map((x) => (x.id === studentId ? { ...x, classeId: id } : x)));
+  };
+  /* Création groupée depuis le panneau Personnes : une classe et, en un seul
+     geste, l'ensemble de ses membres initiaux (éventuellement aucun) — même
+     principe que creerClasseEtAffecter, généralisé à plusieurs personnes
+     plutôt qu'une boucle d'actions dépendantes côté panneau. */
+  const creerClasseAvecMembres = (name, studentIds) => {
+    const id = uid();
+    setClasses((l) => [...l, { id, name }]);
+    if (studentIds && studentIds.length) {
+      setStudents((s) => s.map((x) => (studentIds.includes(x.id) ? { ...x, classeId: id } : x)));
+    }
   };
   const addGuidance = (g) => setGuidances((l) => [...l, g]);
   const removeGuidance = (code) => setGuidances((l) => (l.length > 1 ? l.filter((x) => x.code !== code) : l));
@@ -4613,7 +4897,7 @@ function AbaApp() {
     notify(`Modèle appliqué à ${studentIds.length} personne${studentIds.length !== 1 ? 's' : ''}`);
   };
 
-  /* Export de configuration : ateliers, intervenants, groupes, guidances et
+  /* Export de configuration : ateliers, intervenants, classes, guidances et
      modèles. Aucune personne, aucune séance, aucune crise — le fichier ne
      contient donc aucune donnée d'usager et peut circuler librement entre
      appareils. */
@@ -4625,7 +4909,7 @@ function AbaApp() {
       ateliers: ateliers.map(({ usualStudentIds, usualObjectives, favoriteObjectiveIds, knownObjectiveIds, personnesParJour, ...a }) => a),
       emploiDuTemps,
       intervenants,
-      groupes,
+      classes,
       guidances,
       objectiveTemplates,
       abcOptions,
@@ -4640,10 +4924,10 @@ function AbaApp() {
   function importConfig(d) {
     const nbA = (d.ateliers || []).length;
     const nbI = (d.intervenants || []).length;
-    const nbG = (d.groupes || []).length;
+    const nbG = (d.classes || []).length;
     const nbT = (d.objectiveTemplates || []).length;
     if (!window.confirm(
-      `Importer cette configuration ?\n\n${nbA} atelier(s), ${nbI} intervenant(s), ${nbG} groupe(s), ${nbT} modèle(s) d'objectif.\n\nLes éléments existants sont conservés, les nouveaux s'ajoutent.`
+      `Importer cette configuration ?\n\n${nbA} atelier(s), ${nbI} intervenant(s), ${nbG} classe(s), ${nbT} modèle(s) d'objectif.\n\nLes éléments existants sont conservés, les nouveaux s'ajoutent.`
     )) return;
     /* Un atelier importé dont le nom existe déjà localement est écarté au
        profit de l'atelier existant : son id d'origine doit être remappé vers
@@ -4670,7 +4954,9 @@ function AbaApp() {
       });
     }
     setIntervenants((cur) => [...cur, ...(d.intervenants || []).filter((i) => !cur.some((x) => x.name === i.name))]);
-    setGroupes((cur) => [...cur, ...(d.groupes || []).filter((g) => !cur.some((x) => x.name === g.name))]);
+    // Repli sur l'ancien nom de clé (`groupes`) pour un fichier de
+    // configuration exporté avant le renommage Groupe → Classe.
+    setClasses((cur) => [...cur, ...((d.classes || d.groupes) || []).filter((g) => !cur.some((x) => x.name === g.name))]);
     setGuidances((cur) => [...cur, ...(d.guidances || []).filter((g) => !cur.some((x) => x.code === g.code))]);
     setObjectiveTemplates((cur) => [...cur, ...(d.objectiveTemplates || []).filter((t) => !cur.some((x) => x.name === t.name))]);
     if (d.abcOptions) {
@@ -4721,9 +5007,9 @@ function AbaApp() {
         return;
       }
       const nouvelId = uid();
-      const groupeImp = groupeDe(payload.groupes, p.importe.groupeId);
-      const groupeResolu = groupeImp ? resoudreGroupeImporte(groupes, groupeImp.name) : null;
-      nouvellesPersonnes.push({ ...p.importe, id: nouvelId, groupeId: groupeResolu });
+      const classeImp = classeDe(payload.classes, p.importe.classeId);
+      const classeResolue = classeImp ? resoudreClasseImportee(classes, classeImp.name) : null;
+      nouvellesPersonnes.push({ ...p.importe, id: nouvelId, classeId: classeResolue });
       correspondance[importeId] = nouvelId;
     });
 
@@ -4802,15 +5088,19 @@ function AbaApp() {
       version: 4,
       exportedAt: new Date().toISOString(),
       appareil,
-      /* groupeId voyage déjà sur chaque personne (aucun champ retiré) ; sans
-         la liste des groupes ci-dessous, Manager n'aurait qu'un identifiant
+      /* classeId voyage déjà sur chaque personne (aucun champ retiré) ; sans
+         la liste des classes ci-dessous, Manager n'aurait qu'un identifiant
          opaque et ne pourrait pas distinguer deux homonymes de classes
-         différentes — la raison d'être du groupe dans le croisement. */
-      students: students.filter((st) => idsConcernes.has(st.id)),
+         différentes — la raison d'être de la classe dans le croisement.
+         `groupes` et `groupeId` par personne sont des alias de compatibilité
+         pour un DatABA Manager pas encore mis à jour vers le renommage
+         Groupe → Classe, sur le même principe que releverAliasStabilite. */
+      students: students.filter((st) => idsConcernes.has(st.id)).map((st) => ({ ...st, groupeId: st.classeId })),
       ateliers,
       emploiDuTemps,
       intervenants,
-      groupes,
+      classes,
+      groupes: classes,
       guidances,
       axesSuivi,
       sessions: seancesRetenues,
@@ -4839,16 +5129,16 @@ function AbaApp() {
   }
 
   /* Profils (personnes + objectifs) vers une autre tablette : `portee`
-     'groupe' pour « mes profils » (filtré sur groupeAppareil), 'complet' pour
+     'classe' pour « mes profils » (filtré sur classeAppareil), 'complet' pour
      la rediffusion depuis une tablette centrale (tout le parc — voir PR7).
      Toujours chiffré, sans choix clair/chiffré comme pour la sauvegarde
      complète : ce fichier ne contient que des données d'usagers, jamais de
      raison de le laisser lisible en clair. */
   function exportProfils(portee) {
-    const concernes = portee === 'complet' ? students : profilsDuGroupe(students, groupeAppareil);
+    const concernes = portee === 'complet' ? students : profilsDeLaClasse(students, classeAppareil);
     const payload = payloadProfils({
       students: concernes,
-      groupes,
+      classes,
       axesSuivi: axesUtilises(concernes, axesSuivi),
       appareil,
       portee,
@@ -4858,24 +5148,24 @@ function AbaApp() {
     setBackupPrompt({ mode: 'export', profilsPayload: payload, profilsNom: nom });
   }
 
-  /* Ce qui a été coté ici pour des personnes d'un autre groupe, à renvoyer
+  /* Ce qui a été coté ici pour des personnes d'une autre classe, à renvoyer
      vers leur tablette — jamais vers Manager, qui n'a que faire de savoir
      quelle tablette a coté quoi. Toujours chiffré, mêmes données personnelles
      que « mes profils ». Un même fichier peut contenir des tranches
      destinées à plusieurs tablettes : le tri se fait à la réception
      (fusionnerSuiviRecu), pas à l'envoi — pas besoin de savoir d'avance qui
      le recevra. */
-  function exportSuiviHorsGroupe() {
+  function exportSuiviHorsClasse() {
     const payload = {
       format: 'aba-suivi-transfert',
       version: 1,
       exportedAt: new Date().toISOString(),
       appareil,
-      sessions: sessionsHorsGroupe(sessions, students, groupeAppareil),
-      crises: crisesHorsGroupe(crises, students, groupeAppareil),
-      suivi: relevesHorsGroupe(releves, students, groupeAppareil),
+      sessions: sessionsHorsClasse(sessions, students, classeAppareil),
+      crises: crisesHorsClasse(crises, students, classeAppareil),
+      suivi: relevesHorsClasse(releves, students, classeAppareil),
     };
-    const nom = nomFichier('suivi-hors-groupe', appareil, 'json');
+    const nom = nomFichier('suivi-hors-classe', appareil, 'json');
     setBackupPrompt({ mode: 'export', suiviPayload: payload, suiviNom: nom });
   }
 
@@ -4909,7 +5199,7 @@ function AbaApp() {
   /* Sauvegarde en clair : lisible sans mot de passe, donc à réserver aux
      transferts qui restent dans un espace déjà protégé. */
   function exportBackupClair() {
-    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, groupeAppareil, students, ateliers, emploiDuTemps, intervenants, groupes, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
+    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, classeAppareil, students, ateliers, emploiDuTemps, intervenants, classes, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
     setBackupPrompt(null);
@@ -4941,7 +5231,7 @@ function AbaApp() {
       setBackupPrompt(null);
       return;
     }
-    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, groupeAppareil, students, ateliers, emploiDuTemps, intervenants, groupes, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
+    const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, classeAppareil, students, ateliers, emploiDuTemps, intervenants, classes, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
     const envelope = await encryptJSON(payload, passphrase);
     const blob = new Blob([JSON.stringify(envelope)], { type: 'application/json' });
     downloadBlob(blob, nomFichier('sauvegarde-aba', appareil, 'json'));
@@ -4959,22 +5249,25 @@ function AbaApp() {
       `Restaurer cette sauvegarde ?\n\n${(d.students || []).length} personne(s), ${(d.sessions || []).length} séance(s).\n\nToutes les données actuelles de cette tablette seront remplacées.`
     );
     if (!ok) return;
-    setStudents(migrerStudentsGroupe(migrerStudentsSuivi(d.students || [])));
+    setStudents(migrerStudentsClasse(migrerStudentsSuivi(d.students || [])));
     setAteliers(d.ateliers || []);
     setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
     setIntervenants(d.intervenants || []);
-    setGroupes(d.groupes || []);
+    // Repli sur l'ancien nom de clé (`groupes`) pour une sauvegarde chiffrée
+    // produite avant le renommage Groupe → Classe.
+    setClasses(d.classes || d.groupes || []);
     if (Array.isArray(d.guidances) && d.guidances.length) setGuidances(d.guidances);
     setSessions(d.sessions || []);
     setCrises(d.crises || []);
     setAxesSuivi(migrerAxesSuivi(d.axesSuivi));
     setReleves(migrerReleves(d.suivi || d.stabilite || []));
-    /* Le nom d'appareil et le groupe de rattachement du fichier ne s'imposent
+    /* Le nom d'appareil et la classe de rattachement du fichier ne s'imposent
        pas à la tablette qui restaure : elle garde les siens s'ils sont déjà
        renseignés, sinon elle reprend ceux de la sauvegarde plutôt que de
        rester anonyme. */
     if (d.appareil && !appareil.trim()) setAppareil(d.appareil);
-    if (d.groupeAppareil && !groupeAppareil.trim()) setGroupeAppareil(d.groupeAppareil);
+    const classeAppareilRecue = d.classeAppareil || d.groupeAppareil;
+    if (classeAppareilRecue && !classeAppareil.trim()) setClasseAppareil(classeAppareilRecue);
     notify('Sauvegarde restaurée');
   }
 
@@ -5417,7 +5710,8 @@ function AbaApp() {
             students={students} guidances={guidances} templates={objectiveTemplates} focus={focusEcran}
             premiereConfiguration={students.length === 0}
             addStudent={addStudent} removeStudent={removeStudent} renameStudent={renameStudent}
-            groupes={groupes} onSetGroupe={setStudentGroupe} onCreerGroupe={creerGroupeEtAffecter}
+            classes={classes} onSetClasse={setStudentClasse} onCreerClasse={creerClasseEtAffecter}
+            onAjouterClasseAvecMembres={creerClasseAvecMembres} onRenameClasse={renameClasse} onRemoveClasse={removeClasse}
             axesSuivi={axesSuivi} onToggleAxeSuivi={toggleAxeSuivi}
             onCreerSuivi={creerSuiviPour}
             onAjouterCompteur={ajouterCompteur} onRenommerCompteur={renommerCompteur} onSupprimerCompteur={supprimerCompteur}
@@ -5430,8 +5724,6 @@ function AbaApp() {
         );
       case 'intervenants':
         return <PanneauIntervenants intervenants={intervenants} onAdd={addIntervenant} onRename={renameIntervenant} onRemove={removeIntervenant} />;
-      case 'groupes':
-        return <PanneauGroupes groupes={groupes} onAdd={addGroupe} onRename={renameGroupe} onRemove={removeGroupe} />;
       case 'modeles':
         return (
           <PanneauModeles
@@ -5446,11 +5738,11 @@ function AbaApp() {
         return (
           <PanneauDonnees
             appareil={appareil} onSetAppareil={setAppareil}
-            groupes={groupes} groupeAppareil={groupeAppareil} onSetGroupeAppareil={setGroupeAppareil}
+            classes={classes} classeAppareil={classeAppareil} onSetClasseAppareil={setClasseAppareil}
             intervenants={intervenants} poste={poste} onChoisirPoste={choisirPosteIntervenant}
             retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
             onExportConfig={exportConfig} onExportBackup={exportBackup} onImportBackup={importBackup}
-            onExportProfils={() => exportProfils('groupe')} onExportProfilsComplet={() => exportProfils('complet')}
+            onExportProfils={() => exportProfils('classe')} onExportProfilsComplet={() => exportProfils('complet')}
           />
         );
       case 'guidances':
@@ -5465,15 +5757,16 @@ function AbaApp() {
       case 'suivicontinu':
         return <PanneauSuiviContinu axes={axesSuivi} students={students} onSetAxes={majAxesSuivi} onToggleAxeSuivi={toggleAxeSuivi} focus={focusEcran} />;
       case 'suivi':
-        /* Seul point de filtrage : une personne d'un autre groupe reste
+        /* Seul point de filtrage : une personne d'une autre classe reste
            cotable partout ailleurs (Session, Export, Personnes), mais ne
            s'affiche pas ici — cette tablette a produit sa donnée, elle ne
            la lit pas. personnesVisibles réplique en tout point sans
-           rattachement ni personne sans groupe encore configuré. */
+           rattachement ni personne sans classe encore configuré. */
         return (
           <SuiviScreen
-            students={personnesVisibles(students, groupeAppareil)} sessions={sessions} guidances={guidances}
+            students={personnesVisibles(students, classeAppareil)} sessions={sessions} guidances={guidances}
             releves={releves} axesSuivi={axesSuivi}
+            ateliers={ateliers} emploiDuTemps={emploiDuTemps} activeSession={activeSession}
             onResetTracking={resetTracking} onOuvrirMenu={ouvrirMenu}
             onChangePhase={changePhase}
             onOuvrirObjectif={(sid, oid) => ouvrirEcran('personnes', { personne: sid, objectif: oid })}
@@ -5485,7 +5778,7 @@ function AbaApp() {
         return (
           <SessionScreen
             students={students} ateliers={ateliers} intervenants={intervenants}
-            crises={crises} guidances={guidances}
+            crises={crises} guidances={guidances} sessions={sessions}
             onSetAtelierGroup={setAtelierGroup} notify={notify} onOuvrirConfiguration={() => ouvrirEcran('personnes')}
             onProgrammerEquilibre={(sid) => ouvrirEcran('personnes', { personne: sid, nouveau: 'balance' })}
             onOuvrirMenu={ouvrirMenu} planDuJour={planDuJour}
@@ -5525,15 +5818,15 @@ function AbaApp() {
            d'onglet, l'appui depuis Export n'aurait aucun effet visible. */
         return (
           <ExportScreen
-            sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} groupes={groupes}
-            guidances={guidances} releves={releves} axesSuivi={axesSuivi} appareil={appareil} groupeAppareil={groupeAppareil} notify={notify}
+            sessions={sessions} crises={crises} students={students} ateliers={ateliers} intervenants={intervenants} classes={classes}
+            guidances={guidances} releves={releves} axesSuivi={axesSuivi} appareil={appareil} classeAppareil={classeAppareil} notify={notify}
             onEditCrisis={editCrisis} onMarkSent={markSent}
             onMarkCrisesSent={markCrisesSent} onMarkRelevesSent={markRelevesSent}
             onEditSession={(s) => { editSession(s); allerA('session'); }}
             onDeleteSession={deleteSession} onDeleteAllSessions={deleteAllSessions}
             onOuvrirJournee={(j) => setJourneeSuivi({ studentId: j.studentId, suiviId: j.suiviId, compteurId: j.compteurId, jour: j.jour })}
             onExportManager={exportManager}
-            onExportSuiviHorsGroupe={exportSuiviHorsGroupe}
+            onExportSuiviHorsClasse={exportSuiviHorsClasse}
             onOuvrirMenu={ouvrirMenu}
           />
         );
@@ -5544,16 +5837,31 @@ function AbaApp() {
 
   const estOngletPrincipal = (cle) => cle === 'suivi' || cle === 'session' || cle === 'export';
 
-  const volet = (cle) => (
-    <>
-      {!estOngletPrincipal(cle) && (
-        <button onClick={ouvrirMenu} className="flex items-center gap-1 text-sm mb-3" style={{ color: INK_SOFT }}>
-          <ChevronLeft size={16} /> Menu
-        </button>
-      )}
-      {contenuPourCle(cle)}
-    </>
-  );
+  /* Bouton retour d'un écran de tiroir : « ‹ Menu » ouvre le tiroir par
+     défaut, mais un écran atteint par un lien croisé (Personnes → Guidances)
+     revient d'abord à l'écran d'où il vient, avec son nom — cohérent avec le
+     balayage retour (onLeft), qui dépile de la même pile. */
+  const volet = (cle) => {
+    const precedent = pileEcrans[pileEcrans.length - 1] || null;
+    const labelPrecedent = precedent && ((PANNEAUX.find((p) => p.k === precedent.k) || {}).label);
+    const retour = precedent
+      ? () => {
+          setPileEcrans((p) => p.slice(0, -1));
+          setEcran(precedent.k);
+          setFocusEcran(precedent.focus);
+        }
+      : ouvrirMenu;
+    return (
+      <>
+        {!estOngletPrincipal(cle) && (
+          <button onClick={retour} className="flex items-center gap-1 text-sm mb-3" style={{ color: INK_SOFT }}>
+            <ChevronLeft size={16} /> {labelPrecedent || 'Menu'}
+          </button>
+        )}
+        {contenuPourCle(cle)}
+      </>
+    );
+  };
 
   const cleCourante = ecran || tab;
 
@@ -5597,9 +5905,15 @@ function AbaApp() {
       {/* Contenu : l'onglet courant, ou un écran ouvert depuis le tiroir */}
       <div
         ref={contentRef}
-        className="max-w-4xl mx-auto px-4 pb-44"
+        className="max-w-4xl mx-auto pb-44"
         style={{
           paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)',
+          // En paysage sur un iPhone à encoche, l'encoche se déplace sur le
+          // côté (`viewport-fit=cover`, index.html) : un simple px-4 laisse
+          // les cotations passer dessous. max() garde 1rem par défaut,
+          // portrait compris, et cède la place à l'inset dès qu'il dépasse.
+          paddingLeft: 'max(1rem, env(safe-area-inset-left, 0px))',
+          paddingRight: 'max(1rem, env(safe-area-inset-right, 0px))',
           // Tiroir ouvert, le contenu ne doit pas suivre le doigt : il est
           // rendu hors du panneau et glisserait dans la bande visible à droite.
           transform: offset && !tiroir ? `translateX(${offset}px)` : 'none',
@@ -6039,7 +6353,7 @@ function AbaApp() {
         <EcranRapprochementPersonnes
           payload={rapprochement.payload}
           students={students}
-          groupes={groupes}
+          classes={classes}
           onValider={appliquerRapprochement}
           onClose={() => setRapprochement(null)}
         />
@@ -6225,12 +6539,12 @@ function PanneauEmploiDuTemps({
 
   return (
     <div>
-      <SectionTitle sub="Les groupes dans lesquels se déroulent les séances, les jours où ils ont lieu et les personnes qu'ils accueillent.">
+      <SectionTitle sub="Les ateliers dans lesquels se déroulent les séances, les jours où ils ont lieu et les personnes qu'ils accueillent.">
         Ateliers
       </SectionTitle>
       <Card className="mb-4">
         <div className="flex gap-2 mb-3">
-          <Field value={nom} onChange={setNom} placeholder="Nom de l'atelier (ex. Groupe habiletés sociales)" onEnter={ajouter} />
+          <Field value={nom} onChange={setNom} placeholder="Nom de l'atelier (ex. Habiletés sociales)" onEnter={ajouter} />
           <Btn onClick={ajouter} className="px-4 shrink-0"><Plus size={18} /></Btn>
         </div>
         {ateliers.length === 0 ? (
@@ -6459,32 +6773,6 @@ function PanneauIntervenants({ intervenants, onAdd, onRename, onRemove }) {
   );
 }
 
-/* Calqué sur PanneauIntervenants : même forme, même EditableRow. Un groupe
-   supprimé n'emporte personne avec lui — voir removeGroupe et GROUPE_INCONNU. */
-function PanneauGroupes({ groupes, onAdd, onRename, onRemove }) {
-  const [nom, setNom] = useState('');
-  const ajouter = () => { if (nom.trim()) { onAdd(nom.trim()); setNom(''); } };
-  return (
-    <div>
-      <SectionTitle sub="Les classes de l'établissement : elles distinguent deux personnes aux mêmes initiales et décident, tablette par tablette, de qui apparaît sur l'écran Suivi.">Groupes</SectionTitle>
-      <Card>
-        <div className="flex gap-2 mb-3">
-          <Field value={nom} onChange={setNom} placeholder="Nom du groupe (ex. Classe 1)" onEnter={ajouter} />
-          <Btn onClick={ajouter} className="px-4 shrink-0"><Plus size={18} /></Btn>
-        </div>
-        {groupes.length === 0 ? (
-          <Empty>Aucun groupe enregistré.</Empty>
-        ) : (
-          <div className="space-y-1.5">
-            {groupes.map((g) => (
-              <EditableRow key={g.id} label={g.name} onRename={(v) => onRename(g.id, v)} onRemove={() => onRemove(g.id)} />
-            ))}
-          </div>
-        )}
-      </Card>
-    </div>
-  );
-}
 
 function PanneauModeles({ templates, students, guidances, onAdd, onUpdate, onRemove, onAppliquer, onOuvrirGuidances }) {
   const [creation, setCreation] = useState(false);
@@ -6847,7 +7135,7 @@ function PanneauMotsDePasse({ security, onChangePin, onDisableProtection }) {
 /* Les deux exports existaient déjà, mais sous deux boutons aux libellés
    proches. Ils sont présentés ici comme un seul choix explicite : avec ou sans
    données personnelles. */
-function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSetGroupeAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup, onExportProfils, onExportProfilsComplet }) {
+function PanneauDonnees({ appareil, onSetAppareil, classes, classeAppareil, onSetClasseAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup, onExportProfils, onExportProfilsComplet }) {
   const fileRef = useRef(null);
   const [nom, setNom] = useState(appareil || '');
   useEffect(() => { setNom(appareil || ''); }, [appareil]);
@@ -6876,24 +7164,24 @@ function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSe
       <Card className="mb-4">
         <div className="flex items-center gap-2 mb-2">
           <School size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Groupe de cette tablette</span>
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Classe de cette tablette</span>
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-          Filtre l'écran Suivi sur ce groupe : les personnes d'un autre groupe restent cotables ici,
-          mais leur suivi ne s'affiche que sur la tablette de leur propre groupe. Tant qu'aucun groupe
-          n'est choisi, l'écran Suivi montre tout le monde.
+          Filtre l'écran Suivi sur cette classe : les personnes d'une autre classe restent cotables ici,
+          mais leur suivi ne s'affiche que sur la tablette de leur propre classe. Tant qu'aucune classe
+          n'est choisie, l'écran Suivi montre tout le monde.
         </p>
         <select
-          value={groupeAppareil || ''}
-          onChange={(ev) => onSetGroupeAppareil(ev.target.value)}
+          value={classeAppareil || ''}
+          onChange={(ev) => onSetClasseAppareil(ev.target.value)}
           className="w-full rounded-lg px-2.5 py-2 text-sm border"
           style={{ borderColor: BORDER, backgroundColor: CARD }}
         >
           <option value="">Aucun (tout afficher)</option>
-          {groupeAppareil && !groupes.some((g) => g.id === groupeAppareil) && (
-            <option value={groupeAppareil}>{nomGroupe(groupes, groupeAppareil)}</option>
+          {classeAppareil && !classes.some((g) => g.id === classeAppareil) && (
+            <option value={classeAppareil}>{nomClasse(classes, classeAppareil)}</option>
           )}
-          {groupes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          {classes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
         </select>
       </Card>
 
@@ -6967,15 +7255,15 @@ function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSe
 
         <button
           onClick={onExportProfils}
-          disabled={!groupeAppareil}
+          disabled={!classeAppareil}
           className="w-full rounded-2xl border-2 p-3.5 mb-2 text-left"
-          style={{ borderColor: ACCENT, backgroundColor: CARD, opacity: groupeAppareil ? 1 : 0.5 }}
+          style={{ borderColor: ACCENT, backgroundColor: CARD, opacity: classeAppareil ? 1 : 0.5 }}
         >
           <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Mes profils, vers une autre tablette</div>
           <div className="text-xs" style={{ color: INK_SOFT }}>
-            {groupeAppareil
-              ? "Personnes et objectifs du groupe de cette tablette, à agréger sur une tablette centrale. Toujours chiffré."
-              : 'Configurez d’abord le groupe de cette tablette, ci-dessus.'}
+            {classeAppareil
+              ? "Personnes et objectifs de la classe de cette tablette, à agréger sur une tablette centrale. Toujours chiffré."
+              : 'Configurez d’abord la classe de cette tablette, ci-dessus.'}
           </div>
         </button>
 
@@ -6987,7 +7275,7 @@ function PanneauDonnees({ appareil, onSetAppareil, groupes, groupeAppareil, onSe
           <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>Rediffuser tous les profils</div>
           <div className="text-xs" style={{ color: INK_SOFT }}>
             Depuis la tablette centrale, après agrégation : personnes et objectifs de tout l'établissement,
-            pas seulement de ce groupe. Toujours chiffré.
+            pas seulement de cette classe. Toujours chiffré.
           </div>
         </button>
       </Card>
@@ -7069,9 +7357,15 @@ function BoutonPhase({ obj, onChange }) {
 /* Création des personnes, objectifs et activation du suivi continu au même
    endroit : la fiche d'une personne se tenait jusqu'ici à deux écrans de
    distance, une carte dans Gestion et une carte dans Personnes. */
+/* Sentinelle de la section « Sans classe » dans PanneauPersonnes : distincte
+   de `null` (qui signifie « rien de déplié ») et de tout id réel de classe. */
+const SANS_CLASSE = '__sans-classe';
+
 function PanneauPersonnes({
   students, guidances, templates, premiereConfiguration, focus,
-  addStudent, removeStudent, renameStudent, groupes, onSetGroupe, onCreerGroupe, axesSuivi, onToggleAxeSuivi, onCreerSuivi,
+  addStudent, removeStudent, renameStudent, classes, onSetClasse, onCreerClasse,
+  onAjouterClasseAvecMembres, onRenameClasse, onRemoveClasse,
+  axesSuivi, onToggleAxeSuivi, onCreerSuivi,
   onAjouterCompteur, onRenommerCompteur, onSupprimerCompteur,
   addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
   onOuvrirGuidances, onOuvrirModeles, onOuvrirAteliers, onOuvrirIntervenants,
@@ -7081,10 +7375,10 @@ function PanneauPersonnes({
   const [copyingObj, setCopyingObj] = useState(null);
   const [copyTargets, setCopyTargets] = useState([]);
   const [initials, setInitials] = useState('');
-  /* Personne pour laquelle le sélecteur de groupe propose de créer un
-     nouveau groupe plutôt que d'en choisir un existant. */
-  const [creationGroupePour, setCreationGroupePour] = useState(null);
-  const [nomNouveauGroupe, setNomNouveauGroupe] = useState('');
+  /* Personne pour laquelle le sélecteur de classe propose de créer une
+     nouvelle classe plutôt que d'en choisir une existante. */
+  const [creationClassePour, setCreationClassePour] = useState(null);
+  const [nomNouvelleClasse, setNomNouvelleClasse] = useState('');
   /* Personne pour laquelle on choisit un suivi à ajouter. */
   const [ajoutSuivi, setAjoutSuivi] = useState(null);
   /* Personne pour laquelle un nouvel objectif s'ouvre déjà déplié, et le type
@@ -7093,20 +7387,48 @@ function PanneauPersonnes({
   const [typeNouveau, setTypeNouveau] = useState(null);
   const studentRefs = useRef({});
 
+  /* Classe dépliée — une seule à la fois, même principe que `openId` pour les
+     personnes. `SANS_CLASSE` déplie la section des personnes non rangées. */
+  const [openClasse, setOpenClasse] = useState(null);
+  /* Fenêtre de création : la classe est facultative sans membre, le
+     `ChoixMultiple` permet d'en ajouter d'emblée. */
+  const [creationClasseOuverte, setCreationClasseOuverte] = useState(false);
+  const [nomCreationClasse, setNomCreationClasse] = useState('');
+  const [membresCreationClasse, setMembresCreationClasse] = useState([]);
+  /* Fenêtre de modification : la classe elle-même (pas seulement son id),
+     pour garder son nom affiché même si la liste change pendant l'édition. */
+  const [classeEnEdition, setClasseEnEdition] = useState(null);
+  const [nomEditionClasse, setNomEditionClasse] = useState('');
+
   const ajouter = () => {
     const v = initials.trim();
     if (!v) return;
-    addStudent(v);
+    // Ajoutée directement dans la classe dépliée, s'il y en a une — sinon
+    // sans classe, y compris depuis la section « Sans classe » elle-même.
+    addStudent(v, openClasse && openClasse !== SANS_CLASSE ? openClasse : null);
     setInitials('');
+  };
+
+  const confirmerCreationClasse = () => {
+    const nom = nomCreationClasse.trim();
+    if (!nom) return;
+    onAjouterClasseAvecMembres(nom, membresCreationClasse);
+    setCreationClasseOuverte(false);
+    setNomCreationClasse('');
+    setMembresCreationClasse([]);
   };
 
   /* Lien croisé : ouvrir ce panneau déjà déplié sur une personne, et son
      objectif en édition le cas échéant — depuis le Suivi ou depuis un
      atelier, plutôt que de retomber sur la liste entière. `nouveau` ouvre
-     directement le formulaire de création plutôt qu'un objectif existant. */
+     directement le formulaire de création plutôt qu'un objectif existant.
+     La classe qui contient cette personne se déplie avec elle, sans quoi le
+     lien croisé n'ouvrirait rien de visible. */
   useEffect(() => {
     if (!focus || !focus.personne) return;
     setOpenId(focus.personne);
+    const cible = students.find((s) => s.id === focus.personne);
+    setOpenClasse(cible && cible.classeId && classes.some((c) => c.id === cible.classeId) ? cible.classeId : SANS_CLASSE);
     if (focus.objectif) setEditingObj(focus.objectif);
     if (focus.nouveau) {
       setCreationPour(focus.personne);
@@ -7114,70 +7436,29 @@ function PanneauPersonnes({
     }
     const node = studentRefs.current[focus.personne];
     if (node) node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus]);
 
-  return (
-    <div>
-      <SectionTitle sub="Identifiées par leurs initiales uniquement. Objectifs et mode de cotation se règlent ici.">
-        Personnes accompagnées
-      </SectionTitle>
+  /* Rendu de la fiche d'une personne, identique quelle que soit la classe qui
+     la contient — extrait en fonction plutôt que dupliqué, pour que la
+     section « Sans classe » et chaque classe partagent exactement le même
+     accordéon, la même édition d'objectifs, le même sélecteur de classe. */
+  const renderPersonne = (s) => (
+    <div key={s.id} ref={(el) => { studentRefs.current[s.id] = el; }}>
+      <Card>
+        <button className="w-full flex items-center justify-between" onClick={() => setOpenId(openId === s.id ? null : s.id)}>
+          <span className="flex items-center gap-3">
+            <PastillePersonne initials={s.initials} />
+            <span className="text-left block text-xs" style={{ color: INK_SOFT }}>
+              {s.objectives.length} objectif{s.objectives.length !== 1 ? 's' : ''}
+              {(s.suivisActifs || []).length > 0 &&
+                ` · ${(s.suivisActifs || []).map((id) => axeDe(axesSuivi, id)).filter(Boolean).map(nomAxe).join(', ')}`}
+            </span>
+          </span>
+          <ChevronRight size={18} style={{ color: INK_SOFT, transform: openId === s.id ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
+        </button>
 
-      {premiereConfiguration && (
-        <Card className="mb-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Sun size={16} style={{ color: INK_SOFT }} />
-            <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Première configuration</span>
-          </div>
-          <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
-            Cette tablette est vierge. Commencez par créer les personnes accompagnées, puis leurs
-            objectifs. Aux ouvertures suivantes, l'application démarrera directement sur Session.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {onOuvrirAteliers && (
-              <Btn variant="ghost" onClick={onOuvrirAteliers} className="text-xs px-3 py-2">Ateliers</Btn>
-            )}
-            {onOuvrirIntervenants && (
-              <Btn variant="ghost" onClick={onOuvrirIntervenants} className="text-xs px-3 py-2">Intervenants</Btn>
-            )}
-            {onOuvrirGuidances && (
-              <Btn variant="ghost" onClick={onOuvrirGuidances} className="text-xs px-3 py-2">Guidances</Btn>
-            )}
-          </div>
-        </Card>
-      )}
-
-      <Card className="mb-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Users size={16} style={{ color: INK_SOFT }} />
-          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Ajouter</span>
-          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{students.length}</span>
-        </div>
-        <div className="flex gap-2">
-          <Field value={initials} onChange={setInitials} placeholder="Initiales (ex. J.D.)" onEnter={ajouter} />
-          <Btn onClick={ajouter} className="px-4 shrink-0"><Plus size={18} /></Btn>
-        </div>
-      </Card>
-
-      {students.length === 0 ? (
-        <Empty>Ajoutez une première personne accompagnée pour commencer.</Empty>
-      ) : (
-      <div className="space-y-3">
-        {students.map((s) => (
-          <div key={s.id} ref={(el) => { studentRefs.current[s.id] = el; }}>
-          <Card>
-            <button className="w-full flex items-center justify-between" onClick={() => setOpenId(openId === s.id ? null : s.id)}>
-              <span className="flex items-center gap-3">
-                <PastillePersonne initials={s.initials} />
-                <span className="text-left block text-xs" style={{ color: INK_SOFT }}>
-                  {s.objectives.length} objectif{s.objectives.length !== 1 ? 's' : ''}
-                  {(s.suivisActifs || []).length > 0 &&
-                    ` · ${(s.suivisActifs || []).map((id) => axeDe(axesSuivi, id)).filter(Boolean).map(nomAxe).join(', ')}`}
-                </span>
-              </span>
-              <ChevronRight size={18} style={{ color: INK_SOFT, transform: openId === s.id ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
-            </button>
-
-            {openId === s.id && (
+        {openId === s.id && (
               <div className="mt-4">
                 <div className="rounded-xl px-3 py-2.5 mb-3" style={{ backgroundColor: PAPER }}>
                   <EditableRow
@@ -7187,64 +7468,66 @@ function PanneauPersonnes({
                       if (window.confirm(`Supprimer ${s.initials} et ses ${s.objectives.length} objectif(s) ?`)) removeStudent(s.id);
                     }}
                   />
-                  {/* Le groupe distingue deux personnes aux mêmes initiales et
+                  {/* La classe distingue deux personnes aux mêmes initiales et
                       décide, tablette par tablette, de qui apparaît sur l'écran
-                      Suivi (personnesVisibles). Sans groupe, une personne reste
-                      visible partout — ce n'est jamais un état bloquant. */}
+                      Suivi (personnesVisibles). Sans classe, une personne reste
+                      visible partout — ce n'est jamais un état bloquant. Second
+                      chemin pour changer une personne de classe, le premier
+                      étant la fenêtre « Modifier » de la classe elle-même. */}
                   <div className="mt-2.5">
-                    <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Groupe</div>
-                    {creationGroupePour === s.id ? (
+                    <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Classe</div>
+                    {creationClassePour === s.id ? (
                       <div className="flex gap-2">
                         <Field
-                          value={nomNouveauGroupe}
-                          onChange={setNomNouveauGroupe}
-                          placeholder="Nom du groupe (ex. Classe 3)"
+                          value={nomNouvelleClasse}
+                          onChange={setNomNouvelleClasse}
+                          placeholder="Nom de la classe (ex. Classe 3)"
                           onEnter={() => {
-                            const nom = nomNouveauGroupe.trim();
+                            const nom = nomNouvelleClasse.trim();
                             if (!nom) return;
-                            onCreerGroupe(s.id, nom);
-                            setCreationGroupePour(null);
+                            onCreerClasse(s.id, nom);
+                            setCreationClassePour(null);
                           }}
                         />
                         <Btn
                           onClick={() => {
-                            const nom = nomNouveauGroupe.trim();
+                            const nom = nomNouvelleClasse.trim();
                             if (!nom) return;
-                            onCreerGroupe(s.id, nom);
-                            setCreationGroupePour(null);
+                            onCreerClasse(s.id, nom);
+                            setCreationClassePour(null);
                           }}
                           className="px-4 shrink-0"
                         >
                           <Plus size={18} />
                         </Btn>
-                        <Btn variant="ghost" onClick={() => setCreationGroupePour(null)} className="px-3 shrink-0">
+                        <Btn variant="ghost" onClick={() => setCreationClassePour(null)} className="px-3 shrink-0">
                           <X size={18} />
                         </Btn>
                       </div>
                     ) : (
                       <select
-                        value={s.groupeId || ''}
+                        value={s.classeId || ''}
                         onChange={(ev) => {
                           const v = ev.target.value;
                           if (v === '__nouveau') {
-                            setNomNouveauGroupe('');
-                            setCreationGroupePour(s.id);
+                            setNomNouvelleClasse('');
+                            setCreationClassePour(s.id);
                             return;
                           }
-                          onSetGroupe(s.id, v || null);
+                          onSetClasse(s.id, v || null);
                         }}
                         className="w-full rounded-lg px-2.5 py-2 text-sm border"
                         style={{ borderColor: BORDER, backgroundColor: CARD }}
                       >
-                        <option value="">Sans groupe</option>
-                        {/* Un groupe supprimé reste proposé sur la personne qui le
-                            porte : sans ça, ouvrir la fiche le réécrirait en
-                            silence vers « Sans groupe ». */}
-                        {s.groupeId && !groupes.some((g) => g.id === s.groupeId) && (
-                          <option value={s.groupeId}>{nomGroupe(groupes, s.groupeId)}</option>
+                        <option value="">Sans classe</option>
+                        {/* Une classe supprimée reste proposée sur la personne qui
+                            la porte : sans ça, ouvrir la fiche la réécrirait en
+                            silence vers « Sans classe ». */}
+                        {s.classeId && !classes.some((g) => g.id === s.classeId) && (
+                          <option value={s.classeId}>{nomClasse(classes, s.classeId)}</option>
                         )}
-                        {groupes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                        <option value="__nouveau">+ Nouveau groupe…</option>
+                        {classes.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                        <option value="__nouveau">+ Nouvelle classe…</option>
                       </select>
                     )}
                   </div>
@@ -7413,10 +7696,129 @@ function PanneauPersonnes({
                 />
               </div>
             )}
-          </Card>
+      </Card>
+    </div>
+  );
+
+  const idsClasses = new Set(classes.map((c) => c.id));
+  // Une classe supprimée ne doit pas faire disparaître les personnes qui la
+  // portaient encore : elles retombent visuellement dans « Sans classe »,
+  // même principe que CLASSE_INCONNUE côté affichage.
+  const sansClasse = students.filter((s) => !s.classeId || !idsClasses.has(s.classeId));
+
+  return (
+    <div>
+      <SectionTitle sub="Identifiées par leurs initiales uniquement. Objectifs et mode de cotation se règlent ici.">
+        Personnes accompagnées
+      </SectionTitle>
+
+      {premiereConfiguration && (
+        <Card className="mb-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Sun size={16} style={{ color: INK_SOFT }} />
+            <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Première configuration</span>
           </div>
-        ))}
-      </div>
+          <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+            Cette tablette est vierge. Commencez par créer les personnes accompagnées, puis leurs
+            objectifs. Aux ouvertures suivantes, l'application démarrera directement sur Session.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {onOuvrirAteliers && (
+              <Btn variant="ghost" onClick={onOuvrirAteliers} className="text-xs px-3 py-2">Ateliers</Btn>
+            )}
+            {onOuvrirIntervenants && (
+              <Btn variant="ghost" onClick={onOuvrirIntervenants} className="text-xs px-3 py-2">Intervenants</Btn>
+            )}
+            {onOuvrirGuidances && (
+              <Btn variant="ghost" onClick={onOuvrirGuidances} className="text-xs px-3 py-2">Guidances</Btn>
+            )}
+          </div>
+        </Card>
+      )}
+
+      <Card className="mb-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Users size={16} style={{ color: INK_SOFT }} />
+          <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Ajouter</span>
+          <span className="text-sm ml-auto" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{students.length}</span>
+        </div>
+        <div className="flex gap-2">
+          <Field value={initials} onChange={setInitials} placeholder="Initiales (ex. J.D.)" onEnter={ajouter} />
+          <Btn onClick={ajouter} className="px-4 shrink-0"><Plus size={18} /></Btn>
+        </div>
+      </Card>
+
+      {students.length === 0 ? (
+        <Empty>Ajoutez une première personne accompagnée pour commencer.</Empty>
+      ) : (
+      <>
+        {/* Classes : l'outil de division des personnes, autrefois un panneau
+            à part, vit désormais ici — appuyer sur une classe la déplie et
+            montre ses usagers, exactement les mêmes fiches que ci-dessus. La
+            création reste facultative : une classe sans membre est valide,
+            on peut y placer des personnes ensuite depuis leur fiche ou
+            depuis « Modifier ». */}
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs uppercase tracking-wide" style={{ color: INK_SOFT }}>Classes</span>
+          <button
+            onClick={() => { setNomCreationClasse(''); setMembresCreationClasse([]); setCreationClasseOuverte(true); }}
+            className="text-xs flex items-center gap-1"
+            style={{ color: INK_SOFT }}
+          >
+            <Plus size={13} /> Créer une classe
+          </button>
+        </div>
+        <div className="space-y-3 mb-3">
+          {classes.map((c) => {
+            const membres = students.filter((s) => s.classeId === c.id);
+            const ouverte = openClasse === c.id;
+            return (
+              <div key={c.id} className="rounded-xl border overflow-hidden" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+                <button onClick={() => setOpenClasse(ouverte ? null : c.id)} className="w-full flex items-center gap-2 px-3 py-2.5 text-left">
+                  <ChevronDown size={15} style={{ color: INK_SOFT, transform: ouverte ? 'none' : 'rotate(-90deg)', transition: 'transform .15s' }} className="shrink-0" />
+                  <School size={15} style={{ color: INK_SOFT }} className="shrink-0" />
+                  <span className="text-sm font-medium flex-1 min-w-0 truncate" style={{ fontFamily: F_DISPLAY }}>{c.name}</span>
+                  <span className="text-xs shrink-0" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{membres.length}</span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(ev) => { ev.stopPropagation(); setNomEditionClasse(c.name); setClasseEnEdition(c); }}
+                    style={{ color: INK_SOFT }}
+                    title="Modifier cette classe"
+                    className="shrink-0 p-1 -m-1"
+                  >
+                    <Pencil size={14} />
+                  </span>
+                </button>
+                {ouverte && (
+                  <div className="px-2.5 pb-2.5 space-y-3">
+                    {membres.length === 0 ? (
+                      <p className="text-xs px-1" style={{ color: INK_SOFT }}>Aucune personne dans cette classe.</p>
+                    ) : (
+                      membres.map(renderPersonne)
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {sansClasse.length > 0 && (
+            <div className="rounded-xl border overflow-hidden" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+              <button onClick={() => setOpenClasse(openClasse === SANS_CLASSE ? null : SANS_CLASSE)} className="w-full flex items-center gap-2 px-3 py-2.5 text-left">
+                <ChevronDown size={15} style={{ color: INK_SOFT, transform: openClasse === SANS_CLASSE ? 'none' : 'rotate(-90deg)', transition: 'transform .15s' }} className="shrink-0" />
+                <span className="text-sm font-medium flex-1 min-w-0 truncate" style={{ fontFamily: F_DISPLAY, color: INK_SOFT }}>Sans classe</span>
+                <span className="text-xs shrink-0" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{sansClasse.length}</span>
+              </button>
+              {openClasse === SANS_CLASSE && (
+                <div className="px-2.5 pb-2.5 space-y-3">
+                  {sansClasse.map(renderPersonne)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </>
       )}
 
       {ajoutSuivi && (
@@ -7427,6 +7829,75 @@ function PanneauPersonnes({
           onCreer={() => { const sid = ajoutSuivi; setAjoutSuivi(null); onCreerSuivi(sid); }}
           onClose={() => setAjoutSuivi(null)}
         />
+      )}
+
+      {creationClasseOuverte && (
+        <Modale titre="Créer une classe" onClose={() => setCreationClasseOuverte(false)}>
+          <div className="mb-3">
+            <Field
+              value={nomCreationClasse}
+              onChange={setNomCreationClasse}
+              placeholder="Nom de la classe (ex. Classe 1)"
+              onEnter={confirmerCreationClasse}
+              autoFocus
+            />
+          </div>
+          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Personnes à y placer (facultatif)</div>
+          <ChoixMultiple
+            placeholder="Aucune personne pour l'instant"
+            options={students.map((s) => ({ id: s.id, name: s.initials }))}
+            values={membresCreationClasse}
+            onToggle={(id) => setMembresCreationClasse((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]))}
+          />
+          <Btn onClick={confirmerCreationClasse} disabled={!nomCreationClasse.trim()} className="w-full text-sm py-2.5 mt-3">
+            Créer
+          </Btn>
+        </Modale>
+      )}
+
+      {classeEnEdition && (
+        <Modale titre="Modifier la classe" onClose={() => setClasseEnEdition(null)}>
+          <div className="mb-3">
+            <Field value={nomEditionClasse} onChange={setNomEditionClasse} placeholder="Nom de la classe" />
+          </div>
+          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Personnes de cette classe</div>
+          <ChoixMultiple
+            placeholder="Aucune personne"
+            options={students.map((s) => ({ id: s.id, name: s.initials }))}
+            values={students.filter((s) => s.classeId === classeEnEdition.id).map((s) => s.id)}
+            onToggle={(id) => {
+              const cible = students.find((s) => s.id === id);
+              onSetClasse(id, cible && cible.classeId === classeEnEdition.id ? null : classeEnEdition.id);
+            }}
+          />
+          <div className="flex gap-2 mt-3">
+            <Btn
+              onClick={() => {
+                const nom = nomEditionClasse.trim();
+                if (nom && nom !== classeEnEdition.name) onRenameClasse(classeEnEdition.id, nom);
+                setClasseEnEdition(null);
+              }}
+              disabled={!nomEditionClasse.trim()}
+              className="flex-1 text-sm py-2.5"
+            >
+              Enregistrer
+            </Btn>
+            <Btn
+              variant="ghost"
+              onClick={() => {
+                if (window.confirm(`Supprimer la classe « ${classeEnEdition.name} » ?\n\nLes personnes qu'elle contient repassent en « Sans classe », rien n'est effacé.`)) {
+                  if (openClasse === classeEnEdition.id) setOpenClasse(null);
+                  onRemoveClasse(classeEnEdition.id);
+                  setClasseEnEdition(null);
+                }
+              }}
+              className="text-sm py-2.5"
+              style={{ color: CRISIS }}
+            >
+              Supprimer
+            </Btn>
+          </div>
+        </Modale>
       )}
     </div>
   );
@@ -7611,13 +8082,32 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
   const [targetLevelId, setTargetLevelId] = useState(
     initConfig.targetLevelId || (initConfig.levels && initConfig.levels[0] && initConfig.levels[0].id) || DEFAULT_INTERVAL_LEVELS[0].id
   );
-  const [threshold, setThreshold] = useState((initConfig.mastery || DEFAULT_MASTERY).threshold);
-  const [masterySessions, setMasterySessions] = useState((initConfig.mastery || DEFAULT_MASTERY).sessions);
-  const [masteryUnit, setMasteryUnit] = useState((initConfig.mastery || DEFAULT_MASTERY).unit || 'sessions');
+  const [threshold, setThreshold] = useState((initConfig.mastery || (init.type === 'probe' ? DEFAULT_MASTERY_PROBE : DEFAULT_MASTERY)).threshold);
+  const [masterySessions, setMasterySessions] = useState((initConfig.mastery || (init.type === 'probe' ? DEFAULT_MASTERY_PROBE : DEFAULT_MASTERY)).sessions);
+  const [masteryUnit, setMasteryUnit] = useState((initConfig.mastery || (init.type === 'probe' ? DEFAULT_MASTERY_PROBE : DEFAULT_MASTERY)).unit || 'sessions');
   /* Sens du critère, propre au mode Occurrence : « au moins » (augmenter un
      comportement) ou « au plus » (le réduire). Les autres modes restent sur
      « au moins », seul sens cohérent pour un pourcentage de réussite. */
   const [masterySens, setMasterySens] = useState((initConfig.mastery || DEFAULT_MASTERY).sens || 'min');
+  /* Probe : fréquence quotidienne et cotation 1/0 ou par niveaux de
+     guidance (option, désactivée par défaut). */
+  const [probesParJour, setProbesParJour] = useState(initConfig.probesParJour || 1);
+  const [useGuidance, setUseGuidance] = useState(!!initConfig.useGuidance);
+  /* La cotation par guidance n'est active pour Probe que si la case est
+     cochée — contrairement aux autres types de USES_GUIDANCE, où c'est
+     automatique. */
+  const guidanceUiActive = type === 'probe' ? useGuidance : USES_GUIDANCE.includes(type);
+  /* Un changement de mode réinitialise le critère d'acquisition à son défaut
+     — 100 % sur 3 jours pour Probe, 80 % sur 3 séances sinon — sauf en
+     édition d'un objectif qui a déjà son propre réglage. */
+  useEffect(() => {
+    if (initConfig.mastery) return;
+    const d = type === 'probe' ? DEFAULT_MASTERY_PROBE : DEFAULT_MASTERY;
+    setThreshold(d.threshold);
+    setMasterySessions(d.sessions);
+    setMasteryUnit(d.unit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type]);
 
   function submit() {
     if (!name.trim()) return;
@@ -7635,6 +8125,10 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
     }
     if (type === 'chaining' || type === 'balance') config.steps = steps.filter((s) => s.name.trim());
     if (type === 'balance' && balanceSet.length) config.balanceOutcomes = balanceSet;
+    if (type === 'probe') {
+      config.probesParJour = PROBE_FREQUENCES.includes(probesParJour) ? probesParJour : 1;
+      config.useGuidance = !!useGuidance;
+    }
     if (avecCompteur && type !== 'occurrence') {
       config.avecCompteur = true;
       if (parEssaiPossible && compteurParEssai) config.compteurParEssai = true;
@@ -7647,7 +8141,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
       }
       if (parEssaiPossible && chronoParEssai) config.chronoParEssai = true;
     }
-    if (USES_GUIDANCE.includes(type) && guidanceSet.length) config.guidanceSet = guidanceSet;
+    if (guidanceUiActive && guidanceSet.length) config.guidanceSet = guidanceSet;
     if (MASTERY_TYPES.includes(type)) {
       const occ = type === 'occurrence';
       config.mastery = {
@@ -7865,7 +8359,39 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
         </div>
       )}
 
-      {USES_GUIDANCE.includes(type) && (
+      {type === 'probe' && (
+        <div className="space-y-3">
+          <div>
+            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Probes par jour</div>
+            <div className="flex gap-1.5">
+              {PROBE_FREQUENCES.map((n) => (
+                <button key={n} onClick={() => setProbesParJour(n)} className="rounded-lg px-3.5 py-2 text-sm border"
+                  style={{ borderColor: probesParJour === n ? ACCENT : BORDER, backgroundColor: probesParJour === n ? ACCENT : 'transparent', color: probesParJour === n ? ACCENT_INK : INK_SOFT, fontFamily: F_MONO }}>
+                  {n}
+                </button>
+              ))}
+            </div>
+            {probesParJour > 1 && (
+              <p className="text-xs mt-1.5" style={{ color: INK_SOFT }}>
+                Un matin, un après-midi (avant/après 13 h). La cotation se bloque une fois les
+                {' '}{probesParJour} faites, débloquable d'un appui si besoin.
+              </p>
+            )}
+          </div>
+          <button
+            onClick={() => setUseGuidance((v) => !v)}
+            className="w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm border text-left"
+            style={{ borderColor: useGuidance ? ACCENT : BORDER, backgroundColor: useGuidance ? ACCENT + '18' : 'transparent' }}
+          >
+            <span className="w-4 h-4 rounded border shrink-0 flex items-center justify-center" style={{ borderColor: useGuidance ? ACCENT : BORDER, backgroundColor: useGuidance ? ACCENT : 'transparent' }}>
+              {useGuidance && <Check size={12} style={{ color: ACCENT_INK }} />}
+            </span>
+            Coter par niveaux de guidance plutôt qu'en 1 / 0
+          </button>
+        </div>
+      )}
+
+      {guidanceUiActive && (
         <div className="rounded-xl px-3 py-3" style={{ backgroundColor: PAPER }}>
           <div className="flex items-center gap-1.5 mb-1">
             <SlidersHorizontal size={14} style={{ color: INK_SOFT }} />
@@ -8248,9 +8774,9 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, crises, guidances, onSetAtelierGroup, notify, onOuvrirConfiguration, onProgrammerEquilibre, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish, onAnnulerCorrection }) {
+function SessionScreen({ students, ateliers, intervenants, crises, guidances, sessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onProgrammerEquilibre, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish, onAnnulerCorrection }) {
   if (activeSession) {
-    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} notify={notify} onFinish={onFinish} onAnnulerCorrection={onAnnulerCorrection} suiteDuJour={planDuJour && planDuJour.restants} />;
+    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} sessions={sessions} notify={notify} onFinish={onFinish} onAnnulerCorrection={onAnnulerCorrection} suiteDuJour={planDuJour && planDuJour.restants} />;
   }
   return (
     <SessionSetup
@@ -8279,8 +8805,6 @@ function AtelierLancement({
   const [selected, setSelected] = useState(initial.selected);
   const [atelierFavorites, setAtelierFavorites] = useState(initial.favorites);
   const [doubleCotation, setDoubleCotation] = useState(false);
-  const [depuisMemoire, setDepuisMemoire] = useState(!!atelier && initial.studentIds.length > 0);
-  const [detailObjectifs, setDetailObjectifs] = useState(false);
 
   useEffect(() => {
     const nbNouveaux = Object.values(initial.nouveautes).reduce((n, l) => n + l.length, 0);
@@ -8300,10 +8824,8 @@ function AtelierLancement({
       // mémorisé pour cet atelier, à défaut prioritaires, à défaut tous.
       return { ...sel, [id]: st ? objectifsParDefaut(st, atelier, mode) : [] };
     });
-    setDepuisMemoire(false);
   };
   const toggleObjective = (sid, oid) => {
-    setDetailObjectifs(true);
     setSelected((sel) => {
       const cur = sel[sid] || [];
       return { ...sel, [sid]: cur.includes(oid) ? cur.filter((x) => x !== oid) : [...cur, oid] };
@@ -8420,63 +8942,12 @@ function AtelierLancement({
         })}
       </div>
 
-      {/* Configuration mémorisée appliquée : on ne montre que ce qui diffère de
-          l'habituel, plutôt que de redérouler toute la liste à revérifier. */}
-      {depuisMemoire && !detailObjectifs && studentIds.length > 0 && (() => {
-        const nbObjectifs = studentIds.reduce((n, sid) => n + (selected[sid] || []).length, 0);
-        const lignesNeuves = Object.keys(initial.nouveautes).flatMap((sid) => {
-          const st = students.find((x) => x.id === sid);
-          if (!st) return [];
-          return initial.nouveautes[sid]
-            .map((oid) => st.objectives.find((o) => o.id === oid))
-            .filter(Boolean)
-            .map((o) => ({ cle: `${sid}-${o.id}`, initiales: st.initials, nom: o.name, type: o.type }));
-        });
-        return (
-          <Card className="mb-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Star size={16} style={{ color: CAT_AMBER }} />
-              <span className="font-semibold text-sm" style={{ fontFamily: F_DISPLAY }}>Configuration habituelle appliquée</span>
-            </div>
-            <div className="text-xs mb-3" style={{ color: INK_SOFT }}>
-              <span style={{ fontFamily: F_MONO }}>{studentIds.length}</span> personne{studentIds.length !== 1 ? 's' : ''} ·{' '}
-              <span style={{ fontFamily: F_MONO }}>{nbObjectifs}</span> objectif{nbObjectifs !== 1 ? 's' : ''} coché{nbObjectifs !== 1 ? 's' : ''}
-            </div>
-
-            {lignesNeuves.length === 0 ? (
-              <div className="text-xs mb-3" style={{ color: INK_SOFT }}>
-                Rien de nouveau depuis la dernière mémorisation. Décochez une personne absente
-                ci-dessus si besoin, sinon lancez directement.
-              </div>
-            ) : (
-              <div className="mb-3">
-                <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
-                  Ajouté{lignesNeuves.length !== 1 ? 's' : ''} depuis la mémorisation, coché{lignesNeuves.length !== 1 ? 's' : ''} d'office :
-                </div>
-                <div className="space-y-1.5">
-                  {lignesNeuves.map((l) => {
-                    const meta = typeMeta(l.type);
-                    const Icon = meta.icon;
-                    return (
-                      <div key={l.cle} className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm" style={{ backgroundColor: PAPER }}>
-                        <Icon size={14} style={{ color: meta.color }} className="shrink-0" />
-                        <span className="font-semibold shrink-0" style={{ fontFamily: F_DISPLAY }}>{l.initiales}</span>
-                        <span className="min-w-0 flex-1 truncate">{l.nom}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            <Btn variant="ghost" onClick={() => setDetailObjectifs(true)} className="w-full text-sm">
-              <Eye size={15} /> Afficher le détail des objectifs
-            </Btn>
-          </Card>
-        );
-      })()}
-
-      {(!depuisMemoire || detailObjectifs) && studentIds.map((sid) => {
+      {/* La configuration mémorisée s'applique silencieusement (personnes et
+         objectifs déjà cochés ci-dessous) : plus de carte de résumé
+         intermédiaire à lire avant de voir l'atelier et le bouton Lancer.
+         Les nouveautés depuis la dernière mémorisation restent recochées
+         d'office, visibles directement dans la liste qui suit. */}
+      {studentIds.map((sid) => {
         const st = students.find((s) => s.id === sid);
         if (!st) return null;
         return (
@@ -8754,7 +9225,7 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
   );
 }
 
-function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, notify, onFinish, onAnnulerCorrection, suiteDuJour }) {
+function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, sessions, notify, onFinish, onAnnulerCorrection, suiteDuJour }) {
   const isEdit = !!session.isEdit;
   const [currentId, setCurrentId] = useState(session.studentIds[0]);
   const [viewMode, setViewMode] = useState('priority');
@@ -8764,6 +9235,18 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   const [wakeOk, setWakeOk] = useState(false);
   const stepsRef = useRef({});
   const [expanded, setExpanded] = useState(null); // { sid, oid } de l'objectif agrandi
+  /* Objectifs Probe débloqués malgré le quota du jour déjà atteint — vaut
+     pour cette séance seulement, jamais persisté : rouvrir l'atelier plus
+     tard revérifie le quota depuis zéro. Clé `${sid}|${oid}`. */
+  const [probesDebloquees, setProbesDebloquees] = useState(() => new Set());
+  const debloquerProbe = (sid, oid) => setProbesDebloquees((s) => new Set(s).add(`${sid}|${oid}`));
+  function probeEstBloque(sid, oid) {
+    const obj = session.objectiveSnapshot[oid];
+    if (!obj || obj.type !== 'probe') return false;
+    if (probesDebloquees.has(`${sid}|${oid}`)) return false;
+    const quota = obj.config.probesParJour || 1;
+    return probesDuJour(sessions, session, sid, oid, now).faites >= quota;
+  }
 
   /* Feuilles de commande, une seule ouverte à la fois : 'atelier' (passage à
      l'atelier suivant), 'ajout' (arrivée d'une personne), ou { personne: sid }. */
@@ -8771,26 +9254,68 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
   /* Densité d'affichage. Réduire la taille agrandit d'autant la largeur
      disponible en pixels de mise en page : la grille place alors davantage de
-     colonnes d'elle-même, et davantage de lignes tiennent en hauteur. */
+     colonnes d'elle-même, et davantage de lignes tiennent en hauteur.
+     Continue entre ZOOM_MIN et ZOOM_MAX — ZOOM_LEVELS n'est plus qu'une liste
+     de paliers pour le bouton, le pincement à deux doigts fixe n'importe
+     quelle valeur intermédiaire. */
   const [zoom, setZoom] = useState(1);
   useEffect(() => {
     (async () => {
       const v = await store.getRaw('aba:zoom');
       const n = Number(v);
-      if (ZOOM_LEVELS.some((z) => z.v === n)) setZoom(n);
+      if (n >= ZOOM_MIN && n <= ZOOM_MAX) setZoom(n);
     })();
   }, []);
-  function cycleZoom() {
-    const i = ZOOM_LEVELS.findIndex((z) => z.v === zoom);
-    const next = ZOOM_LEVELS[(i + 1) % ZOOM_LEVELS.length].v;
-    setZoom(next);
-    store.setRaw('aba:zoom', String(next));
+  function fixerZoom(n) {
+    const borne = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, n));
+    setZoom(borne);
+    store.setRaw('aba:zoom', String(borne));
   }
+  /* Palier suivant strictement inférieur — le pincement peut avoir laissé le
+     zoom entre deux paliers, donc « suivant » ne veut plus dire « à l'index
+     d'après » dans ZOOM_LEVELS. Reboucle à 100 % sous le dernier palier. */
+  function cycleZoom() {
+    const suivant = ZOOM_LEVELS.filter((z) => z.v < zoom - 0.001).sort((a, b) => b.v - a.v)[0];
+    fixerZoom(suivant ? suivant.v : ZOOM_LEVELS[0].v);
+  }
+  const cotationRef = useRef(null);
+  usePinchDensite(cotationRef, { valeur: zoom, onChange: fixerZoom });
+
+  /* Hauteur réelle de l'en-tête collant, pour caler le rail de personnes
+     juste en dessous plutôt que sur un décalage en dur (`top-20`) qui ne
+     correspond plus à la hauteur une fois l'en-tête rendu sticky. */
+  const headerRef = useRef(null);
+  const [hauteurEntete, setHauteurEntete] = useState(0);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0] && entries[0].contentRect.height;
+      if (h) setHauteurEntete(h);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  /* Largeur réelle de la zone de cotation, pour calculer un nombre de
+     colonnes explicite plutôt que de le laisser à l'heuristique columnWidth
+     du navigateur (voir packStyle ci-dessous). */
+  const [largeurZone, setLargeurZone] = useState(0);
+  useEffect(() => {
+    const el = cotationRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0] && entries[0].contentRect.width;
+      if (w) setLargeurZone(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   /* Disposition en colonnes plutôt qu'en lignes : une fiche courte (un
      compteur) n'impose plus sa hauteur à la fiche voisine, et l'espace
      laissé libre est repris par l'objectif suivant, même s'il appartient à
-     une autre personne. Le nombre de colonnes suit la largeur disponible,
-     donc la densité choisie. */
+     une autre personne. */
   const gridItemStyle = {
     breakInside: 'avoid',
     WebkitColumnBreakInside: 'avoid',
@@ -8804,13 +9329,25 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      courant en début de suivi, quand une personne n'a encore qu'un ou deux
      objectifs — le navigateur les empile dans la première colonne et laisse
      le reste de la largeur inoccupé, quelle que soit la place disponible.
-     En dessous de ce seuil, une rangée flex n'a pas ce défaut. */
-  const packStyle = (count, colWidth) => (
-    count >= 3
-      ? { style: { zoom, columnWidth: `${colWidth}px`, columnGap: '0.75rem' }, itemStyle: gridItemStyle }
-      : { style: { zoom, display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }, itemStyle: { flex: `1 1 ${colWidth}px`, minWidth: 0 } }
-  );
-  const cotationRef = useRef(null);
+     En dessous de ce seuil, une rangée flex n'a pas ce défaut.
+
+     `colWidth` est la largeur MINIMALE d'une colonne : le nombre de colonnes
+     se déduit de la largeur réelle de la zone (mise à l'échelle par le
+     zoom), au lieu d'être laissé à `columnWidth`, dont l'heuristique posait
+     une seule colonne dès qu'une carte contenait quelque chose de plus large
+     que `colWidth` — la bande de boutons de guidance du mode Essais,
+     notamment — même quand la largeur disponible permettait clairement deux
+     colonnes. `compact` descend jusqu'aux widgets pour resserrer ces mêmes
+     boutons quand la colonne obtenue est étroite. */
+  const packStyle = (count, colWidth) => {
+    if (count < 3) {
+      return { style: { zoom, display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }, itemStyle: { flex: `1 1 ${colWidth}px`, minWidth: 0 }, compact: false };
+    }
+    const disponible = largeurZone ? largeurZone / zoom : colWidth;
+    const colonnes = Math.max(1, Math.min(4, Math.floor(disponible / colWidth)));
+    const compact = colonnes >= 2 && disponible / colonnes < 240;
+    return { style: { zoom, columnCount: colonnes, columnGap: '0.75rem' }, itemStyle: gridItemStyle, compact };
+  };
 
   /* Personnes dont les cotations sont à l'écran. Une personne repartie sort de
      la zone de cotation mais reste dans la séance — en correction, tout le
@@ -9040,6 +9577,21 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
   return (
     <div>
+      {/* En-tête collant : titre, actions, bandeaux et bascule
+          Prioritaires/Par personne restent à l'écran pendant le défilement
+          des cotations — auparavant tout défilait ensemble, obligeant à
+          remonter pour changer de vue ou retrouver le bouton densité. La
+          marge négative + le padding compensé absorbent le padding du haut
+          du conteneur de page : une fois collé, le fond couvre la zone de
+          l'encoche au lieu de laisser les cartes défiler dessous. */}
+      <div
+        ref={headerRef}
+        style={{
+          position: 'sticky', top: 0, zIndex: 20, background: PAPER,
+          marginLeft: '-1rem', marginRight: '-1rem', paddingLeft: '1rem', paddingRight: '1rem',
+          marginTop: 'calc(-1 * env(safe-area-inset-top, 0px))', paddingTop: 'env(safe-area-inset-top, 0px)',
+        }}
+      >
       <div className="mb-3">
         <div className="flex flex-wrap items-center gap-1.5">
           {isEdit ? (
@@ -9071,11 +9623,12 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
             {!isEdit && (
               <button
                 onClick={cycleZoom}
-                className="rounded-xl px-2.5 py-2 border"
+                className="rounded-xl px-2.5 py-2 border flex items-center gap-1"
                 style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-                title={`Densité d'affichage : ${(ZOOM_LEVELS.find((z) => z.v === zoom) || ZOOM_LEVELS[0]).l}`}
+                title="Densité d'affichage — pincer à deux doigts pour ajuster finement"
               >
                 <LayoutGrid size={15} />
+                <span className="text-xs" style={{ fontFamily: F_MONO }}>{Math.round(zoom * 100)}%</span>
               </button>
             )}
             {!isEdit && hasInterval && (
@@ -9157,6 +9710,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           })}
         </div>
       </div>
+      </div>
 
       <div
         className="flex gap-3"
@@ -9176,7 +9730,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               <Empty>Aucun objectif prioritaire parmi les personnes présentes.</Empty>
             ) : (() => {
               /* Une fiche par objectif, rendue par les deux zones */
-              const carte = (k) => {
+              const carte = (k, compact) => {
                 const [sid, oid] = k.split('|');
                 const obj = session.objectiveSnapshot[oid];
                 const st = students.find((x) => x.id === sid);
@@ -9193,6 +9747,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                     onToggleHidden={() => toggleHidden(sid, oid)}
                     onExpand={() => setExpanded({ sid, oid })}
                     onChange={(p) => updateEntry(sid, oid, p)}
+                    compact={compact}
+                    probeBloque={probeEstBloque(sid, oid)}
+                    onDebloquerProbe={() => debloquerProbe(sid, oid)}
                   />
                 );
               };
@@ -9207,7 +9764,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                     onReorder={reorderPriority}
                     style={pack.style}
                     itemStyle={pack.itemStyle}
-                    renderItem={carte}
+                    renderItem={(k) => carte(k, pack.compact)}
                   />
                 );
               }
@@ -9218,7 +9775,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                  toute la largeur, cas que packStyle ne couvre pas. */
               const packBalance = balanceKeys.length > 1
                 ? packStyle(balanceKeys.length, 340)
-                : { style: { zoom, columnWidth: '100%', columnGap: '0.75rem' }, itemStyle: gridItemStyle };
+                : { style: { zoom, columnWidth: '100%', columnGap: '0.75rem' }, itemStyle: gridItemStyle, compact: false };
               const packCote = packStyle(autresKeys.length, 260);
 
               return (
@@ -9230,7 +9787,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       onReorder={reorderPriority}
                       style={packBalance.style}
                       itemStyle={packBalance.itemStyle}
-                      renderItem={carte}
+                      renderItem={(k) => carte(k, packBalance.compact)}
                     />
                   </div>
                   {autresKeys.length > 0 && (
@@ -9242,7 +9799,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                         onReorder={reorderPriority}
                         style={packCote.style}
                         itemStyle={packCote.itemStyle}
-                        renderItem={carte}
+                        renderItem={(k) => carte(k, packCote.compact)}
                       />
                     </div>
                   )}
@@ -9255,12 +9812,15 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 <span className="text-2xl font-semibold" style={{ fontFamily: F_DISPLAY }}>{student ? student.initials : ''}</span>
               </div>
 
+              {(() => {
+                const packSolo = packStyle(objIds.length, 280);
+                return (
               <ReorderList
                 items={objIds}
                 keyOf={(oid) => oid}
                 onReorder={(next) => reorderObjectives(currentId, next)}
-                style={packStyle(objIds.length, 280).style}
-                itemStyle={packStyle(objIds.length, 280).itemStyle}
+                style={packSolo.style}
+                itemStyle={packSolo.itemStyle}
                 renderItem={(oid) => {
                   const obj = session.objectiveSnapshot[oid];
                   if (!obj) return null;
@@ -9272,12 +9832,17 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       session={session} crises={crises} studentId={currentId} guidances={guidances}
                       hidden={hiddenFor(currentId).includes(oid)}
                       onToggleHidden={() => toggleHidden(currentId, oid)}
+                      compact={packSolo.compact}
                       onExpand={() => setExpanded({ sid: currentId, oid })}
                       onChange={(p) => updateEntry(currentId, oid, p)}
+                      probeBloque={probeEstBloque(currentId, oid)}
+                      onDebloquerProbe={() => debloquerProbe(currentId, oid)}
                     />
                   );
                 }}
               />
+                );
+              })()}
 
               <Card className="mt-3">
                 <div className="flex items-center gap-2 mb-2">
@@ -9304,8 +9869,12 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
         {expanded && session.objectiveSnapshot[expanded.oid] && (
           <div className="fixed inset-0 z-40 overflow-y-auto" style={{ backgroundColor: PAPER }}>
             <div
-              className="max-w-3xl mx-auto px-4 pb-10"
-              style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+              className="max-w-3xl mx-auto pb-10"
+              style={{
+                paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)',
+                paddingLeft: 'max(1rem, env(safe-area-inset-left, 0px))',
+                paddingRight: 'max(1rem, env(safe-area-inset-right, 0px))',
+              }}
             >
               <div className="flex items-center justify-between mb-3">
                 <span className="text-lg font-semibold" style={{ fontFamily: F_DISPLAY }}>
@@ -9327,6 +9896,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 expandedView
                 onExpand={() => setExpanded(null)}
                 onChange={(p) => updateEntry(expanded.sid, expanded.oid, p)}
+                probeBloque={probeEstBloque(expanded.sid, expanded.oid)}
+                onDebloquerProbe={() => debloquerProbe(expanded.sid, expanded.oid)}
               />
             </div>
           </div>
@@ -9334,7 +9905,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
         {/* Rail de personnes : navigation, arrivée et départ — les trois se
             jouaient auparavant à trois endroits de l'écran. */}
-        <div className="shrink-0 flex flex-col gap-1.5 sticky top-20 self-start">
+        <div className="shrink-0 flex flex-col gap-1.5 sticky self-start" style={{ top: `calc(${hauteurEntete}px + 0.75rem)` }}>
           {session.studentIds.map((sid) => {
             const st = students.find((s) => s.id === sid);
             if (!st) return null;
@@ -9625,7 +10196,7 @@ function FeuillePersonne({ sid, students, present, onPartir, onFaireRevenir, onS
   );
 }
 
-function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick }) {
+function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick, compact, probeBloque, onDebloquerProbe }) {
   /* Double-appui sur l'intitulé : agrandit la fiche. On le détecte à la main,
      l'événement natif de double-clic étant peu fiable au toucher sur iOS. */
   const dernierAppui = useRef(0);
@@ -9664,7 +10235,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
   }
 
   return (
-    <Card>
+    <Card style={compact ? { padding: '0.75rem' } : undefined}>
       <div className="flex items-start justify-between gap-2">
         {studentLabel && (
           <button
@@ -9690,12 +10261,13 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
           </button>
         )}
       </div>
-      <div className="mt-3">
-        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
+      <div className={compact ? 'mt-2' : 'mt-3'}>
+        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} compact={compact} />}
         {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
-        {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
-        {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} />}
+        {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} compact={compact} />}
+        {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} compact={compact} />}
+        {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} bloque={probeBloque} onDebloquer={onDebloquerProbe} />}
         {!TYPES[obj.type] && (
           <div className="text-xs" style={{ color: INK_SOFT }}>
             Ce mode de cotation a été retiré. L'objectif est à recréer dans un mode disponible.
@@ -9909,7 +10481,64 @@ function OccurrenceWidget({ entry, onChange }) {
   );
 }
 
-function TrialsWidget({ obj, entry, guidances, onChange }) {
+/* Probe : 1/0 par défaut, ou par niveaux de guidance si `config.useGuidance`.
+   `bloque` grise la carte quand le quota du jour (config.probesParJour) est
+   déjà atteint — voir probesDuJour ; un appui la débloque pour la séance. */
+function ProbeWidget({ obj, entry, guidances, onChange, bloque, onDebloquer }) {
+  if (bloque) {
+    return (
+      <button
+        onClick={onDebloquer}
+        className="w-full rounded-xl py-4 text-sm border text-center"
+        style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: PAPER }}
+      >
+        Probe du jour déjà faite — appuyer pour coter quand même
+      </button>
+    );
+  }
+  const list = objectiveGuidances(obj, guidances);
+  if (obj.config.useGuidance) {
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {list.map((g) => {
+          const on = entry.guidance === g.code;
+          const texte = texteLisibleSur(g.color);
+          return (
+            <button
+              key={g.code}
+              onClick={() => onChange({ guidance: on ? null : g.code, value: null, creneau: creneauProbe(Date.now()) })}
+              className="flex-1 min-w-[72px] rounded-xl py-3 border active:scale-95 transition-transform"
+              style={{ borderColor: on ? g.color : BORDER, backgroundColor: on ? g.color : 'transparent', color: on ? texte : INK_SOFT }}
+            >
+              <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
+              <div className="text-[11px] leading-tight break-words" style={{ overflowWrap: 'anywhere' }}>{g.label}</div>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+  return (
+    <div className="flex gap-2">
+      <button
+        onClick={() => onChange({ value: entry.value === 0 ? null : 0, guidance: null, creneau: creneauProbe(Date.now()) })}
+        className="flex-1 rounded-xl py-4 text-lg font-semibold border active:scale-95 transition-transform"
+        style={{ borderColor: entry.value === 0 ? CRISIS : BORDER, backgroundColor: entry.value === 0 ? CRISIS : 'transparent', color: entry.value === 0 ? '#fff' : INK_SOFT }}
+      >
+        0
+      </button>
+      <button
+        onClick={() => onChange({ value: entry.value === 1 ? null : 1, guidance: null, creneau: creneauProbe(Date.now()) })}
+        className="flex-1 rounded-xl py-4 text-lg font-semibold border active:scale-95 transition-transform"
+        style={{ borderColor: entry.value === 1 ? TYPES.probe.color : BORDER, backgroundColor: entry.value === 1 ? TYPES.probe.color : 'transparent', color: entry.value === 1 ? texteLisibleSur(TYPES.probe.color) : INK_SOFT }}
+      >
+        1
+      </button>
+    </div>
+  );
+}
+
+function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
   const list = objectiveGuidances(obj, guidances);
   const trials = entry.trials || [];
   const planned = obj.config.trialCount || 0; // 0 = pas de limite
@@ -10010,11 +10639,17 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
             <button
               key={g.code}
               onClick={() => record(g.code)}
-              className="flex-1 min-w-[72px] rounded-xl py-3 active:scale-95 transition-transform"
+              className={`flex-1 ${compact ? 'min-w-[56px] py-2' : 'min-w-[72px] py-3'} rounded-xl active:scale-95 transition-transform`}
               style={{ backgroundColor: g.color, color: texte }}
             >
               <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
-              <div className="text-[11px] leading-tight break-words" style={{ overflowWrap: 'anywhere', color: texte }}>{g.label}</div>
+              {/* En densité compacte, une colonne étroite ferait passer le
+                  libellé à la ligne et gonflerait la hauteur de la carte —
+                  exactement le symptôme signalé (« plus d'empilement
+                  qu'avant »). Le code seul suffit à coter. */}
+              {!compact && (
+                <div className="text-[11px] leading-tight break-words" style={{ overflowWrap: 'anywhere', color: texte }}>{g.label}</div>
+              )}
             </button>
           );
         })}
@@ -10208,7 +10843,7 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
   );
 }
 
-function ChainingWidget({ obj, entry, guidances, onChange }) {
+function ChainingWidget({ obj, entry, guidances, onChange, compact }) {
   const list = objectiveGuidances(obj, guidances);
   const steps = obj.config.steps || [];
   const coded = steps.filter((s) => entry.steps[s.id]).length;
@@ -10253,7 +10888,7 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
                   const on = current === g.code;
                   return (
                     <button key={g.code} onClick={() => setStep(s.id, g.code)}
-                      className="flex-1 min-w-[56px] rounded-lg py-2 text-xs font-semibold border active:scale-95 transition-transform"
+                      className={`flex-1 ${compact ? 'min-w-[40px] py-1.5' : 'min-w-[56px] py-2'} rounded-lg text-xs font-semibold border active:scale-95 transition-transform`}
                       style={{ fontFamily: F_DISPLAY, borderColor: on ? g.color : BORDER, backgroundColor: on ? g.color : 'transparent', color: on ? texteLisibleSur(g.color) : INK_SOFT }}
                       title={g.label}>
                       {g.code}
@@ -10277,7 +10912,7 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
   );
 }
 
-function BalanceWidget({ obj, entry, onChange }) {
+function BalanceWidget({ obj, entry, onChange, compact }) {
   const steps = obj.config.steps || [];
   const issues = balanceOutcomes(obj);
   const trials = balanceTrials(entry);
@@ -10367,7 +11002,7 @@ function BalanceWidget({ obj, entry, onChange }) {
                     <button
                       key={o.k}
                       onClick={() => setStep(st.id, { outcome: on ? null : o.k })}
-                      className="flex-1 min-w-[44px] rounded-lg py-2 text-xs font-semibold border active:scale-95 transition-transform"
+                      className={`flex-1 ${compact ? 'min-w-[36px] py-1.5' : 'min-w-[44px] py-2'} rounded-lg text-xs font-semibold border active:scale-95 transition-transform`}
                       style={{ fontFamily: F_DISPLAY, borderColor: on ? o.color : BORDER, backgroundColor: on ? o.color : 'transparent', color: on ? texteLisibleSur(o.color) : INK_SOFT }}
                       title={o.label}
                     >
@@ -10736,10 +11371,10 @@ function FeuilleJourneeSuivi({ cible, releves, students, axesSuivi, onAjouter, o
    importée, ne l'applique jamais seul. Les personnes déjà alignées (même id
    des deux côtés) ne sont même pas affichées — c'est ce qui rend une
    rediffusion répétée quasi silencieuse. */
-function EcranRapprochementPersonnes({ payload, students, groupes, onValider, onClose }) {
+function EcranRapprochementPersonnes({ payload, students, classes, onValider, onClose }) {
   const propositions = React.useMemo(
-    () => proposerRapprochementsPersonnes(payload.students, students, payload.groupes, groupes),
-    [payload, students, groupes]
+    () => proposerRapprochementsPersonnes(payload.students, students, payload.classes, classes),
+    [payload, students, classes]
   );
   const aTraiter = propositions.filter((p) => p.statut !== 'deja-aligne');
   const dejaAlignees = propositions.length - aTraiter.length;
@@ -10785,7 +11420,7 @@ function EcranRapprochementPersonnes({ payload, students, groupes, onValider, on
                   <option value="nouvelle">Nouvelle personne</option>
                   {students.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.initials}{s.groupeId ? ` — ${nomGroupe(groupes, s.groupeId)}` : ''}
+                      {s.initials}{s.classeId ? ` — ${nomClasse(classes, s.classeId)}` : ''}
                     </option>
                   ))}
                 </select>
@@ -10866,8 +11501,14 @@ function EcranArbitrageObjectifs({ conflits, students, sessions, onValider, onCl
   );
 }
 
-function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onAjouterObjectif, onOuvrirSuivi, onChangePhase }) {
+function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, ateliers, emploiDuTemps, activeSession, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onAjouterObjectif, onOuvrirSuivi, onChangePhase }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
+  const [fenetreNonCotes, setFenetreNonCotes] = useState(false);
+  const nonCotes = React.useMemo(
+    () => objectifsPrevusNonCotes(students, ateliers, emploiDuTemps, sessions, activeSession, Date.now()),
+    [students, ateliers, emploiDuTemps, sessions, activeSession]
+  );
+  const nbNonCotes = nonCotes.reduce((n, p) => n + p.objectifs.length, 0);
   /* Une ligne du résumé mène à la courbe de l'objectif, dans ce même écran :
      c'est là qu'on voit où il en est. L'édition reste derrière « Modifier
      l'objectif », sous la courbe — auparavant le résumé y sautait directement,
@@ -10909,6 +11550,21 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
         <BoutonMenu onClick={onOuvrirMenu} />
       </div>
 
+      {nbNonCotes > 0 && (
+        <button
+          onClick={() => setFenetreNonCotes(true)}
+          className="w-full rounded-2xl border-2 p-3.5 mb-4 text-left flex items-center gap-3"
+          style={{ borderColor: CAT_AMBER, backgroundColor: CARD }}
+        >
+          <ClipboardList size={18} style={{ color: CAT_AMBER }} className="shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>
+              {nbNonCotes} objectif{nbNonCotes > 1 ? 's' : ''} prévu{nbNonCotes > 1 ? 's' : ''} pas encore coté{nbNonCotes > 1 ? 's' : ''}
+            </div>
+            <div className="text-xs" style={{ color: INK_SOFT }}>D'après l'emploi du temps du jour</div>
+          </div>
+        </button>
+      )}
       <FriseJournee students={students} axesSuivi={axesSuivi} releves={releves} onOuvrirSuivi={onOuvrirSuivi} />
       <ResumeObjectifs students={students} sessions={sessions} guidances={guidances} onVoirGraphique={voirGraphique} />
       <div className="space-y-3">
@@ -10953,6 +11609,45 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, onRese
           );
         })}
       </div>
+
+      {fenetreNonCotes && (
+        <Modale titre="Prévus non cotés aujourd'hui" onClose={() => setFenetreNonCotes(false)}>
+          {nonCotes.length === 0 ? (
+            <Empty>Tout ce qui était prévu aujourd'hui a été coté.</Empty>
+          ) : (
+            <div className="space-y-4">
+              {nonCotes.map((p) => (
+                <div key={p.studentId}>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <PastillePersonne initials={p.initials} taille={28} />
+                    <span className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{p.initials}</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {p.objectifs.map((o) => {
+                      const meta = typeMeta(o.type);
+                      const Icon = meta.icon;
+                      return (
+                        <div key={o.objectifId} className="rounded-xl px-2.5 py-2" style={{ backgroundColor: PAPER }}>
+                          <div className="flex items-center gap-2">
+                            <Icon size={14} style={{ color: meta.color }} className="shrink-0" />
+                            <span className="text-sm flex-1 min-w-0 truncate">{o.nom}</span>
+                            {o.probeReste != null && (
+                              <span className="text-xs shrink-0" style={{ color: CAT_AMBER, fontFamily: F_MONO }}>
+                                {o.probeReste}/{o.probeQuota} restante{o.probeReste > 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs mt-0.5" style={{ color: INK_SOFT }}>{o.ateliers.join(', ')}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Modale>
+      )}
     </div>
   );
 }
@@ -11221,16 +11916,16 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
    dessous, puis une archive dépliante pour ce qui est déjà parti. Tout y est
    corrigeable, avant comme après l'envoi : c'est le seul endroit où l'on relit
    avant de transmettre. */
-function ExportScreen({ sessions, crises, students, ateliers, intervenants, groupes, guidances, releves, axesSuivi, appareil, groupeAppareil, notify, onEditCrisis, onEditSession, onDeleteSession, onDeleteAllSessions, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onExportSuiviHorsGroupe, onOuvrirMenu }) {
+function ExportScreen({ sessions, crises, students, ateliers, intervenants, classes, guidances, releves, axesSuivi, appareil, classeAppareil, notify, onEditCrisis, onEditSession, onDeleteSession, onDeleteAllSessions, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onExportSuiviHorsClasse, onOuvrirMenu }) {
   /* Compteur permanent, visible sans le chercher : le renvoi oublié est le
-     seul défaut du dispositif de fusion inter-groupes qui produise une
+     seul défaut du dispositif de fusion inter-classes qui produise une
      donnée fausse en silence. Ne retombe à zéro que quand tout est parti. */
-  const horsGroupe = React.useMemo(() => ({
-    sessions: sessionsHorsGroupe(sessions, students, groupeAppareil),
-    crises: crisesHorsGroupe(crises, students, groupeAppareil),
-    releves: relevesHorsGroupe(releves, students, groupeAppareil),
-  }), [sessions, crises, releves, students, groupeAppareil]);
-  const nbHorsGroupe = horsGroupe.sessions.length + horsGroupe.crises.length + horsGroupe.releves.length;
+  const horsClasse = React.useMemo(() => ({
+    sessions: sessionsHorsClasse(sessions, students, classeAppareil),
+    crises: crisesHorsClasse(crises, students, classeAppareil),
+    releves: relevesHorsClasse(releves, students, classeAppareil),
+  }), [sessions, crises, releves, students, classeAppareil]);
+  const nbHorsClasse = horsClasse.sessions.length + horsClasse.crises.length + horsClasse.releves.length;
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   const journees = React.useMemo(
     () => journeesSuivi(releves, students, axesSuivi, null),
@@ -11244,6 +11939,40 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, grou
   const [pickedCrises, setPickedCrises] = useState(() => crises.filter((c) => !c.sentAt).map((c) => c.id));
   const [pickedJournees, setPickedJournees] = useState(() => journees.filter((j) => !j.envoye).map((j) => j.cle));
   const [archiveOuverte, setArchiveOuverte] = useState(false);
+
+  /* Filtre par mois, surtout utile pour retrouver quelque chose dans
+     l'archive une fois qu'elle s'allonge. Vide = tous les mois. La liste des
+     mois proposés vient des trois collections, jamais d'un calendrier
+     générique — un mois sans rien dedans n'a pas sa place dans le menu. */
+  const [moisFiltre, setMoisFiltre] = useState('');
+  const moisDisponibles = React.useMemo(() => {
+    const s = new Set();
+    sessions.forEach((se) => s.add(moisDe(se.date)));
+    crises.forEach((c) => s.add(moisDe(c.date)));
+    journees.forEach((j) => s.add(moisDe(j.date)));
+    s.delete('inconnu');
+    return Array.from(s).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  }, [sessions, crises, journees]);
+  const libelleMois = (m) => {
+    const [an, mo] = m.split('-').map(Number);
+    return new Date(an, mo - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  };
+  const sessionsFiltrees = moisFiltre ? sessions.filter((se) => moisDe(se.date) === moisFiltre) : sessions;
+  const crisesFiltrees = moisFiltre ? crises.filter((c) => moisDe(c.date) === moisFiltre) : crises;
+  const journeesFiltrees = moisFiltre ? journees.filter((j) => moisDe(j.date) === moisFiltre) : journees;
+  /* Changer de mois retire de la sélection tout ce qui sort du filtre — sans
+     ça, un envoi groupé pourrait inclure en douce une séance devenue
+     invisible à l'écran. */
+  function choisirMois(m) {
+    setMoisFiltre(m);
+    if (!m) return;
+    const idsSessions = new Set(sessions.filter((se) => moisDe(se.date) === m).map((se) => se.id));
+    const idsCrises = new Set(crises.filter((c) => moisDe(c.date) === m).map((c) => c.id));
+    const clesJournees = new Set(journees.filter((j) => moisDe(j.date) === m).map((j) => j.cle));
+    setPicked((l) => l.filter((id) => idsSessions.has(id)));
+    setPickedCrises((l) => l.filter((id) => idsCrises.has(id)));
+    setPickedJournees((l) => l.filter((cle) => clesJournees.has(cle)));
+  }
 
   /* Deux façons de composer un rapport : en choisissant des séances, ou en
      choisissant des personnes — auquel cas toutes leurs cotations sont reprises,
@@ -11277,16 +12006,16 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, grou
   const chosenReleves = chosenJournees.reduce((l, j) => l.concat(j.releves), []);
   const chosenSentCount = byStudent ? 0 : chosen.filter((s) => s.sentAt).length;
 
-  const seancesTriees = sessions.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  const seancesTriees = sessionsFiltrees.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
   const aTransmettre = {
     seances: seancesTriees.filter((s) => !s.sentAt),
-    crises: crises.filter((c) => !c.sentAt),
-    journees: journees.filter((j) => !j.envoye),
+    crises: crisesFiltrees.filter((c) => !c.sentAt),
+    journees: journeesFiltrees.filter((j) => !j.envoye),
   };
   const archive = {
     seances: seancesTriees.filter((s) => s.sentAt),
-    crises: crises.filter((c) => c.sentAt),
-    journees: journees.filter((j) => j.envoye),
+    crises: crisesFiltrees.filter((c) => c.sentAt),
+    journees: journeesFiltrees.filter((j) => j.envoye),
   };
   const nbArchive = archive.seances.length + archive.crises.length + archive.journees.length;
   const rienATransmettre = !aTransmettre.seances.length && !aTransmettre.crises.length && !aTransmettre.journees.length;
@@ -11295,7 +12024,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, grou
   const sessionLabel = (sess) => (sess.atelierId ? atelierName(sess.atelierId) : sess.mode === 'balance' ? 'Équilibre' : 'Séance libre');
 
   function makeFile() {
-    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, groupes, guidances, studentFilter, chosenReleves, axesSuivi);
+    const wb = buildWorkbook(chosen, chosenCrises, students, ateliers, intervenants, classes, guidances, studentFilter, chosenReleves, axesSuivi);
     const blob = workbookBlob(wb);
     const initials = byStudent
       ? students.filter((s) => pickedStudents.includes(s.id)).map((s) => s.initials.replace(/\./g, '')).join('-')
@@ -11512,24 +12241,38 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, grou
         <BoutonMenu onClick={onOuvrirMenu} />
       </div>
 
-      {nbHorsGroupe > 0 && (
+      {nbHorsClasse > 0 && (
         <button
-          onClick={onExportSuiviHorsGroupe}
+          onClick={onExportSuiviHorsClasse}
           className="w-full rounded-2xl border-2 p-3.5 mb-4 text-left"
           style={{ borderColor: CRISIS, backgroundColor: CARD }}
         >
           <div className="text-sm font-medium mb-0.5" style={{ fontFamily: F_DISPLAY }}>
-            {horsGroupe.sessions.length > 0 && `${horsGroupe.sessions.length} séance(s)`}
-            {horsGroupe.sessions.length > 0 && (horsGroupe.crises.length > 0 || horsGroupe.releves.length > 0) && ', '}
-            {horsGroupe.crises.length > 0 && `${horsGroupe.crises.length} crise(s)`}
-            {horsGroupe.crises.length > 0 && horsGroupe.releves.length > 0 && ', '}
-            {horsGroupe.releves.length > 0 && `${horsGroupe.releves.length} relevé(s)`}
-            {' '}appartenant à d'autres groupes
+            {horsClasse.sessions.length > 0 && `${horsClasse.sessions.length} séance(s)`}
+            {horsClasse.sessions.length > 0 && (horsClasse.crises.length > 0 || horsClasse.releves.length > 0) && ', '}
+            {horsClasse.crises.length > 0 && `${horsClasse.crises.length} crise(s)`}
+            {horsClasse.crises.length > 0 && horsClasse.releves.length > 0 && ', '}
+            {horsClasse.releves.length > 0 && `${horsClasse.releves.length} relevé(s)`}
+            {' '}appartenant à d'autres classes
           </div>
           <div className="text-xs" style={{ color: INK_SOFT }}>
             À transférer vers leur tablette — appuyer pour exporter, toujours chiffré.
           </div>
         </button>
+      )}
+
+      {moisDisponibles.length > 0 && (
+        <select
+          value={moisFiltre}
+          onChange={(ev) => choisirMois(ev.target.value)}
+          className="w-full rounded-lg px-2.5 py-2 text-sm border mb-3"
+          style={{ borderColor: BORDER, backgroundColor: CARD, color: INK }}
+        >
+          <option value="">Tous les mois</option>
+          {moisDisponibles.map((m) => (
+            <option key={m} value={m}>{libelleMois(m)}</option>
+          ))}
+        </select>
       )}
 
       <div className="flex gap-1.5 mb-4">
@@ -11587,10 +12330,10 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, grou
 
       {!byStudent && aTransmettre.seances.length > 0 && (
         <div className="flex gap-1.5 mb-3">
-          <button onClick={() => setPicked(unsentIds)} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
-            Non-envoyés ({unsentIds.length})
+          <button onClick={() => setPicked(aTransmettre.seances.map((s) => s.id))} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+            Non-envoyés ({aTransmettre.seances.length})
           </button>
-          <button onClick={() => setPicked(sessions.map((s) => s.id))} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
+          <button onClick={() => setPicked(sessionsFiltrees.map((s) => s.id))} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
             Tout sélectionner
           </button>
           <button onClick={() => setPicked([])} className="flex-1 rounded-lg py-2 text-xs border" style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}>
