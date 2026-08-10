@@ -3776,13 +3776,15 @@ const ZOOM_MAX = 1;
    document déjà en place. */
 const TAB_ORDER = ['suivi', 'session', 'export'];
 
-/* Logo affiché en pied du tiroir latéral. */
+/* Logo affiché en pied du tiroir latéral, à environ deux tiers de la largeur
+   du tiroir plutôt que bord à bord — trop imposant à pleine largeur pour un
+   élément de pied de panneau. */
 function LogoDatABA(props) {
   return (
     <img
       src={`${import.meta.env.BASE_URL}logo-databa.png`}
       alt="DatABA"
-      className="w-full h-auto"
+      className="w-2/3 max-w-[230px] h-auto"
       {...props}
     />
   );
@@ -5970,7 +5972,7 @@ function AbaApp() {
           bouton Crise exige. Au-dessus, les pastilles — celles des fiches
           ouvertes, puis celles du suivi continu. */}
       <div
-        className="fixed bottom-0 left-0 right-0 z-30 px-3 pt-8 pointer-events-none"
+        className={`fixed bottom-0 left-0 right-0 z-30 px-3 pointer-events-none ${pleinEcranActif ? 'pt-2' : 'pt-8'}`}
         style={{
           background: `linear-gradient(to top, ${PAPER} 60%, transparent)`,
           // Barre abaissée : moins d'espace qu'avant entre les libellés ABC/
@@ -5978,7 +5980,12 @@ function AbaApp() {
           // Ce padding doit rester assez grand pour contenir ces libellés :
           // ils ne comptent plus dans la hauteur de la rangée qui les porte.
           // Gardé au-dessus de 0 pour laisser une marge visible avec le bord.
-          paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.75rem)',
+          // En plein écran de cotation, ABC et Crise sont les deux seuls
+          // éléments qui restent : ils se posent au plus près du bord, d'où
+          // le padding légèrement plus grand qu'en temps normal.
+          paddingBottom: pleinEcranActif
+            ? 'calc(env(safe-area-inset-bottom, 0px) + 0.85rem)'
+            : 'calc(env(safe-area-inset-bottom, 0px) + 0.75rem)',
           display: saisieEnCours ? 'none' : undefined,
         }}
       >
@@ -6084,14 +6091,14 @@ function AbaApp() {
           <div className="relative flex items-center justify-center shrink-0">
             <button
               onClick={openObservation}
-              className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg border-2 active:scale-[0.96] transition-transform"
+              className={`rounded-full flex items-center justify-center shadow-lg border-2 active:scale-[0.96] transition-transform ${pleinEcranActif ? 'w-10 h-10' : 'w-12 h-12'}`}
               style={{ backgroundColor: CARD, borderColor: COLOR_ABC, color: COLOR_ABC }}
               title="Observation ABC, hors crise"
               aria-label="Observation ABC"
             >
-              <ClipboardList size={20} />
+              <ClipboardList size={pleinEcranActif ? 17 : 20} />
             </button>
-            <span className="absolute top-full mt-1 text-[11px] font-medium whitespace-nowrap" style={{ fontFamily: F_DISPLAY, color: COLOR_ABC }}>ABC</span>
+            <span className={`absolute top-full font-medium whitespace-nowrap ${pleinEcranActif ? 'mt-0.5 text-[10px]' : 'mt-1 text-[11px]'}`} style={{ fontFamily: F_DISPLAY, color: COLOR_ABC }}>ABC</span>
           </div>
 
           {/* Masquée en plein écran de cotation, avec les pastilles de suivi
@@ -6129,14 +6136,14 @@ function AbaApp() {
           <div className="relative flex items-center justify-center shrink-0">
             <button
               onClick={openCrisis}
-              className="w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg active:scale-[0.96] transition-transform"
+              className={`rounded-full flex items-center justify-center text-white shadow-lg active:scale-[0.96] transition-transform ${pleinEcranActif ? 'w-10 h-10' : 'w-12 h-12'}`}
               style={{ backgroundColor: CRISIS }}
               title="Ouvrir une fiche de crise"
               aria-label="Crise"
             >
-              <AlertTriangle size={20} />
+              <AlertTriangle size={pleinEcranActif ? 17 : 20} />
             </button>
-            <span className="absolute top-full mt-1 text-[11px] font-semibold whitespace-nowrap" style={{ fontFamily: F_DISPLAY, color: CRISIS }}>CRISE</span>
+            <span className={`absolute top-full font-semibold whitespace-nowrap ${pleinEcranActif ? 'mt-0.5 text-[10px]' : 'mt-1 text-[11px]'}`} style={{ fontFamily: F_DISPLAY, color: CRISIS }}>CRISE</span>
           </div>
         </div>
         </div>
@@ -6204,10 +6211,7 @@ function AbaApp() {
               })}
             </div>
 
-            {/* px-[5px] : le logo (w-full sur son conteneur) ne s'étend plus
-               tout à fait bord à bord du tiroir — 10 px de moins au total,
-               répartis de chaque côté. */}
-            <div className="flex-1 flex items-center justify-center px-[5px]">
+            <div className="flex-1 flex items-center justify-center">
               <LogoDatABA />
             </div>
           </div>
@@ -9347,6 +9351,10 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
   }
   const cotationRef = useRef(null);
   usePinchDensite(cotationRef, { valeur: zoom, onChange: fixerZoom });
+  /* Colonne de contenu proprement dite, sans le rail de personnes : c'est sa
+     largeur qui borne les cartes, pas celle de cotationRef qui inclut aussi
+     le rail (voir la mesure de largeurColonne plus bas). */
+  const colonneRef = useRef(null);
 
   /* Hauteur réelle de l'en-tête collant, pour caler le rail de personnes
      juste en dessous plutôt que sur un décalage en dur (`top-20`) qui ne
@@ -9364,16 +9372,20 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     return () => ro.disconnect();
   }, []);
 
-  /* Largeur réelle de la zone de cotation, pour calculer un nombre de
-     colonnes explicite plutôt que de le laisser à l'heuristique columnWidth
-     du navigateur (voir packStyle ci-dessous). */
-  const [largeurZone, setLargeurZone] = useState(0);
+  /* Largeur réelle de la COLONNE DE CONTENU (colonneRef), pour calculer un
+     nombre de colonnes explicite plutôt que de le laisser à l'heuristique
+     columnWidth du navigateur (voir packStyle ci-dessous). Mesurée sur
+     colonneRef et non sur cotationRef : ce dernier inclut aussi le rail de
+     personnes (pastilles de 56 px + gap), qui n'est pas de la place
+     disponible pour les cartes — un ancien bug mesurait cotationRef et
+     surestimait donc systématiquement la largeur utile. */
+  const [largeurColonne, setLargeurColonne] = useState(0);
   useEffect(() => {
-    const el = cotationRef.current;
+    const el = colonneRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0] && entries[0].contentRect.width;
-      if (w) setLargeurZone(w);
+      if (w) setLargeurColonne(w);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -9398,21 +9410,32 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      le reste de la largeur inoccupé, quelle que soit la place disponible.
      En dessous de ce seuil, une rangée flex n'a pas ce défaut.
 
-     `colWidth` est la largeur MINIMALE d'une colonne : le nombre de colonnes
-     se déduit de la largeur réelle de la zone (mise à l'échelle par le
-     zoom), au lieu d'être laissé à `columnWidth`, dont l'heuristique posait
+     `colWidth` est la largeur RENDUE minimale d'une colonne, en pixels écran
+     réels — pas en pixels de mise en page. Le nombre de colonnes se déduit de
+     la largeur réellement rendue de la colonne de contenu, indépendamment du
+     zoom, au lieu d'être laissé à `columnWidth`, dont l'heuristique posait
      une seule colonne dès qu'une carte contenait quelque chose de plus large
      que `colWidth` — la bande de boutons de guidance du mode Essais,
      notamment — même quand la largeur disponible permettait clairement deux
      colonnes. `compact` descend jusqu'aux widgets pour resserrer ces mêmes
-     boutons quand la colonne obtenue est étroite. */
+     boutons quand la colonne obtenue est étroite.
+
+     Piège déjà rencontré : comparer `colWidth` à une largeur DIVISÉE par
+     `zoom` (des pixels de mise en page) revient à comparer des pixels écran à
+     des pixels de mise en page — sous zoom réduit, le seuil censé garantir
+     une colonne lisible autorise alors des colonnes de plus en plus étroites
+     à l'écran, jusqu'au texte haché lettre par lettre. `rendue` ci-dessous
+     est déjà à l'échelle FINALE (mesurée après le zoom CSS) : elle se compare
+     directement à `colWidth`, sans passer par `largeurColonne / zoom`. */
   const packStyle = (count, colWidth) => {
+    const rendue = largeurColonne || colWidth;
+    const colonnes = Math.max(1, Math.min(4, Math.floor(rendue / colWidth)));
+    const largeurRendueParColonne = (rendue - (colonnes - 1) * 12) / colonnes;
+    const compact = largeurRendueParColonne < 200;
     if (count < 3) {
-      return { style: { zoom, display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }, itemStyle: { flex: `1 1 ${colWidth}px`, minWidth: 0 }, compact: false };
+      const baseMiseEnPage = ((rendue / zoom) - (colonnes - 1) * 12) / colonnes;
+      return { style: { zoom, display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }, itemStyle: { flex: `1 1 ${baseMiseEnPage}px`, minWidth: 0 }, compact };
     }
-    const disponible = largeurZone ? largeurZone / zoom : colWidth;
-    const colonnes = Math.max(1, Math.min(4, Math.floor(disponible / colWidth)));
-    const compact = colonnes >= 2 && disponible / colonnes < 200;
     return { style: { zoom, columnCount: colonnes, columnGap: '0.75rem' }, itemStyle: gridItemStyle, compact };
   };
 
@@ -9819,7 +9842,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
         {/* Contenu : tous les prioritaires, ou la personne courante.
             En paysage, les objectifs s'affichent en deux colonnes — six tiennent
             alors à l'écran sans défilement. */}
-        <div className="flex-1 min-w-0">
+        <div ref={colonneRef} className="flex-1 min-w-0">
           {viewMode === 'priority' ? (
             priorityItems.length === 0 ? (
               <Empty>Aucun objectif prioritaire parmi les personnes présentes.</Empty>
