@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid } from 'recharts';
 import {
-  Plus, Minus, Columns, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
+  Plus, Columns, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
   Timer as TimerIcon, LayoutGrid, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
@@ -9919,11 +9919,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      navigateur. */
   const carteStyle = { marginBottom: '0.75rem' };
 
-  /* Réglage des colonnes pour l'orientation courante. `colonnesAuto` sert de
-     point de départ au pas-à-pas quand on n'a encore rien imposé, et
-     `colonnesMax` borne le « + » à ce qui tient réellement. */
+  /* Réglage des colonnes pour l'orientation courante. `colonnesMax` borne le
+     cycle à ce qui tient réellement dans la largeur. */
   const colonnesVoulues = colonnesPref[orientation];
-  const colonnesAuto = colonnesPourLargeur(largeurColonne, 210, null);
   const colonnesMax = colonnesPourLargeur(largeurColonne, 210, COLONNES_MAX);
   function fixerColonnes(n) {
     setColonnesPref((p) => {
@@ -9932,6 +9930,14 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
       store.setRaw('aba:colonnes', JSON.stringify(suite));
       return suite;
     });
+  }
+  /* Palier suivant : 1, 2, … jusqu'au maximum que la largeur admet, puis
+     retour à l'automatique. Sur un téléphone en portrait où une seule colonne
+     tient, le cycle se réduit donc à « 1 » et « auto ». */
+  function cycleColonnes() {
+    if (!colonnesVoulues) return fixerColonnes(1);
+    if (colonnesVoulues >= colonnesMax) return fixerColonnes(null);
+    return fixerColonnes(colonnesVoulues + 1);
   }
 
   /* Combien de colonnes, et faut-il resserrer les cartes.
@@ -10259,35 +10265,19 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               </button>
             )}
             {!isEdit && (
-              /* Colonnes de la toile. Le « − » jusqu'à 1 empile tout, le « + »
-                 étale jusqu'à ce que la largeur ne suive plus ; le nombre au
-                 centre ramène à l'automatique. */
-              <div className="rounded-xl border flex items-center" style={{ borderColor: BORDER, backgroundColor: CARD, color: INK_SOFT }}>
-                <button
-                  onClick={() => fixerColonnes(Math.max(1, (colonnesVoulues || colonnesAuto) - 1))}
-                  disabled={(colonnesVoulues || colonnesAuto) <= 1}
-                  className="px-2 py-2 disabled:opacity-30"
-                  title="Moins de colonnes — tout empiler"
-                >
-                  <Minus size={14} />
-                </button>
-                <button
-                  onClick={() => fixerColonnes(null)}
-                  className="flex items-center gap-1 px-1"
-                  title="Revenir au nombre de colonnes automatique"
-                >
-                  <Columns size={14} />
-                  <span className="text-xs" style={{ fontFamily: F_MONO }}>{colonnesVoulues || 'auto'}</span>
-                </button>
-                <button
-                  onClick={() => fixerColonnes(Math.min(colonnesMax, (colonnesVoulues || colonnesAuto) + 1))}
-                  disabled={(colonnesVoulues || colonnesAuto) >= colonnesMax}
-                  className="px-2 py-2 disabled:opacity-30"
-                  title="Plus de colonnes — étaler à l'horizontale"
-                >
-                  <Plus size={14} />
-                </button>
-              </div>
+              /* Colonnes de la toile : un seul bouton, de la taille de celui
+                 de densité — un pas-à-pas à trois boutons faisait déborder
+                 l'en-tête. Il cycle 1, 2, … jusqu'à ce que la largeur ne
+                 suive plus, puis revient à l'automatique. */
+              <button
+                onClick={cycleColonnes}
+                className="rounded-xl px-2.5 py-2 border flex items-center gap-1"
+                style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
+                title="Colonnes de cotation — 1 empile tout, le dernier palier revient à l'automatique"
+              >
+                <Columns size={15} />
+                <span className="text-xs" style={{ fontFamily: F_MONO }}>{colonnesVoulues || 'auto'}</span>
+              </button>
             )}
             {!isEdit && onBasculerPleinEcran && (
               <button
