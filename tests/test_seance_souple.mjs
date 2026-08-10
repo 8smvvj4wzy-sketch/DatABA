@@ -48,6 +48,8 @@ const NOMS = [
   'fenetrePresence', 'estPresent', 'fenetresPause', 'chevauchementMs', 'dureePresence',
   'objectifsParDefaut', 'construireDonneesSeance',
   'ajouterPersonne', 'retirerPersonne', 'supprimerPersonne', 'chainerAtelier',
+  'filtrerToile', 'repartirEnColonnes', 'placerDansToile',
+  'placementDepuisToile', 'ordreDepuisToile',
   'deplacerDansListe', 'reinjecterSousEnsemble',
 ];
 
@@ -352,6 +354,60 @@ t('objectif inconnu ignoré plutôt que planter',
     F.reinjecterSousEnsemble([], ['a', 'b']),
     ['a', 'b']
   );
+}
+
+/* ---- Toile de cotation : placement libre des cartes ---- */
+
+{
+  /* Sans placement mémorisé, on retombe sur la répartition équilibrée
+     d'avant : une séance déjà en cours ne change pas d'aspect. */
+  t(
+    'aucun placement : remplissage équilibré',
+    F.repartirEnColonnes(['a', 'b', 'c', 'd', 'e'], 3, {}),
+    [['a', 'd'], ['b', 'e'], ['c']]
+  );
+  t(
+    'placement respecté, ordre conservé dans la colonne',
+    F.repartirEnColonnes(['a', 'b', 'c'], 2, { a: 1, b: 1, c: 0 }),
+    [['c'], ['a', 'b']]
+  );
+  /* Le cas de la rotation : une colonne mémorisée au-delà du nombre courant
+     est ramenée dans la dernière, sans que la valeur stockée soit réécrite. */
+  t(
+    'colonne mémorisée hors bornes : ramenée dans la dernière',
+    F.repartirEnColonnes(['a', 'b'], 2, { a: 3, b: 0 }),
+    [['b'], ['a']]
+  );
+  t('une seule colonne : tout à la suite', F.repartirEnColonnes(['a', 'b'], 1, { b: 1 }), [['a', 'b']]);
+  t('aucune clé : les colonnes existent quand même', F.repartirEnColonnes([], 2, {}), [[], []]);
+}
+
+{
+  const toile = [['a', 'b'], ['c']];
+  t('déposer en fin de colonne courte', F.placerDansToile(toile, 'a', 1, 1), [['b'], ['c', 'a']]);
+  t('déposer en tête d\'une autre colonne', F.placerDansToile(toile, 'c', 0, 0), [['c', 'a', 'b'], []]);
+  t('déplacer dans sa propre colonne', F.placerDansToile(toile, 'b', 0, 0), [['b', 'a'], ['c']]);
+  t('rang au-delà de la colonne : posé à la fin', F.placerDansToile(toile, 'a', 1, 99), [['b'], ['c', 'a']]);
+  t('la toile source n\'est pas modifiée', toile, [['a', 'b'], ['c']]);
+}
+
+{
+  const toile = [['a'], ['b', 'c']];
+  t('placement déduit de la toile', F.placementDepuisToile(toile), { a: 0, b: 1, c: 1 });
+  /* L'ordre à plat reste ce que lisent l'export et le reste de
+     l'application, qui n'ont pas à connaître les colonnes. */
+  t('ordre à plat, colonne par colonne', F.ordreDepuisToile(toile), ['a', 'b', 'c']);
+}
+
+{
+  /* Une personne retirée ne doit pas laisser de placements orphelins. */
+  const toile = { portrait: { 'A|o1': 0, 'B|o2': 1, o3: 0 }, paysage: { 'A|o1': 2 } };
+  t(
+    'filtrage par clé, orientation par orientation',
+    F.filtrerToile(toile, (k) => (k.includes('|') ? k.split('|')[0] !== 'A' : true)),
+    { portrait: { 'B|o2': 1, o3: 0 }, paysage: {} }
+  );
+  t('toile absente : rien à filtrer', F.filtrerToile(undefined, () => true), undefined);
 }
 
 console.log(`\n${ok} OK, ${ko} en échec`);
