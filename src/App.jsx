@@ -3943,6 +3943,12 @@ function AbaApp() {
      null à chaque ouverture depuis le tiroir ou chaque retour à un onglet —
      il ne doit jamais survivre à un changement d'écran non lié. */
   const [focusEcran, setFocusEcran] = useState(null);
+  /* Pile des écrans de tiroir traversés par un lien croisé (ex. Personnes →
+     Guidances) : un balayage retour depuis Guidances revient à Personnes,
+     pas à l'onglet du dessous — sinon le lien croisé serait à sens unique.
+     Vidée dès qu'on quitte cette chaîne (onglet direct, ou Menu). Bornée à 5
+     niveaux : un aller-retour répété ne doit pas la faire enfler sans fin. */
+  const [pileEcrans, setPileEcrans] = useState([]);
   const [tiroir, setTiroir] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [security, setSecurity] = useState({ pinHash: null, pinSalt: null });
@@ -4043,18 +4049,26 @@ function AbaApp() {
       setDir(ecran ? 0 : Math.sign(j - i));
       setEcran(null);
       setFocusEcran(null);
+      setPileEcrans([]);
       setTab(k);
     },
     [tab, ecran]
   );
 
   /* Lien croisé : ouvre un panneau du tiroir déjà positionné sur une personne
-     ou un objectif précis (`focus`), au lieu de sa liste. */
+     ou un objectif précis (`focus`), au lieu de sa liste. Si un autre écran
+     de tiroir est déjà ouvert, il part sur la pile — c'est lui que le
+     balayage retour rouvrira, pas l'onglet du dessous. */
   const ouvrirEcran = React.useCallback((k, focus = null) => {
+    setEcran((actuel) => {
+      if (actuel && actuel !== k) {
+        setPileEcrans((p) => [...p.slice(-4), { k: actuel, focus: focusEcran }]);
+      }
+      return k;
+    });
     setFocusEcran(focus);
-    setEcran(k);
     setTiroir(false);
-  }, []);
+  }, [focusEcran]);
 
   /* La barre est figée une fois les cotations lancées, pas avant : l'écran de
      configuration n'a rien à protéger d'un balayage accidentel. Seule la
@@ -4064,17 +4078,29 @@ function AbaApp() {
 
   /* Bouton « Menu » de tous les onglets (Suivi, Session hors cotation, Export)
      et bouton « ‹ Menu » des écrans ouverts depuis le tiroir : une seule
-     action, ouvrir le tiroir, quel que soit l'endroit d'où elle part. */
-  const ouvrirMenu = React.useCallback(() => { setEcran(null); setFocusEcran(null); setTiroir(true); }, []);
+     action, ouvrir le tiroir, quel que soit l'endroit d'où elle part. Vide
+     aussi la pile de lien croisé : depuis le tiroir, on repart à zéro. */
+  const ouvrirMenu = React.useCallback(() => { setEcran(null); setFocusEcran(null); setPileEcrans([]); setTiroir(true); }, []);
 
   const onLeft = React.useCallback(() => {
     if (tiroir) { if (TIROIR_FERME_AU_BALAYAGE) setTiroir(false); return; }
+    // Écran atteint par un lien croisé depuis un autre écran de tiroir : le
+    // retour dépile plutôt que de fermer sec, sinon le lien croisé serait à
+    // sens unique (ex. Personnes → Guidances ne saurait pas revenir à
+    // Personnes, seulement à l'onglet Session ou Suivi du dessous).
+    if (pileEcrans.length) {
+      const precedent = pileEcrans[pileEcrans.length - 1];
+      setPileEcrans((p) => p.slice(0, -1));
+      setEcran(precedent.k);
+      setFocusEcran(precedent.focus);
+      return;
+    }
     // Depuis un écran ouvert par le tiroir : retour direct à l'onglet
     // d'origine (celui d'où le bouton Menu ou le balayage a été déclenché),
     // sans repasser par le tiroir — `tab` n'a jamais changé entre-temps.
     if (ecran) { setEcran(null); setFocusEcran(null); return; }
     goTab(1);
-  }, [tiroir, ecran, goTab]);
+  }, [tiroir, ecran, pileEcrans, goTab]);
 
   /* Depuis Suivi — l'extrémité gauche — il n'y a pas d'onglet précédent : le
      balayage vers la droite y est libre, c'est lui qui ouvre le tiroir. Depuis
@@ -4124,6 +4150,39 @@ function AbaApp() {
       document.removeEventListener('focusout', onOut);
     };
   }, []);
+
+  /* Filet de sécurité : `focusout` n'est pas toujours émis quand le champ
+     focalisé est retiré du DOM plutôt que perdre le focus normalement —
+     fermeture d'une Modale, d'une feuille, repli d'une carte. WebKit en
+     particulier en oublie certains. La barre restait alors masquée jusqu'au
+     rechargement : le bug le plus souvent remonté (« la barre du bas
+     disparaît sans raison, ouvrir/fermer l'app la remet »). Tant que
+     saisieEnCours est vrai, on revérifie périodiquement que l'élément
+     focalisé est bien un champ encore attaché au document, et à chaque
+     retour au premier plan. */
+  useEffect(() => {
+    if (!saisieEnCours) return undefined;
+    const estChampConnecte = () => {
+      const el = document.activeElement;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.isConnected;
+    };
+    const revalider = () => { if (!estChampConnecte()) setSaisieEnCours(false); };
+    const id = setInterval(revalider, 500);
+    document.addEventListener('visibilitychange', revalider);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', revalider);
+    };
+  }, [saisieEnCours]);
+
+  /* Même filet à chaque changement d'onglet ou d'écran : un champ focalisé
+     avant la navigation (ex. un champ de recherche resté monté ailleurs) ne
+     doit pas garder la barre masquée sur le nouvel écran. */
+  useEffect(() => {
+    const el = document.activeElement;
+    const champActif = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.isConnected;
+    if (!champActif) setSaisieEnCours(false);
+  }, [tab, ecran]);
 
   /* --- chargement ---
      Les réglages de sécurité se lisent en clair, avant tout déverrouillage.
@@ -5581,16 +5640,31 @@ function AbaApp() {
 
   const estOngletPrincipal = (cle) => cle === 'suivi' || cle === 'session' || cle === 'export';
 
-  const volet = (cle) => (
-    <>
-      {!estOngletPrincipal(cle) && (
-        <button onClick={ouvrirMenu} className="flex items-center gap-1 text-sm mb-3" style={{ color: INK_SOFT }}>
-          <ChevronLeft size={16} /> Menu
-        </button>
-      )}
-      {contenuPourCle(cle)}
-    </>
-  );
+  /* Bouton retour d'un écran de tiroir : « ‹ Menu » ouvre le tiroir par
+     défaut, mais un écran atteint par un lien croisé (Personnes → Guidances)
+     revient d'abord à l'écran d'où il vient, avec son nom — cohérent avec le
+     balayage retour (onLeft), qui dépile de la même pile. */
+  const volet = (cle) => {
+    const precedent = pileEcrans[pileEcrans.length - 1] || null;
+    const labelPrecedent = precedent && ((PANNEAUX.find((p) => p.k === precedent.k) || {}).label);
+    const retour = precedent
+      ? () => {
+          setPileEcrans((p) => p.slice(0, -1));
+          setEcran(precedent.k);
+          setFocusEcran(precedent.focus);
+        }
+      : ouvrirMenu;
+    return (
+      <>
+        {!estOngletPrincipal(cle) && (
+          <button onClick={retour} className="flex items-center gap-1 text-sm mb-3" style={{ color: INK_SOFT }}>
+            <ChevronLeft size={16} /> {labelPrecedent || 'Menu'}
+          </button>
+        )}
+        {contenuPourCle(cle)}
+      </>
+    );
+  };
 
   const cleCourante = ecran || tab;
 
