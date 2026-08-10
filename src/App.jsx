@@ -183,7 +183,7 @@ const TYPES = {
   interval: { label: 'Intervalles', short: 'Intervalles', icon: LayoutGrid, color: CAT_LILAC },
   chaining: { label: 'Chaînage', short: 'Chaînage', icon: ListOrdered, color: CAT_CYAN },
   balance: { label: 'Équilibre', short: 'Équilibre', icon: Route, color: CAT_INDIGO },
-  probe: { label: 'Probe (1 / 0)', short: 'Probe', icon: CheckCircle2, color: CAT_AMBER },
+  probe: { label: 'Probe', short: 'Probe', icon: CheckCircle2, color: CAT_AMBER },
 };
 
 /* Couleur commune à tout ce qui mesure une durée : le chronomètre par essai
@@ -329,6 +329,17 @@ const DEFAULT_MASTERY_PROBE = { threshold: 100, sessions: 3, unit: 'days', sens:
    jamais UTC, même principe que jourLocal). */
 const PROBE_FREQUENCES = [1, 2];
 const PROBE_CRENEAUX = { matin: 'Matin', aprem: 'Après-midi' };
+
+/* Critère d'acquisition effectif d'un objectif, réglages personnalisés
+   compris. Le repli par défaut suit le TYPE — DEFAULT_MASTERY_PROBE pour un
+   Probe, DEFAULT_MASTERY sinon — sans quoi un Probe sans `config.mastery`
+   explicite (import, modèle ancien) retombe sur « 80 % sur 3 séances » au
+   lieu de « 100 % sur 3 jours ». Utilisé par libelleSeuil et masteryStatus,
+   qui doivent rester d'accord sur ce repli. */
+function masteryDe(obj) {
+  const base = obj.type === 'probe' ? DEFAULT_MASTERY_PROBE : DEFAULT_MASTERY;
+  return { ...base, ...(obj.config.mastery || {}) };
+}
 
 /* ==================== Sécurité : code PIN et sauvegarde chiffrée ====================
    Tout se fait avec l'API Web Crypto du navigateur, sans aucun serveur.
@@ -1202,7 +1213,7 @@ function configurerAtelier(students, atelier, jour, mode) {
    pour la description d'un objectif et le badge de sa courbe. L'unité suit le
    type, le sens suit le critère. */
 function libelleSeuil(obj) {
-  const m = { ...DEFAULT_MASTERY, ...(obj.config.mastery || {}) };
+  const m = masteryDe(obj);
   const unite = PERCENT_TYPES.includes(obj.type) ? '%' : 'occ.';
   return m.sens === 'max' ? `à ${m.threshold} ${unite} ou moins` : `à ${m.threshold} ${unite}`;
 }
@@ -1300,6 +1311,10 @@ function configCanonique(type, config) {
   if (type === 'balance') {
     base.balanceOutcomes = (c.balanceOutcomes || []).map((o) => ({ label: o.label, short: o.short, reussite: !!o.reussite, exclu: !!o.exclu }));
   }
+  if (type === 'probe') {
+    base.probesParJour = c.probesParJour || 1;
+    base.useGuidance = !!c.useGuidance;
+  }
   return base;
 }
 
@@ -1332,9 +1347,10 @@ function objectifDejaCote(sessions, objectiveId) {
    borne le quota (config.probesParJour), pas le nombre de cotations — deux
    probes au même créneau ne comptent qu'une fois. */
 function probesDuJour(sessions, sessionCourante, studentId, objectiveId, ref) {
+  const refDate = ref instanceof Date ? ref : new Date(ref);
   const creneaux = new Set();
   const examiner = (se) => {
-    if (!se || !memeJour(new Date(se.date), ref)) return;
+    if (!se || !memeJour(new Date(se.date), refDate)) return;
     const obj = se.objectiveSnapshot && se.objectiveSnapshot[objectiveId];
     if (!obj || obj.type !== 'probe') return;
     const entry = se.data && se.data[studentId] && se.data[studentId][objectiveId];
@@ -1351,10 +1367,20 @@ function probesDuJour(sessions, sessionCourante, studentId, objectiveId, ref) {
 /* Une cotation a-t-elle vraiment été saisie, au-delà de la forme vide posée
    par emptyEntry ? entryMatches ne vérifie que la FORME (toujours vraie une
    fois l'entrée créée, qu'on ait coté quelque chose ou non — voir son usage
-   ailleurs) ; ici on compare au contenu réellement vierge. */
+   ailleurs) ; ici on regarde le contenu réel, mode par mode. Comparer au
+   JSON d'une entrée vide se cassait sur `targetId` : construireDonneesSeance
+   pose systématiquement cette clé (cible en cours) même sur une entrée
+   jamais touchée, donc les deux JSON différaient toujours et une entrée
+   vierge passait pour cotée. */
 function objectifEstCote(obj, entry) {
   if (!entry || !entryMatches(obj, entry)) return false;
-  return JSON.stringify(entry) !== JSON.stringify(emptyEntry(obj));
+  if (obj.type === 'trials') return (entry.trials || []).some((t) => trialCode(t));
+  if (obj.type === 'occurrence') return (entry.count || 0) > 0;
+  if (obj.type === 'interval') return Object.keys(entry.marks || {}).length > 0 || (entry.segments || []).length > 0;
+  if (obj.type === 'chaining') return Object.values(entry.steps || {}).some(Boolean);
+  if (obj.type === 'balance') return balanceTrials(entry).some((t) => Object.values(t.steps || {}).some(Boolean));
+  if (obj.type === 'probe') return entry.value === 0 || entry.value === 1 || !!entry.guidance;
+  return false;
 }
 
 /* Objectifs prévus par l'emploi du temps du jour et pas encore cotés
@@ -2644,7 +2670,7 @@ function toDayPoints(points) {
    comportement d'origine. */
 function masteryStatus(obj, points) {
   if (!MASTERY_TYPES.includes(obj.type)) return null;
-  const m = { ...DEFAULT_MASTERY, ...(obj.config.mastery || {}) };
+  const m = masteryDe(obj);
   const unit = m.unit === 'days' ? 'days' : 'sessions';
   const sens = m.sens === 'max' ? 'max' : 'min';
   const series = unit === 'days' ? toDayPoints(points) : points;
@@ -2894,6 +2920,22 @@ function buildDetailRows(sessions, students, ateliers, intervenants, classes, gu
             if (lv) rows.push([...b, 'Intervalles (saisie manuelle)', `${seg.start}-${seg.end}`, '', lv.name, '', '', '', segmentSeconds(seg), '', '']);
           });
         }
+
+        /* Probe : une seule ligne par cotation, comme Occurrence n'en a pas.
+           Étape porte le créneau (matin/après-midi) plutôt qu'un numéro
+           d'essai. mesureEssaiCells ne s'applique pas ici : parEssaiPossible
+           exclut probe, entry.mesuresEssais reste toujours vide. */
+        if (obj.type === 'probe') {
+          const cote = obj.config.useGuidance ? !!entry.guidance : (entry.value === 0 || entry.value === 1);
+          if (cote) {
+            const g = obj.config.useGuidance ? guidanceByCode(gl, entry.guidance) : null;
+            const resultat = obj.config.useGuidance
+              ? (g ? g.label : entry.guidance)
+              : (entry.value === 1 ? 'Réussi (1)' : 'Non réussi (0)');
+            const independant = obj.config.useGuidance ? (isIndependentCode(gl, entry.guidance) ? 1 : 0) : entry.value;
+            rows.push([...b, 'Probe', 1, PROBE_CRENEAUX[entry.creneau] || '', resultat, independant, '', '', '', '', '']);
+          }
+        }
       });
     });
   });
@@ -3055,13 +3097,17 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
             objectif: obj.name,
             cible: obj.activeTargetName || '—',
             unite: score.percent ? '%' : score.unit,
-            valeurs: {},
+            sommes: {},
           });
         }
         const r = byRow.get(key);
-        // Plusieurs séances le même jour : on retient la moyenne
-        const prev = r.valeurs[jour];
-        r.valeurs[jour] = prev === undefined ? score.value : Math.round((prev + score.value) / 2);
+        // Plusieurs séances le même jour : on retient la vraie moyenne (somme
+        // et compte accumulés, divisés à l'affichage) — une moyenne deux à
+        // deux à chaque nouvelle cotation divergerait dès la 3e du jour,
+        // et donc de toDayPoints, qui alimente masteryStatus.
+        if (!r.sommes[jour]) r.sommes[jour] = { sum: 0, n: 0 };
+        r.sommes[jour].sum += score.value;
+        r.sommes[jour].n += 1;
       });
     });
   });
@@ -3070,7 +3116,7 @@ function buildWorkbook(sessions, crises, students, ateliers, intervenants = [], 
   Array.from(byRow.values())
     .sort((a, b) => a.eleve.localeCompare(b.eleve) || a.objectif.localeCompare(b.objectif))
     .forEach((r) => {
-      const serie = dates.map((d) => (r.valeurs[d] === undefined ? '' : r.valeurs[d]));
+      const serie = dates.map((d) => (r.sommes[d] ? Math.round(r.sommes[d].sum / r.sommes[d].n) : ''));
       const chiffres = serie.filter((v) => v !== '');
       const dernier = chiffres.length ? chiffres[chiffres.length - 1] : '';
       const moyenne = chiffres.length ? Math.round(chiffres.reduce((a, b) => a + b, 0) / chiffres.length) : '';
@@ -4235,6 +4281,29 @@ function AbaApp() {
      cotation en cours ne doit jamais changer d'onglet sous le doigt. */
   const navFige = !ecran && tab === 'session' && !!activeSession;
   const swipeActif = tiroir ? TIROIR_FERME_AU_BALAYAGE : !navFige;
+
+  /* Plein écran de cotation : replie d'un coup l'en-tête de séance et la
+     pilule de navigation du bas, pour gagner de la place en paysage. ABC et
+     Crise restent accessibles — une crise ne doit jamais se retrouver hors
+     d'atteinte. Persisté comme la densité (aba:zoom), lu au montage plutôt
+     qu'en useState(() => …) : store.getRaw est asynchrone. Ne s'applique
+     que pendant une cotation active ; le reste de l'app garde sa barre
+     complète même si la préférence reste vraie. */
+  const [pleinEcranPref, setPleinEcranPref] = useState(false);
+  useEffect(() => {
+    (async () => {
+      const v = await store.getRaw('aba:plein-ecran');
+      if (v === '1') setPleinEcranPref(true);
+    })();
+  }, []);
+  const basculerPleinEcran = () => {
+    setPleinEcranPref((v) => {
+      const suivant = !v;
+      store.setRaw('aba:plein-ecran', suivant ? '1' : '0');
+      return suivant;
+    });
+  };
+  const pleinEcranActif = pleinEcranPref && navFige;
 
   /* Bouton « Menu » de tous les onglets (Suivi, Session hors cotation, Export)
      et bouton « ‹ Menu » des écrans ouverts depuis le tiroir : une seule
@@ -5747,6 +5816,7 @@ function AbaApp() {
             onProgrammerEquilibre={(sid) => ouvrirEcran('personnes', { personne: sid, nouveau: 'balance' })}
             onOuvrirMenu={ouvrirMenu} planDuJour={planDuJour}
             activeSession={activeSession} setActiveSession={setActiveSession}
+            pleinEcran={pleinEcranPref} onBasculerPleinEcran={basculerPleinEcran}
             onAnnulerCorrection={() => allerA('export')}
             onFinish={(session, suivante) => {
               const { isEdit, ...rest } = session;
@@ -5869,7 +5939,7 @@ function AbaApp() {
       {/* Contenu : l'onglet courant, ou un écran ouvert depuis le tiroir */}
       <div
         ref={contentRef}
-        className="max-w-4xl mx-auto pb-44"
+        className={pleinEcranActif ? 'max-w-4xl mx-auto pb-24' : 'max-w-4xl mx-auto pb-44'}
         style={{
           paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)',
           // En paysage sur un iPhone à encoche, l'encoche se déplace sur le
@@ -5922,8 +5992,9 @@ function AbaApp() {
         >
         {/* Suivi continu : une pastille par personne concernée, aucune pour les
             autres. Un pavé par axe actif — gris quand l'axe est dormant
-            (aucun relevé aujourd'hui), coloré par le critère sinon. */}
-        {pastillesSuivi.length > 0 && (
+            (aucun relevé aujourd'hui), coloré par le critère sinon. Masquée en
+            plein écran de cotation, avec la pilule de navigation. */}
+        {!pleinEcranActif && pastillesSuivi.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mb-2 justify-center">
             {pastillesSuivi.map((p) => {
               const unAxe = p.blocs.length === 1;
@@ -6023,32 +6094,37 @@ function AbaApp() {
             <span className="absolute top-full mt-1 text-[11px] font-medium whitespace-nowrap" style={{ fontFamily: F_DISPLAY, color: COLOR_ABC }}>ABC</span>
           </div>
 
-          <div className="rounded-full flex items-center gap-0.5 p-1.5 shadow-lg" style={{ backgroundColor: NAV_BG }}>
-            {[
-              { k: 'suivi', label: 'Suivi', icon: TrendingUp },
-              { k: 'session', label: 'Session', icon: Play },
-              { k: 'export', label: 'Export', icon: FileSpreadsheet },
-            ].map((t) => {
-              const Icon = t.icon;
-              const on = !ecran && tab === t.k;
-              return (
-                <button
-                  key={t.k}
-                  onClick={() => allerA(t.k)}
-                  className="rounded-full px-4 py-3.5 text-base font-medium flex items-center justify-center gap-1.5"
-                  style={{
-                    fontFamily: F_DISPLAY,
-                    backgroundColor: on ? ACCENT : 'transparent',
-                    color: on ? ACCENT_INK : INK_SOFT,
-                  }}
-                  aria-label={t.label}
-                >
-                  <Icon size={20} />
-                  <span className="hidden sm:inline">{t.label}</span>
-                </button>
-              );
-            })}
-          </div>
+          {/* Masquée en plein écran de cotation, avec les pastilles de suivi
+              continu : ABC et Crise restent seuls, une crise ne doit jamais
+              devenir hors d'atteinte. */}
+          {!pleinEcranActif && (
+            <div className="rounded-full flex items-center gap-0.5 p-1.5 shadow-lg" style={{ backgroundColor: NAV_BG }}>
+              {[
+                { k: 'suivi', label: 'Suivi', icon: TrendingUp },
+                { k: 'session', label: 'Session', icon: Play },
+                { k: 'export', label: 'Export', icon: FileSpreadsheet },
+              ].map((t) => {
+                const Icon = t.icon;
+                const on = !ecran && tab === t.k;
+                return (
+                  <button
+                    key={t.k}
+                    onClick={() => allerA(t.k)}
+                    className="rounded-full px-4 py-3.5 text-base font-medium flex items-center justify-center gap-1.5"
+                    style={{
+                      fontFamily: F_DISPLAY,
+                      backgroundColor: on ? ACCENT : 'transparent',
+                      color: on ? ACCENT_INK : INK_SOFT,
+                    }}
+                    aria-label={t.label}
+                  >
+                    <Icon size={20} />
+                    <span className="hidden sm:inline">{t.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           <div className="relative flex items-center justify-center shrink-0">
             <button
@@ -6128,7 +6204,10 @@ function AbaApp() {
               })}
             </div>
 
-            <div className="flex-1 flex items-center justify-center">
+            {/* px-[5px] : le logo (w-full sur son conteneur) ne s'étend plus
+               tout à fait bord à bord du tiroir — 10 px de moins au total,
+               répartis de chaque côté. */}
+            <div className="flex-1 flex items-center justify-center px-[5px]">
               <LogoDatABA />
             </div>
           </div>
@@ -8738,9 +8817,9 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
 }
 
 /* ==================== Écran 3 : session ==================== */
-function SessionScreen({ students, ateliers, intervenants, crises, guidances, sessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onProgrammerEquilibre, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish, onAnnulerCorrection }) {
+function SessionScreen({ students, ateliers, intervenants, crises, guidances, sessions, onSetAtelierGroup, notify, onOuvrirConfiguration, onProgrammerEquilibre, onOuvrirMenu, planDuJour, activeSession, setActiveSession, onFinish, onAnnulerCorrection, pleinEcran, onBasculerPleinEcran }) {
   if (activeSession) {
-    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} sessions={sessions} notify={notify} onFinish={onFinish} onAnnulerCorrection={onAnnulerCorrection} suiteDuJour={planDuJour && planDuJour.restants} />;
+    return <SessionRunning session={activeSession} setSession={setActiveSession} students={students} ateliers={ateliers} intervenants={intervenants} crises={crises} guidances={guidances} sessions={sessions} notify={notify} onFinish={onFinish} onAnnulerCorrection={onAnnulerCorrection} suiteDuJour={planDuJour && planDuJour.restants} pleinEcran={pleinEcran} onBasculerPleinEcran={onBasculerPleinEcran} />;
   }
   return (
     <SessionSetup
@@ -8773,7 +8852,7 @@ function AtelierLancement({
   useEffect(() => {
     const nbNouveaux = Object.values(initial.nouveautes).reduce((n, l) => n + l.length, 0);
     if (nbNouveaux > 0) {
-      setTimeout(() => notify(`${nbNouveaux} nouvel${nbNouveaux > 1 ? 'x' : ''} objectif${nbNouveaux > 1 ? 's' : ''} ajouté${nbNouveaux > 1 ? 's' : ''} à cet atelier`), 400);
+      setTimeout(() => notify(`${nbNouveaux} nouve${nbNouveaux > 1 ? 'aux' : 'l'} objectif${nbNouveaux > 1 ? 's' : ''} ajouté${nbNouveaux > 1 ? 's' : ''} à cet atelier`), 400);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -8815,6 +8894,15 @@ function AtelierLancement({
   })();
 
   const ready = studentIds.length > 0 && studentIds.every((id) => (selected[id] || []).length > 0);
+  /* Le détail des objectifs, personne par personne, occupait tout l'écran
+     avant même le bouton Lancer sur une configuration mémorisée qu'il n'y a
+     le plus souvent rien à relire. Replié par défaut, sauf quand une personne
+     cochée n'a encore aucun objectif : le blocage du bouton Lancer serait
+     alors inexplicable derrière un résumé replié. */
+  const [detailOuvert, setDetailOuvert] = useState(!ready);
+  useEffect(() => {
+    if (!ready) setDetailOuvert(true);
+  }, [ready]);
   const lancer = () => onLancer({
     mode, atelierId: atelier ? atelier.id : null, studentIds, selected,
     favorites: atelierFavorites, doubleCotation, intervenantId,
@@ -8910,8 +8998,23 @@ function AtelierLancement({
          objectifs déjà cochés ci-dessous) : plus de carte de résumé
          intermédiaire à lire avant de voir l'atelier et le bouton Lancer.
          Les nouveautés depuis la dernière mémorisation restent recochées
-         d'office, visibles directement dans la liste qui suit. */}
-      {studentIds.map((sid) => {
+         d'office. Le détail se replie derrière un résumé : sur une
+         configuration mémorisée, il n'y a le plus souvent rien à y relire, et
+         il masquait l'atelier et le bouton Lancer. */}
+      <button
+        onClick={() => setDetailOuvert((v) => !v)}
+        className="w-full flex items-center justify-between gap-2 text-sm mb-3"
+        style={{ color: INK_SOFT }}
+      >
+        <span>
+          {studentIds.length} personne{studentIds.length > 1 ? 's' : ''} · {studentIds.reduce((n, sid) => n + (selected[sid] || []).length, 0)} objectif{studentIds.reduce((n, sid) => n + (selected[sid] || []).length, 0) > 1 ? 's' : ''} coché{studentIds.reduce((n, sid) => n + (selected[sid] || []).length, 0) > 1 ? 's' : ''}
+        </span>
+        <span className="flex items-center gap-1 font-medium">
+          {detailOuvert ? 'Masquer le détail' : 'Voir le détail des objectifs'}
+          <ChevronDown size={14} style={{ transform: detailOuvert ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+        </span>
+      </button>
+      {detailOuvert && studentIds.map((sid) => {
         const st = students.find((s) => s.id === sid);
         if (!st) return null;
         return (
@@ -9189,7 +9292,7 @@ function SessionSetup({ students, ateliers, intervenants, onSetAtelierGroup, not
   );
 }
 
-function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, sessions, notify, onFinish, onAnnulerCorrection, suiteDuJour }) {
+function SessionRunning({ session, setSession, students, ateliers, intervenants, crises, guidances, sessions, notify, onFinish, onAnnulerCorrection, suiteDuJour, pleinEcran, onBasculerPleinEcran }) {
   const isEdit = !!session.isEdit;
   const [currentId, setCurrentId] = useState(session.studentIds[0]);
   const [viewMode, setViewMode] = useState('priority');
@@ -9309,7 +9412,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     }
     const disponible = largeurZone ? largeurZone / zoom : colWidth;
     const colonnes = Math.max(1, Math.min(4, Math.floor(disponible / colWidth)));
-    const compact = colonnes >= 2 && disponible / colonnes < 240;
+    const compact = colonnes >= 2 && disponible / colonnes < 200;
     return { style: { zoom, columnCount: colonnes, columnGap: '0.75rem' }, itemStyle: gridItemStyle, compact };
   };
 
@@ -9556,6 +9659,21 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           marginTop: 'calc(-1 * env(safe-area-inset-top, 0px))', paddingTop: 'env(safe-area-inset-top, 0px)',
         }}
       >
+      {pleinEcran ? (
+        /* Plein écran de cotation : titre, chrono, pause, densité, alerte,
+           abandon et Enregistrer disparaissent avec la barre du bas — surtout
+           utile en paysage, où la hauteur d'écran est la ressource rare. Seule
+           la poignée (qui referme) et la bascule Prioritaires/Par personne
+           restent, cette dernière servant le plus souvent en cours de séance. */
+        <button
+          onClick={onBasculerPleinEcran}
+          className="w-full flex justify-center py-1"
+          title="Rétablir l'en-tête et la barre de navigation"
+        >
+          <ChevronDown size={18} style={{ color: INK_SOFT, transform: 'rotate(180deg)' }} />
+        </button>
+      ) : (
+        <>
       <div className="mb-3">
         <div className="flex flex-wrap items-center gap-1.5">
           {isEdit ? (
@@ -9593,6 +9711,16 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               >
                 <LayoutGrid size={15} />
                 <span className="text-xs" style={{ fontFamily: F_MONO }}>{Math.round(zoom * 100)}%</span>
+              </button>
+            )}
+            {!isEdit && onBasculerPleinEcran && (
+              <button
+                onClick={onBasculerPleinEcran}
+                className="rounded-xl px-2.5 py-2 border"
+                style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
+                title="Plein écran — replier l'en-tête et la barre de navigation"
+              >
+                <Minimize2 size={15} />
               </button>
             )}
             {!isEdit && hasInterval && (
@@ -9644,9 +9772,12 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           Séance en pause — le chronomètre et les intervalles sont arrêtés.
         </div>
       )}
+        </>
+      )}
 
-      {/* Mini-curseur : bascule prioritaires / tous les objectifs.
-          Réagit aussi au balayage sur la zone de cotation. */}
+      {/* Mini-curseur : bascule prioritaires / tous les objectifs. Reste
+          visible en plein écran — c'est ce qui sert le plus en cours de
+          séance. Réagit aussi au balayage sur la zone de cotation. */}
       <div className="flex justify-center mb-3">
         <div className="relative flex rounded-full p-1 w-full max-w-xs" style={{ backgroundColor: CARD, border: `1px solid ${BORDER}` }}>
           <div
@@ -9720,7 +9851,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
               /* Sans Équilibre, un flux unique suffit. */
               if (balanceKeys.length === 0) {
-                const pack = packStyle(priorityItems.length, 280);
+                const pack = packStyle(priorityItems.length, 210);
                 return (
                   <ReorderList
                     items={priorityItems}
@@ -9738,9 +9869,9 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                  se placent côte à côte dans cette zone — un seul reste étalé sur
                  toute la largeur, cas que packStyle ne couvre pas. */
               const packBalance = balanceKeys.length > 1
-                ? packStyle(balanceKeys.length, 340)
+                ? packStyle(balanceKeys.length, 260)
                 : { style: { zoom, columnWidth: '100%', columnGap: '0.75rem' }, itemStyle: gridItemStyle, compact: false };
-              const packCote = packStyle(autresKeys.length, 260);
+              const packCote = packStyle(autresKeys.length, 210);
 
               return (
                 <div className="flex flex-col landscape:flex-row gap-3 items-start">
@@ -9777,7 +9908,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               </div>
 
               {(() => {
-                const packSolo = packStyle(objIds.length, 280);
+                const packSolo = packStyle(objIds.length, 210);
                 return (
               <ReorderList
                 items={objIds}
@@ -10212,7 +10343,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
           </button>
         )}
         <div className="min-w-0 flex-1 cursor-pointer" onClick={handleHeaderTap}>
-          <ObjectiveHeader obj={obj} entry={entry} guidances={guidances} />
+          <ObjectiveHeader obj={obj} entry={entry} guidances={guidances} compact={compact} />
         </div>
         {onExpand && !expandedView && (
           <button onClick={onExpand} style={{ color: INK_SOFT }} title="Agrandir" className="shrink-0">
@@ -10231,7 +10362,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
         {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} compact={compact} />}
         {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} compact={compact} />}
-        {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} bloque={probeBloque} onDebloquer={onDebloquerProbe} />}
+        {obj.type === 'probe' && <ProbeWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} bloque={probeBloque} onDebloquer={onDebloquerProbe} compact={compact} />}
         {!TYPES[obj.type] && (
           <div className="text-xs" style={{ color: INK_SOFT }}>
             Ce mode de cotation a été retiré. L'objectif est à recréer dans un mode disponible.
@@ -10254,7 +10385,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
   );
 }
 
-function ObjectiveHeader({ obj, entry, guidances }) {
+function ObjectiveHeader({ obj, entry, guidances, compact }) {
   const meta = typeMeta(obj.type);
   const Icon = meta.icon;
   const { result } = summarize(obj, entry, guidances);
@@ -10264,7 +10395,18 @@ function ObjectiveHeader({ obj, entry, guidances }) {
       <div className="flex items-start gap-2 min-w-0">
         <Icon size={16} style={{ color: meta.color, marginTop: 2 }} className="shrink-0" />
         <div className="min-w-0">
-          <div className="font-medium leading-snug break-words" style={{ overflowWrap: 'anywhere' }}>{obj.name}</div>
+          {/* Un mot trop long pour la colonne se coupe à l'espace le plus
+              proche (break-words) plutôt qu'en plein milieu (overflowWrap
+              anywhere, retiré) ; en densité compacte, le nom se plafonne à
+              deux lignes — le nom complet reste lisible en title et par le
+              double-appui qui agrandit la carte. */}
+          <div
+            className="font-medium leading-snug break-words"
+            title={obj.name}
+            style={compact ? { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' } : undefined}
+          >
+            {obj.name}
+          </div>
           {cible && (
             <div className="text-xs mt-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5" style={{ backgroundColor: PAPER, color: INK }}>
               <Target size={11} /> {cible}
@@ -10448,7 +10590,7 @@ function OccurrenceWidget({ entry, onChange }) {
 /* Probe : 1/0 par défaut, ou par niveaux de guidance si `config.useGuidance`.
    `bloque` grise la carte quand le quota du jour (config.probesParJour) est
    déjà atteint — voir probesDuJour ; un appui la débloque pour la séance. */
-function ProbeWidget({ obj, entry, guidances, onChange, bloque, onDebloquer }) {
+function ProbeWidget({ obj, entry, guidances, onChange, bloque, onDebloquer, compact }) {
   if (bloque) {
     return (
       <button
@@ -10470,12 +10612,12 @@ function ProbeWidget({ obj, entry, guidances, onChange, bloque, onDebloquer }) {
           return (
             <button
               key={g.code}
-              onClick={() => onChange({ guidance: on ? null : g.code, value: null, creneau: creneauProbe(Date.now()) })}
-              className="flex-1 min-w-[72px] rounded-xl py-3 border active:scale-95 transition-transform"
+              onClick={() => onChange({ guidance: on ? null : g.code, value: null, creneau: on ? null : creneauProbe(Date.now()) })}
+              title={g.label}
+              className={`flex-1 min-w-[44px] ${compact ? 'py-2' : 'py-2.5'} rounded-xl border active:scale-95 transition-transform`}
               style={{ borderColor: on ? g.color : BORDER, backgroundColor: on ? g.color : 'transparent', color: on ? texte : INK_SOFT }}
             >
               <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
-              <div className="text-[11px] leading-tight break-words" style={{ overflowWrap: 'anywhere' }}>{g.label}</div>
             </button>
           );
         })}
@@ -10485,14 +10627,14 @@ function ProbeWidget({ obj, entry, guidances, onChange, bloque, onDebloquer }) {
   return (
     <div className="flex gap-2">
       <button
-        onClick={() => onChange({ value: entry.value === 0 ? null : 0, guidance: null, creneau: creneauProbe(Date.now()) })}
+        onClick={() => onChange({ value: entry.value === 0 ? null : 0, guidance: null, creneau: entry.value === 0 ? null : creneauProbe(Date.now()) })}
         className="flex-1 rounded-xl py-4 text-lg font-semibold border active:scale-95 transition-transform"
         style={{ borderColor: entry.value === 0 ? CRISIS : BORDER, backgroundColor: entry.value === 0 ? CRISIS : 'transparent', color: entry.value === 0 ? '#fff' : INK_SOFT }}
       >
         0
       </button>
       <button
-        onClick={() => onChange({ value: entry.value === 1 ? null : 1, guidance: null, creneau: creneauProbe(Date.now()) })}
+        onClick={() => onChange({ value: entry.value === 1 ? null : 1, guidance: null, creneau: entry.value === 1 ? null : creneauProbe(Date.now()) })}
         className="flex-1 rounded-xl py-4 text-lg font-semibold border active:scale-95 transition-transform"
         style={{ borderColor: entry.value === 1 ? TYPES.probe.color : BORDER, backgroundColor: entry.value === 1 ? TYPES.probe.color : 'transparent', color: entry.value === 1 ? texteLisibleSur(TYPES.probe.color) : INK_SOFT }}
       >
@@ -10603,17 +10745,16 @@ function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
             <button
               key={g.code}
               onClick={() => record(g.code)}
-              className={`flex-1 ${compact ? 'min-w-[56px] py-2' : 'min-w-[72px] py-3'} rounded-xl active:scale-95 transition-transform`}
+              title={g.label}
+              className={`flex-1 min-w-[44px] ${compact ? 'py-2' : 'py-2.5'} rounded-xl active:scale-95 transition-transform`}
               style={{ backgroundColor: g.color, color: texte }}
             >
-              <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
-              {/* En densité compacte, une colonne étroite ferait passer le
-                  libellé à la ligne et gonflerait la hauteur de la carte —
+              {/* Code seul : le libellé complet passait à la ligne dans une
+                  colonne étroite et gonflait la hauteur de la carte —
                   exactement le symptôme signalé (« plus d'empilement
-                  qu'avant »). Le code seul suffit à coter. */}
-              {!compact && (
-                <div className="text-[11px] leading-tight break-words" style={{ overflowWrap: 'anywhere', color: texte }}>{g.label}</div>
-              )}
+                  qu'avant »). Le code seul suffit à coter, le libellé reste
+                  accessible par appui long (title). */}
+              <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
             </button>
           );
         })}
@@ -10721,7 +10862,7 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
                 onChange({ marks });
               }}
               className="rounded-xl py-3 px-2.5 text-sm border-2 text-left leading-tight break-words hyphens-auto active:scale-95 transition-transform"
-              style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? texteLisibleSur(color) : color, fontFamily: F_DISPLAY, overflowWrap: 'anywhere' }}>
+              style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? texteLisibleSur(color) : color, fontFamily: F_DISPLAY }}>
               {l.name}
             </button>
           );
@@ -10787,7 +10928,7 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
                 return (
                   <button key={l.id} onClick={() => setLevelId(l.id)}
                     className="rounded-lg px-2.5 py-2 text-xs border leading-tight break-words"
-                    style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? texteLisibleSur(color) : color, overflowWrap: 'anywhere' }}>
+                    style={{ borderColor: color, backgroundColor: on ? color : 'transparent', color: on ? texteLisibleSur(color) : color }}>
                     {l.name}
                   </button>
                 );
@@ -10845,7 +10986,7 @@ function ChainingWidget({ obj, entry, guidances, onChange, compact }) {
             <div key={s.id} className="rounded-xl px-2.5 py-2" style={{ backgroundColor: PAPER }}>
               <div className="flex items-start gap-2 mb-1.5">
                 <span className="text-xs w-5 shrink-0 pt-0.5" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
-                <span className="text-sm flex-1 leading-snug break-words" style={{ overflowWrap: 'anywhere' }}>{s.name}</span>
+                <span className="text-sm flex-1 leading-snug break-words">{s.name}</span>
               </div>
               <div className="flex flex-wrap gap-1">
                 {list.map((g) => {
@@ -10957,7 +11098,7 @@ function BalanceWidget({ obj, entry, onChange, compact }) {
             <div key={st.id} className="rounded-xl px-2.5 py-2" style={{ backgroundColor: PAPER }}>
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="text-xs w-5 shrink-0" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{i + 1}</span>
-                <span className="text-sm flex-1 min-w-0 leading-snug break-words" style={{ overflowWrap: 'anywhere' }}>{st.name}</span>
+                <span className="text-sm flex-1 min-w-0 leading-snug break-words">{st.name}</span>
               </div>
               <div className="flex flex-wrap gap-1 mb-1.5">
                 {issues.map((o) => {
