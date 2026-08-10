@@ -53,13 +53,13 @@ const NOMS = [
   'migrerReleves', 'migrerStudentsSuivi', 'migrerAxesSuivi',
   'jourLocal', 'dureeReleve', 'journeesSuivi', 'migrerEnvoisCrises',
   'grouperParJour', 'libelleJour', 'segmentAppareil', 'nomFichier', 'timeShort',
-  'compteurDe', 'nomAxe', 'nomCompteur', 'groupeDe', 'nomGroupe',
+  'compteurDe', 'nomAxe', 'nomCompteur', 'classeDe', 'nomClasse',
 ];
-// lignesSuiviExport lit désormais le groupe de la personne, et migrerReleves
-// pose des champs de traçabilité par défaut : GROUPE_INCONNU et
+// lignesSuiviExport lit désormais la classe de la personne, et migrerReleves
+// pose des champs de traçabilité par défaut : CLASSE_INCONNUE et
 // TRACABILITE_RELEVE_PAR_DEFAUT sont des constantes sur une seule ligne,
 // comme COMPTEUR_INCONNU ci-dessous — même raison de passer par extraireLigne.
-const code = `const CRISIS = '#B3261E';\nconst CAT_TEAL = ${extraireLigne('CAT_TEAL')};\nconst CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};\nconst CAT_AMBER = ${extraireLigne('CAT_AMBER')};\nconst CAT_CORAL = ${extraireLigne('CAT_CORAL')};\nconst CAT_VIOLET = ${extraireLigne('CAT_VIOLET')};\nconst CAT_CYAN = ${extraireLigne('CAT_CYAN')};\nconst CAT_LILAC = ${extraireLigne('CAT_LILAC')};\nconst CAT_SLATE = ${extraireLigne('CAT_SLATE')};\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\nconst COMPTEUR_INCONNU = ${extraireLigne('COMPTEUR_INCONNU')};\nconst GROUPE_INCONNU = ${extraireLigne('GROUPE_INCONNU')};\nconst TRACABILITE_RELEVE_PAR_DEFAUT = ${extraireLigne('TRACABILITE_RELEVE_PAR_DEFAUT')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
+const code = `const CRISIS = '#B3261E';\nconst CAT_TEAL = ${extraireLigne('CAT_TEAL')};\nconst CAT_INDIGO = ${extraireLigne('CAT_INDIGO')};\nconst CAT_AMBER = ${extraireLigne('CAT_AMBER')};\nconst CAT_CORAL = ${extraireLigne('CAT_CORAL')};\nconst CAT_VIOLET = ${extraireLigne('CAT_VIOLET')};\nconst CAT_CYAN = ${extraireLigne('CAT_CYAN')};\nconst CAT_LILAC = ${extraireLigne('CAT_LILAC')};\nconst CAT_SLATE = ${extraireLigne('CAT_SLATE')};\nconst PASTILLE_PAVES_MAX = ${extraireLigne('PASTILLE_PAVES_MAX')};\nconst COMPTEUR_INCONNU = ${extraireLigne('COMPTEUR_INCONNU')};\nconst CLASSE_INCONNUE = ${extraireLigne('CLASSE_INCONNUE')};\nconst TRACABILITE_RELEVE_PAR_DEFAUT = ${extraireLigne('TRACABILITE_RELEVE_PAR_DEFAUT')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')}, PASTILLE_PAVES_MAX };`;
 // eslint-disable-next-line no-new-func
 const {
   DEFAULT_CRITERES_SUIVI, CRITERE_INCONNU, DEFAULT_SUIVIS,
@@ -197,21 +197,21 @@ const critereSupprime = [R('a', '2026-08-01T09:00:00.000Z', 'disparu')];
 const ligneRetire = lignesSuiviExport(critereSupprime, students, suivis, null);
 t('un critère supprimé reste traçable avec sa clé brute', ligneRetire[0][5], 'Critère retiré (disparu)');
 
-/* Colonnes Groupe / Intervenant / Atelier, en bout de ligne. */
-const listeGroupes = [{ id: 'g1', name: 'Classe 1' }];
+/* Colonnes Classe / Intervenant / Atelier, en bout de ligne. */
+const listeClasses = [{ id: 'g1', name: 'Classe 1' }];
 const listeIntervenants = [{ id: 'i1', name: 'Sophie' }];
 const listeAteliers = [{ id: 'at1', name: 'Motricité' }];
-const studentsGroupe = [{ id: 'a', initials: 'A.B.', groupeId: 'g1' }, { id: 'b', initials: 'C.D.' }];
+const studentsClasse = [{ id: 'a', initials: 'A.B.', classeId: 'g1' }, { id: 'b', initials: 'C.D.' }];
 const relevesTraces = [
   R('a', '2026-08-01T09:00:00.000Z', 'stable', { intervenantId: 'i1', atelierId: 'at1' }),
   R('b', '2026-08-01T09:00:00.000Z', 'stable'),
 ];
-const lignesTracees = lignesSuiviExport(relevesTraces, studentsGroupe, suivis, null, listeGroupes, listeIntervenants, listeAteliers);
-t('le groupe de la personne apparaît en fin de ligne', lignesTracees[0].slice(-3), ['Classe 1', 'Sophie', 'Motricité']);
-t('sans groupe ni traçabilité, les colonnes restent vides plutôt qu\'un tiret inventé', lignesTracees[1].slice(-3), ['', '', '']);
-const ligneCompteurTracee = lignesSuiviExport([{ id: 'k1', studentId: 'a', timestamp: '2026-08-01T09:00:00.000Z', kind: 'compteur', compteurId: 'zzz' }], studentsGroupe, suivis, null, listeGroupes, listeIntervenants, listeAteliers);
+const lignesTracees = lignesSuiviExport(relevesTraces, studentsClasse, suivis, null, listeClasses, listeIntervenants, listeAteliers);
+t('la classe de la personne apparaît en fin de ligne', lignesTracees[0].slice(-3), ['Classe 1', 'Sophie', 'Motricité']);
+t('sans classe ni traçabilité, les colonnes restent vides plutôt qu\'un tiret inventé', lignesTracees[1].slice(-3), ['', '', '']);
+const ligneCompteurTracee = lignesSuiviExport([{ id: 'k1', studentId: 'a', timestamp: '2026-08-01T09:00:00.000Z', kind: 'compteur', compteurId: 'zzz' }], studentsClasse, suivis, null, listeClasses, listeIntervenants, listeAteliers);
 t('un relevé de compteur porte aussi ses colonnes de contexte', ligneCompteurTracee[0].slice(-3), ['Classe 1', '', '']);
-t('sans listes de référence, aucune colonne ne plante', lignesSuiviExport(relevesTraces, studentsGroupe, suivis, null)[1].slice(-3), ['', '', '']);
+t('sans listes de référence, aucune colonne ne plante', lignesSuiviExport(relevesTraces, studentsClasse, suivis, null)[1].slice(-3), ['', '', '']);
 
 /* ==================== Migrations ==================== */
 t('un relevé ancien format gagne suiviId et critere', migrerReleves([{ id: 'x', studentId: 'a', timestamp: 't', etat: 'stable', source: 'pastille' }]), [conTracabilite({ id: 'x', studentId: 'a', suiviId: 'principal', timestamp: 't', critere: 'stable', source: 'pastille' })]);
