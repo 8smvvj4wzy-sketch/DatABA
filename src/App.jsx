@@ -1605,6 +1605,32 @@ function sessionPourPersonne(session, sid) {
   };
 }
 
+/* Réinjecte un sous-ensemble réordonné dans la liste complète, sans toucher à
+   l'ordre du reste : les positions qu'occupait le sous-ensemble sont
+   réutilisées une à une. C'est ce qui permet de réordonner la seule zone
+   « Autres objectifs prioritaires » sans déplacer les Équilibre, ou les
+   objectifs d'une personne sans toucher à ceux des autres.
+
+   Un élément du sous-ensemble absent de la liste complète — un objectif
+   devenu prioritaire après coup, pas encore mémorisé dans priorityOrder —
+   n'a pas de position à réutiliser : il était jusqu'ici silencieusement
+   perdu. Il est désormais inséré à la suite du dernier créneau repris, donc
+   à l'endroit choisi plutôt qu'en queue de liste. */
+function reinjecterSousEnsemble(complet, sousEnsemble) {
+  const base = (complet || []).slice();
+  const sous = (sousEnsemble || []).slice();
+  const positions = [];
+  base.forEach((k, i) => { if (sous.includes(k)) positions.push(i); });
+  const suite = base.slice();
+  positions.forEach((pos, i) => { if (i < sous.length) suite[pos] = sous[i]; });
+  const surplus = sous.slice(positions.length);
+  if (surplus.length) {
+    const apres = positions.length ? positions[positions.length - 1] + 1 : suite.length;
+    suite.splice(apres, 0, ...surplus);
+  }
+  return suite;
+}
+
 /* Passage à l'atelier suivant. La séance en cours est close et enregistrée
    telle quelle, une nouvelle s'ouvre sur le nouvel atelier : l'atelier reste
    une propriété de la séance, ce qu'attendent l'export et DatABA Manager, et
@@ -3321,14 +3347,41 @@ function EditableRow({ label, onRename, onRemove, chip }) {
    déclenche en même temps que le réordonnancement. */
 let reorderDragging = false;
 
-/* Liste réordonnable : appui long (~0,3 s) puis glissement vertical.
+/* Déplace un élément d'une position à une autre, les autres se décalant d'un
+   cran — un vrai déplacement, pas un échange deux à deux. Les bornes hors
+   limites sont ramenées dans la liste plutôt que de produire un trou. */
+function deplacerDansListe(items, from, to) {
+  const liste = (items || []).slice();
+  if (!liste.length) return liste;
+  const depart = Math.max(0, Math.min(liste.length - 1, from));
+  const arrivee = Math.max(0, Math.min(liste.length - 1, to));
+  if (depart === arrivee) return liste;
+  const [deplace] = liste.splice(depart, 1);
+  liste.splice(arrivee, 0, deplace);
+  return liste;
+}
+
+/* Bandes de déclenchement du défilement automatique pendant un déplacement, en
+   pixels depuis chaque bord. Plus grande en bas : la barre ABC/Crise y occupe
+   déjà la place, le doigt s'arrête donc plus haut qu'il ne croit. */
+const REORDER_BORD_HAUT = 80;
+const REORDER_BORD_BAS = 120;
+const REORDER_VITESSE_MAX = 14;
+
+/* Liste réordonnable : appui long (~0,3 s) puis glissement.
    Les écouteurs sont posés en natif avec passive:false, indispensable pour
-   bloquer le défilement pendant le déplacement — React les poserait en passif. */
+   bloquer le défilement pendant le déplacement — React les poserait en passif.
+
+   Pendant le glissement, la liste affichée est un APERÇU : l'élément saisi est
+   déjà à sa position d'arrivée, les autres décalés. Ce qu'on voit est donc ce
+   qu'on obtient, et le repérage de la cible se fait sur la disposition
+   réellement à l'écran — ce qui rend le déplacement juste aussi en colonnes
+   CSS, où l'ordre du DOM ne suit pas le serpentin visuel. */
 function ReorderList({ items, keyOf, onReorder, renderItem, className = '', style, itemStyle }) {
   const containerRef = useRef(null);
   const [dragKey, setDragKey] = useState(null);
-  const [overIndex, setOverIndex] = useState(null);
-  const st = useRef({ timer: null, dragging: false, from: null, over: null, justDragged: false });
+  const [apercu, setApercu] = useState(null);
+  const st = useRef({ timer: null, dragging: false, justDragged: false, liste: null, pos: null, raf: null, x: 0, y: 0 });
 
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -3371,22 +3424,57 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
       return best;
     }
 
+    /* Recalcule l'aperçu depuis la position courante du doigt. Appelé au
+       mouvement, et après chaque cran de défilement automatique : les
+       rectangles ont bougé sous des coordonnées inchangées, donc la cible
+       aussi. */
+    function viser() {
+      const i = indexFromPoint(s.x, s.y);
+      if (i < 0 || i === s.pos) return;
+      s.liste = deplacerDansListe(s.liste, s.pos, i);
+      s.pos = i;
+      setApercu(s.liste);
+    }
+
+    /* Défilement automatique tant que le doigt reste près d'un bord : sans
+       lui, une carte ne peut pas quitter la zone visible et la destination
+       reste hors d'atteinte. */
+    function boucleDefilement() {
+      if (!s.dragging) { s.raf = null; return; }
+      const h = window.innerHeight;
+      let pas = 0;
+      if (s.y < REORDER_BORD_HAUT) {
+        pas = -Math.ceil(((REORDER_BORD_HAUT - s.y) / REORDER_BORD_HAUT) * REORDER_VITESSE_MAX);
+      } else if (s.y > h - REORDER_BORD_BAS) {
+        pas = Math.ceil(((s.y - (h - REORDER_BORD_BAS)) / REORDER_BORD_BAS) * REORDER_VITESSE_MAX);
+      }
+      if (pas) {
+        const avant = window.scrollY;
+        window.scrollBy(0, pas);
+        if (window.scrollY !== avant) viser();
+      }
+      s.raf = requestAnimationFrame(boucleDefilement);
+    }
+
     function start(e) {
       const t = e.touches ? e.touches[0] : e;
       const i = indexFromTarget(e.target);
       if (i < 0) return;
       s.startY = t.clientY;
       s.startX = t.clientX;
-      s.from = i;
       s.dragging = false;
       clearTimeout(s.timer);
       s.timer = setTimeout(() => {
         s.dragging = true;
         reorderDragging = true;
-        s.over = i;
-        setDragKey(keyOfRef.current(itemsRef.current[i]));
-        setOverIndex(i);
+        s.liste = itemsRef.current.slice();
+        s.pos = i;
+        s.x = s.startX;
+        s.y = s.startY;
+        setDragKey(keyOfRef.current(s.liste[i]));
+        setApercu(s.liste);
         try { if (navigator.vibrate) navigator.vibrate(25); } catch (err) {}
+        s.raf = requestAnimationFrame(boucleDefilement);
       }, 320);
     }
 
@@ -3401,27 +3489,26 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
         return;
       }
       if (e.cancelable) e.preventDefault();
-      const i = indexFromPoint(t.clientX, t.clientY);
-      if (i >= 0 && i !== s.over) { s.over = i; setOverIndex(i); }
+      s.x = t.clientX;
+      s.y = t.clientY;
+      viser();
     }
 
     function end() {
       clearTimeout(s.timer);
       s.timer = null;
-      if (s.dragging && s.from !== null && s.over !== null && s.from !== s.over) {
-        const next = itemsRef.current.slice();
-        const [moved] = next.splice(s.from, 1);
-        next.splice(s.over, 0, moved);
-        onReorderRef.current(next);
-      }
-      if (s.dragging) {
+      if (s.raf) { cancelAnimationFrame(s.raf); s.raf = null; }
+      if (s.dragging && s.liste) {
+        const avant = itemsRef.current;
+        const change = s.liste.length !== avant.length || s.liste.some((it, i) => it !== avant[i]);
+        if (change) onReorderRef.current(s.liste);
         // Empêche le clic parasite sur le bouton relâché en fin de glissement
         s.justDragged = true;
         setTimeout(() => { s.justDragged = false; }, 250);
       }
-      s.dragging = false; s.from = null; s.over = null;
+      s.dragging = false; s.liste = null; s.pos = null;
       reorderDragging = false;
-      setDragKey(null); setOverIndex(null);
+      setDragKey(null); setApercu(null);
     }
 
     function blockClick(e) {
@@ -3438,6 +3525,8 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
     window.addEventListener('mouseup', end);
     return () => {
       clearTimeout(s.timer);
+      if (s.raf) cancelAnimationFrame(s.raf);
+      reorderDragging = false;
       el.removeEventListener('touchstart', start);
       el.removeEventListener('touchmove', move);
       el.removeEventListener('touchend', end);
@@ -3449,21 +3538,24 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
     };
   }, []);
 
+  /* L'aperçu ne survit pas à un changement de la liste source : si le parent
+     retire un objectif pendant un glissement, on repart de la vérité. */
+  const affiches = apercu && apercu.length === items.length ? apercu : items;
+
   return (
     <div ref={containerRef} data-no-swipe data-reorder className={className} style={style}>
-      {items.map((it, i) => {
+      {affiches.map((it, i) => {
         const k = keyOf(it);
         const isDragging = dragKey === k;
-        const isOver = dragKey !== null && overIndex === i && !isDragging;
         return (
           <div
             key={k}
             style={{
               ...itemStyle,
               opacity: isDragging ? 0.45 : 1,
-              outline: isOver ? `2px solid ${INK}` : 'none',
+              outline: isDragging ? `2px solid ${INK}` : 'none',
               outlineOffset: '2px',
-              borderRadius: isOver ? '1rem' : undefined,
+              borderRadius: isDragging ? '1rem' : undefined,
               transition: 'opacity .15s',
               touchAction: dragKey !== null ? 'none' : 'auto',
             }}
@@ -9451,9 +9543,6 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     if (aCoter.length && !aCoter.includes(currentId)) setCurrentId(aCoter[0]);
   }, [aCoter.join('|'), currentId]);
 
-  /* Réordonne les objectifs d'une personne. En vue Prioritaires on ne déplace
-     qu'un sous-ensemble : les positions occupées par ce sous-ensemble dans la
-     liste complète sont réutilisées, l'ordre des autres reste intact. */
   /* Liste à plat des objectifs prioritaires, toutes personnes confondues.
      L'ordre choisi par l'éducateur est conservé dans la séance ; les objectifs
      qui n'y figurent pas encore sont ajoutés à la suite. */
@@ -9482,22 +9571,14 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
   function reorderPriority(sousEnsemble) {
     setSession((s0) => {
-      const complet = s0.priorityOrder && s0.priorityOrder.length ? s0.priorityOrder.slice() : priorityItems.slice();
-      const positions = [];
-      complet.forEach((k, i) => { if (sousEnsemble.includes(k)) positions.push(i); });
-      const suite = complet.slice();
-      positions.forEach((pos, i) => { suite[pos] = sousEnsemble[i]; });
-      return { ...s0, priorityOrder: suite };
+      const complet = s0.priorityOrder && s0.priorityOrder.length ? s0.priorityOrder : priorityItems;
+      return { ...s0, priorityOrder: reinjecterSousEnsemble(complet, sousEnsemble) };
     });
   }
 
   function reorderObjectives(sid, nouvelOrdre) {
     setSession((s0) => {
-      const complet = s0.selectedObjectives[sid] || [];
-      const positions = [];
-      complet.forEach((oid, i) => { if (nouvelOrdre.includes(oid)) positions.push(i); });
-      const suite = complet.slice();
-      positions.forEach((pos, k) => { suite[pos] = nouvelOrdre[k]; });
+      const suite = reinjecterSousEnsemble(s0.selectedObjectives[sid] || [], nouvelOrdre);
       return { ...s0, selectedObjectives: { ...s0.selectedObjectives, [sid]: suite } };
     });
   }
