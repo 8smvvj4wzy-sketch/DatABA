@@ -3046,9 +3046,9 @@ function Field({ value, onChange, placeholder, onEnter, autoFocus, className = '
   );
 }
 
-function Card({ children, className = '' }) {
+function Card({ children, className = '', style }) {
   return (
-    <div className={`rounded-2xl border p-4 ${className}`} style={{ borderColor: BORDER, backgroundColor: CARD }}>
+    <div className={`rounded-2xl border p-4 ${className}`} style={{ borderColor: BORDER, backgroundColor: CARD, ...style }}>
       {children}
     </div>
   );
@@ -3575,13 +3575,19 @@ function ListeParJour({ items, dateDe, renderItem }) {
 }
 
 /* Densités d'affichage de la zone de cotation. Réduire fait tenir plus
-   d'objectifs à l'écran, au prix de boutons plus petits. */
+   d'objectifs à l'écran, au prix de boutons plus petits. Ce sont désormais
+   des PALIERS : le bouton saute de l'un à l'autre, mais le pincement à deux
+   doigts (usePinchDensite) fixe n'importe quelle valeur intermédiaire dans
+   les mêmes bornes. */
 const ZOOM_LEVELS = [
   { v: 1, l: '100 %' },
   { v: 0.85, l: '85 %' },
   { v: 0.7, l: '70 %' },
   { v: 0.6, l: '60 %' },
+  { v: 0.5, l: '50 %' },
 ];
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 1;
 
 /* ==================== Navigation par balayage ====================
    Ordre des onglets, utilisé pour savoir vers quel écran glisser. Gestion et
@@ -3703,7 +3709,12 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
 
     function start(e) {
       if (e.touches.length !== 1 || reorderDragging || ownsHorizontalGesture(e.target, boundary, ignoreNoSwipe)) {
+        // Un second doigt qui se pose (pincement de densité, notamment)
+        // abandonne le balayage plutôt que de laisser un décalage résiduel à
+        // l'écran jusqu'au relâchement.
         state.current = null;
+        setDragging(false);
+        setOffset(0);
         return;
       }
       const t = e.touches[0];
@@ -3758,6 +3769,59 @@ function useHorizontalSwipe(ref, { onLeft, onRight, enabled = true, onDocument =
   }, [el, onLeft, onRight, enabled, onDocument, ignoreNoSwipe]);
 
   return { offset, dragging };
+}
+
+/* Pincement à deux doigts pour la densité de cotation : plus rapide que de
+   cycler les paliers de ZOOM_LEVELS un par un pour atteindre une valeur
+   précise. La valeur suit le ratio de distance entre les deux doigts depuis
+   le début du geste, appliqué à la densité au moment où le second doigt
+   s'est posé — pas à ZOOM_MAX — pour repartir d'où on en était plutôt que de
+   sauter. Même schéma de suivi d'élément que useVerticalDismiss : l'élément
+   peut n'apparaître qu'à un rendu ultérieur. */
+function usePinchDensite(ref, { valeur, onChange, min = ZOOM_MIN, max = ZOOM_MAX, enabled = true }) {
+  const [el, setEl] = useState(null);
+  const state = useRef(null);
+  const valeurRef = useRef(valeur);
+  valeurRef.current = valeur;
+
+  useEffect(() => {
+    setEl(ref && ref.current ? ref.current : null);
+  });
+
+  useEffect(() => {
+    if (!el || !enabled) return undefined;
+
+    const distance = (touches) => Math.hypot(
+      touches[0].clientX - touches[1].clientX,
+      touches[0].clientY - touches[1].clientY
+    );
+
+    function start(e) {
+      if (e.touches.length !== 2) { state.current = null; return; }
+      state.current = { d0: distance(e.touches), v0: valeurRef.current };
+    }
+    function move(e) {
+      if (!state.current || e.touches.length !== 2) return;
+      if (e.cancelable) e.preventDefault();
+      const ratio = distance(e.touches) / state.current.d0;
+      const next = Math.min(max, Math.max(min, state.current.v0 * ratio));
+      onChange(Math.round(next * 100) / 100);
+    }
+    function end(e) {
+      if (e.touches.length < 2) state.current = null;
+    }
+
+    el.addEventListener('touchstart', start, { passive: true });
+    el.addEventListener('touchmove', move, { passive: false });
+    el.addEventListener('touchend', end, { passive: true });
+    el.addEventListener('touchcancel', end, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', start);
+      el.removeEventListener('touchmove', move);
+      el.removeEventListener('touchend', end);
+      el.removeEventListener('touchcancel', end);
+    };
+  }, [el, enabled, onChange, min, max]);
 }
 
 /* Glissement vertical de haut en bas, engagé depuis une zone de préhension
@@ -5708,9 +5772,15 @@ function AbaApp() {
       {/* Contenu : l'onglet courant, ou un écran ouvert depuis le tiroir */}
       <div
         ref={contentRef}
-        className="max-w-4xl mx-auto px-4 pb-44"
+        className="max-w-4xl mx-auto pb-44"
         style={{
           paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.25rem)',
+          // En paysage sur un iPhone à encoche, l'encoche se déplace sur le
+          // côté (`viewport-fit=cover`, index.html) : un simple px-4 laisse
+          // les cotations passer dessous. max() garde 1rem par défaut,
+          // portrait compris, et cède la place à l'inset dès qu'il dépasse.
+          paddingLeft: 'max(1rem, env(safe-area-inset-left, 0px))',
+          paddingRight: 'max(1rem, env(safe-area-inset-right, 0px))',
           // Tiroir ouvert, le contenu ne doit pas suivre le doigt : il est
           // rendu hors du panneau et glisserait dans la bande visible à droite.
           transform: offset && !tiroir ? `translateX(${offset}px)` : 'none',
@@ -8547,8 +8617,6 @@ function AtelierLancement({
   const [selected, setSelected] = useState(initial.selected);
   const [atelierFavorites, setAtelierFavorites] = useState(initial.favorites);
   const [doubleCotation, setDoubleCotation] = useState(false);
-  const [depuisMemoire, setDepuisMemoire] = useState(!!atelier && initial.studentIds.length > 0);
-  const [detailObjectifs, setDetailObjectifs] = useState(false);
 
   useEffect(() => {
     const nbNouveaux = Object.values(initial.nouveautes).reduce((n, l) => n + l.length, 0);
@@ -8568,10 +8636,8 @@ function AtelierLancement({
       // mémorisé pour cet atelier, à défaut prioritaires, à défaut tous.
       return { ...sel, [id]: st ? objectifsParDefaut(st, atelier, mode) : [] };
     });
-    setDepuisMemoire(false);
   };
   const toggleObjective = (sid, oid) => {
-    setDetailObjectifs(true);
     setSelected((sel) => {
       const cur = sel[sid] || [];
       return { ...sel, [sid]: cur.includes(oid) ? cur.filter((x) => x !== oid) : [...cur, oid] };
@@ -8688,63 +8754,12 @@ function AtelierLancement({
         })}
       </div>
 
-      {/* Configuration mémorisée appliquée : on ne montre que ce qui diffère de
-          l'habituel, plutôt que de redérouler toute la liste à revérifier. */}
-      {depuisMemoire && !detailObjectifs && studentIds.length > 0 && (() => {
-        const nbObjectifs = studentIds.reduce((n, sid) => n + (selected[sid] || []).length, 0);
-        const lignesNeuves = Object.keys(initial.nouveautes).flatMap((sid) => {
-          const st = students.find((x) => x.id === sid);
-          if (!st) return [];
-          return initial.nouveautes[sid]
-            .map((oid) => st.objectives.find((o) => o.id === oid))
-            .filter(Boolean)
-            .map((o) => ({ cle: `${sid}-${o.id}`, initiales: st.initials, nom: o.name, type: o.type }));
-        });
-        return (
-          <Card className="mb-3">
-            <div className="flex items-center gap-2 mb-2">
-              <Star size={16} style={{ color: CAT_AMBER }} />
-              <span className="font-semibold text-sm" style={{ fontFamily: F_DISPLAY }}>Configuration habituelle appliquée</span>
-            </div>
-            <div className="text-xs mb-3" style={{ color: INK_SOFT }}>
-              <span style={{ fontFamily: F_MONO }}>{studentIds.length}</span> personne{studentIds.length !== 1 ? 's' : ''} ·{' '}
-              <span style={{ fontFamily: F_MONO }}>{nbObjectifs}</span> objectif{nbObjectifs !== 1 ? 's' : ''} coché{nbObjectifs !== 1 ? 's' : ''}
-            </div>
-
-            {lignesNeuves.length === 0 ? (
-              <div className="text-xs mb-3" style={{ color: INK_SOFT }}>
-                Rien de nouveau depuis la dernière mémorisation. Décochez une personne absente
-                ci-dessus si besoin, sinon lancez directement.
-              </div>
-            ) : (
-              <div className="mb-3">
-                <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
-                  Ajouté{lignesNeuves.length !== 1 ? 's' : ''} depuis la mémorisation, coché{lignesNeuves.length !== 1 ? 's' : ''} d'office :
-                </div>
-                <div className="space-y-1.5">
-                  {lignesNeuves.map((l) => {
-                    const meta = typeMeta(l.type);
-                    const Icon = meta.icon;
-                    return (
-                      <div key={l.cle} className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm" style={{ backgroundColor: PAPER }}>
-                        <Icon size={14} style={{ color: meta.color }} className="shrink-0" />
-                        <span className="font-semibold shrink-0" style={{ fontFamily: F_DISPLAY }}>{l.initiales}</span>
-                        <span className="min-w-0 flex-1 truncate">{l.nom}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            <Btn variant="ghost" onClick={() => setDetailObjectifs(true)} className="w-full text-sm">
-              <Eye size={15} /> Afficher le détail des objectifs
-            </Btn>
-          </Card>
-        );
-      })()}
-
-      {(!depuisMemoire || detailObjectifs) && studentIds.map((sid) => {
+      {/* La configuration mémorisée s'applique silencieusement (personnes et
+         objectifs déjà cochés ci-dessous) : plus de carte de résumé
+         intermédiaire à lire avant de voir l'atelier et le bouton Lancer.
+         Les nouveautés depuis la dernière mémorisation restent recochées
+         d'office, visibles directement dans la liste qui suit. */}
+      {studentIds.map((sid) => {
         const st = students.find((s) => s.id === sid);
         if (!st) return null;
         return (
@@ -9039,26 +9054,68 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
   /* Densité d'affichage. Réduire la taille agrandit d'autant la largeur
      disponible en pixels de mise en page : la grille place alors davantage de
-     colonnes d'elle-même, et davantage de lignes tiennent en hauteur. */
+     colonnes d'elle-même, et davantage de lignes tiennent en hauteur.
+     Continue entre ZOOM_MIN et ZOOM_MAX — ZOOM_LEVELS n'est plus qu'une liste
+     de paliers pour le bouton, le pincement à deux doigts fixe n'importe
+     quelle valeur intermédiaire. */
   const [zoom, setZoom] = useState(1);
   useEffect(() => {
     (async () => {
       const v = await store.getRaw('aba:zoom');
       const n = Number(v);
-      if (ZOOM_LEVELS.some((z) => z.v === n)) setZoom(n);
+      if (n >= ZOOM_MIN && n <= ZOOM_MAX) setZoom(n);
     })();
   }, []);
-  function cycleZoom() {
-    const i = ZOOM_LEVELS.findIndex((z) => z.v === zoom);
-    const next = ZOOM_LEVELS[(i + 1) % ZOOM_LEVELS.length].v;
-    setZoom(next);
-    store.setRaw('aba:zoom', String(next));
+  function fixerZoom(n) {
+    const borne = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, n));
+    setZoom(borne);
+    store.setRaw('aba:zoom', String(borne));
   }
+  /* Palier suivant strictement inférieur — le pincement peut avoir laissé le
+     zoom entre deux paliers, donc « suivant » ne veut plus dire « à l'index
+     d'après » dans ZOOM_LEVELS. Reboucle à 100 % sous le dernier palier. */
+  function cycleZoom() {
+    const suivant = ZOOM_LEVELS.filter((z) => z.v < zoom - 0.001).sort((a, b) => b.v - a.v)[0];
+    fixerZoom(suivant ? suivant.v : ZOOM_LEVELS[0].v);
+  }
+  const cotationRef = useRef(null);
+  usePinchDensite(cotationRef, { valeur: zoom, onChange: fixerZoom });
+
+  /* Hauteur réelle de l'en-tête collant, pour caler le rail de personnes
+     juste en dessous plutôt que sur un décalage en dur (`top-20`) qui ne
+     correspond plus à la hauteur une fois l'en-tête rendu sticky. */
+  const headerRef = useRef(null);
+  const [hauteurEntete, setHauteurEntete] = useState(0);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0] && entries[0].contentRect.height;
+      if (h) setHauteurEntete(h);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  /* Largeur réelle de la zone de cotation, pour calculer un nombre de
+     colonnes explicite plutôt que de le laisser à l'heuristique columnWidth
+     du navigateur (voir packStyle ci-dessous). */
+  const [largeurZone, setLargeurZone] = useState(0);
+  useEffect(() => {
+    const el = cotationRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0] && entries[0].contentRect.width;
+      if (w) setLargeurZone(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   /* Disposition en colonnes plutôt qu'en lignes : une fiche courte (un
      compteur) n'impose plus sa hauteur à la fiche voisine, et l'espace
      laissé libre est repris par l'objectif suivant, même s'il appartient à
-     une autre personne. Le nombre de colonnes suit la largeur disponible,
-     donc la densité choisie. */
+     une autre personne. */
   const gridItemStyle = {
     breakInside: 'avoid',
     WebkitColumnBreakInside: 'avoid',
@@ -9072,13 +9129,25 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      courant en début de suivi, quand une personne n'a encore qu'un ou deux
      objectifs — le navigateur les empile dans la première colonne et laisse
      le reste de la largeur inoccupé, quelle que soit la place disponible.
-     En dessous de ce seuil, une rangée flex n'a pas ce défaut. */
-  const packStyle = (count, colWidth) => (
-    count >= 3
-      ? { style: { zoom, columnWidth: `${colWidth}px`, columnGap: '0.75rem' }, itemStyle: gridItemStyle }
-      : { style: { zoom, display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }, itemStyle: { flex: `1 1 ${colWidth}px`, minWidth: 0 } }
-  );
-  const cotationRef = useRef(null);
+     En dessous de ce seuil, une rangée flex n'a pas ce défaut.
+
+     `colWidth` est la largeur MINIMALE d'une colonne : le nombre de colonnes
+     se déduit de la largeur réelle de la zone (mise à l'échelle par le
+     zoom), au lieu d'être laissé à `columnWidth`, dont l'heuristique posait
+     une seule colonne dès qu'une carte contenait quelque chose de plus large
+     que `colWidth` — la bande de boutons de guidance du mode Essais,
+     notamment — même quand la largeur disponible permettait clairement deux
+     colonnes. `compact` descend jusqu'aux widgets pour resserrer ces mêmes
+     boutons quand la colonne obtenue est étroite. */
+  const packStyle = (count, colWidth) => {
+    if (count < 3) {
+      return { style: { zoom, display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }, itemStyle: { flex: `1 1 ${colWidth}px`, minWidth: 0 }, compact: false };
+    }
+    const disponible = largeurZone ? largeurZone / zoom : colWidth;
+    const colonnes = Math.max(1, Math.min(4, Math.floor(disponible / colWidth)));
+    const compact = colonnes >= 2 && disponible / colonnes < 240;
+    return { style: { zoom, columnCount: colonnes, columnGap: '0.75rem' }, itemStyle: gridItemStyle, compact };
+  };
 
   /* Personnes dont les cotations sont à l'écran. Une personne repartie sort de
      la zone de cotation mais reste dans la séance — en correction, tout le
@@ -9308,6 +9377,21 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
   return (
     <div>
+      {/* En-tête collant : titre, actions, bandeaux et bascule
+          Prioritaires/Par personne restent à l'écran pendant le défilement
+          des cotations — auparavant tout défilait ensemble, obligeant à
+          remonter pour changer de vue ou retrouver le bouton densité. La
+          marge négative + le padding compensé absorbent le padding du haut
+          du conteneur de page : une fois collé, le fond couvre la zone de
+          l'encoche au lieu de laisser les cartes défiler dessous. */}
+      <div
+        ref={headerRef}
+        style={{
+          position: 'sticky', top: 0, zIndex: 20, background: PAPER,
+          marginLeft: '-1rem', marginRight: '-1rem', paddingLeft: '1rem', paddingRight: '1rem',
+          marginTop: 'calc(-1 * env(safe-area-inset-top, 0px))', paddingTop: 'env(safe-area-inset-top, 0px)',
+        }}
+      >
       <div className="mb-3">
         <div className="flex flex-wrap items-center gap-1.5">
           {isEdit ? (
@@ -9339,11 +9423,12 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
             {!isEdit && (
               <button
                 onClick={cycleZoom}
-                className="rounded-xl px-2.5 py-2 border"
+                className="rounded-xl px-2.5 py-2 border flex items-center gap-1"
                 style={{ borderColor: BORDER, color: INK_SOFT, backgroundColor: CARD }}
-                title={`Densité d'affichage : ${(ZOOM_LEVELS.find((z) => z.v === zoom) || ZOOM_LEVELS[0]).l}`}
+                title="Densité d'affichage — pincer à deux doigts pour ajuster finement"
               >
                 <LayoutGrid size={15} />
+                <span className="text-xs" style={{ fontFamily: F_MONO }}>{Math.round(zoom * 100)}%</span>
               </button>
             )}
             {!isEdit && hasInterval && (
@@ -9425,6 +9510,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
           })}
         </div>
       </div>
+      </div>
 
       <div
         className="flex gap-3"
@@ -9444,7 +9530,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
               <Empty>Aucun objectif prioritaire parmi les personnes présentes.</Empty>
             ) : (() => {
               /* Une fiche par objectif, rendue par les deux zones */
-              const carte = (k) => {
+              const carte = (k, compact) => {
                 const [sid, oid] = k.split('|');
                 const obj = session.objectiveSnapshot[oid];
                 const st = students.find((x) => x.id === sid);
@@ -9461,6 +9547,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                     onToggleHidden={() => toggleHidden(sid, oid)}
                     onExpand={() => setExpanded({ sid, oid })}
                     onChange={(p) => updateEntry(sid, oid, p)}
+                    compact={compact}
                   />
                 );
               };
@@ -9475,7 +9562,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                     onReorder={reorderPriority}
                     style={pack.style}
                     itemStyle={pack.itemStyle}
-                    renderItem={carte}
+                    renderItem={(k) => carte(k, pack.compact)}
                   />
                 );
               }
@@ -9486,7 +9573,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                  toute la largeur, cas que packStyle ne couvre pas. */
               const packBalance = balanceKeys.length > 1
                 ? packStyle(balanceKeys.length, 340)
-                : { style: { zoom, columnWidth: '100%', columnGap: '0.75rem' }, itemStyle: gridItemStyle };
+                : { style: { zoom, columnWidth: '100%', columnGap: '0.75rem' }, itemStyle: gridItemStyle, compact: false };
               const packCote = packStyle(autresKeys.length, 260);
 
               return (
@@ -9498,7 +9585,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       onReorder={reorderPriority}
                       style={packBalance.style}
                       itemStyle={packBalance.itemStyle}
-                      renderItem={carte}
+                      renderItem={(k) => carte(k, packBalance.compact)}
                     />
                   </div>
                   {autresKeys.length > 0 && (
@@ -9510,7 +9597,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                         onReorder={reorderPriority}
                         style={packCote.style}
                         itemStyle={packCote.itemStyle}
-                        renderItem={carte}
+                        renderItem={(k) => carte(k, packCote.compact)}
                       />
                     </div>
                   )}
@@ -9523,12 +9610,15 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 <span className="text-2xl font-semibold" style={{ fontFamily: F_DISPLAY }}>{student ? student.initials : ''}</span>
               </div>
 
+              {(() => {
+                const packSolo = packStyle(objIds.length, 280);
+                return (
               <ReorderList
                 items={objIds}
                 keyOf={(oid) => oid}
                 onReorder={(next) => reorderObjectives(currentId, next)}
-                style={packStyle(objIds.length, 280).style}
-                itemStyle={packStyle(objIds.length, 280).itemStyle}
+                style={packSolo.style}
+                itemStyle={packSolo.itemStyle}
                 renderItem={(oid) => {
                   const obj = session.objectiveSnapshot[oid];
                   if (!obj) return null;
@@ -9540,12 +9630,15 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                       session={session} crises={crises} studentId={currentId} guidances={guidances}
                       hidden={hiddenFor(currentId).includes(oid)}
                       onToggleHidden={() => toggleHidden(currentId, oid)}
+                      compact={packSolo.compact}
                       onExpand={() => setExpanded({ sid: currentId, oid })}
                       onChange={(p) => updateEntry(currentId, oid, p)}
                     />
                   );
                 }}
               />
+                );
+              })()}
 
               <Card className="mt-3">
                 <div className="flex items-center gap-2 mb-2">
@@ -9572,8 +9665,12 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
         {expanded && session.objectiveSnapshot[expanded.oid] && (
           <div className="fixed inset-0 z-40 overflow-y-auto" style={{ backgroundColor: PAPER }}>
             <div
-              className="max-w-3xl mx-auto px-4 pb-10"
-              style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+              className="max-w-3xl mx-auto pb-10"
+              style={{
+                paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1rem)',
+                paddingLeft: 'max(1rem, env(safe-area-inset-left, 0px))',
+                paddingRight: 'max(1rem, env(safe-area-inset-right, 0px))',
+              }}
             >
               <div className="flex items-center justify-between mb-3">
                 <span className="text-lg font-semibold" style={{ fontFamily: F_DISPLAY }}>
@@ -9602,7 +9699,7 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
 
         {/* Rail de personnes : navigation, arrivée et départ — les trois se
             jouaient auparavant à trois endroits de l'écran. */}
-        <div className="shrink-0 flex flex-col gap-1.5 sticky top-20 self-start">
+        <div className="shrink-0 flex flex-col gap-1.5 sticky self-start" style={{ top: `calc(${hauteurEntete}px + 0.75rem)` }}>
           {session.studentIds.map((sid) => {
             const st = students.find((s) => s.id === sid);
             if (!st) return null;
@@ -9893,7 +9990,7 @@ function FeuillePersonne({ sid, students, present, onPartir, onFaireRevenir, onS
   );
 }
 
-function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick }) {
+function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, guidances, hidden, onToggleHidden, onExpand, onChange, expandedView, studentLabel, onStudentClick, compact }) {
   /* Double-appui sur l'intitulé : agrandit la fiche. On le détecte à la main,
      l'événement natif de double-clic étant peu fiable au toucher sur iOS. */
   const dernierAppui = useRef(0);
@@ -9932,7 +10029,7 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
   }
 
   return (
-    <Card>
+    <Card style={compact ? { padding: '0.75rem' } : undefined}>
       <div className="flex items-start justify-between gap-2">
         {studentLabel && (
           <button
@@ -9958,12 +10055,12 @@ function ObjectiveCard({ obj, entry, now, elapsed, session, crises, studentId, g
           </button>
         )}
       </div>
-      <div className="mt-3">
-        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
+      <div className={compact ? 'mt-2' : 'mt-3'}>
+        {obj.type === 'trials' && <TrialsWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} compact={compact} />}
         {obj.type === 'occurrence' && <OccurrenceWidget entry={entry} onChange={onChange} />}
         {obj.type === 'interval' && <IntervalWidget obj={obj} entry={entry} elapsed={elapsed} crisisSet={crisisSet} onChange={onChange} />}
-        {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} />}
-        {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} />}
+        {obj.type === 'chaining' && <ChainingWidget obj={obj} entry={entry} guidances={guidances} onChange={onChange} compact={compact} />}
+        {obj.type === 'balance' && <BalanceWidget obj={obj} entry={entry} onChange={onChange} compact={compact} />}
         {!TYPES[obj.type] && (
           <div className="text-xs" style={{ color: INK_SOFT }}>
             Ce mode de cotation a été retiré. L'objectif est à recréer dans un mode disponible.
@@ -10177,7 +10274,7 @@ function OccurrenceWidget({ entry, onChange }) {
   );
 }
 
-function TrialsWidget({ obj, entry, guidances, onChange }) {
+function TrialsWidget({ obj, entry, guidances, onChange, compact }) {
   const list = objectiveGuidances(obj, guidances);
   const trials = entry.trials || [];
   const planned = obj.config.trialCount || 0; // 0 = pas de limite
@@ -10278,11 +10375,17 @@ function TrialsWidget({ obj, entry, guidances, onChange }) {
             <button
               key={g.code}
               onClick={() => record(g.code)}
-              className="flex-1 min-w-[72px] rounded-xl py-3 active:scale-95 transition-transform"
+              className={`flex-1 ${compact ? 'min-w-[56px] py-2' : 'min-w-[72px] py-3'} rounded-xl active:scale-95 transition-transform`}
               style={{ backgroundColor: g.color, color: texte }}
             >
               <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>{g.code}</div>
-              <div className="text-[11px] leading-tight break-words" style={{ overflowWrap: 'anywhere', color: texte }}>{g.label}</div>
+              {/* En densité compacte, une colonne étroite ferait passer le
+                  libellé à la ligne et gonflerait la hauteur de la carte —
+                  exactement le symptôme signalé (« plus d'empilement
+                  qu'avant »). Le code seul suffit à coter. */}
+              {!compact && (
+                <div className="text-[11px] leading-tight break-words" style={{ overflowWrap: 'anywhere', color: texte }}>{g.label}</div>
+              )}
             </button>
           );
         })}
@@ -10476,7 +10579,7 @@ function IntervalWidget({ obj, entry, elapsed, crisisSet, onChange }) {
   );
 }
 
-function ChainingWidget({ obj, entry, guidances, onChange }) {
+function ChainingWidget({ obj, entry, guidances, onChange, compact }) {
   const list = objectiveGuidances(obj, guidances);
   const steps = obj.config.steps || [];
   const coded = steps.filter((s) => entry.steps[s.id]).length;
@@ -10521,7 +10624,7 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
                   const on = current === g.code;
                   return (
                     <button key={g.code} onClick={() => setStep(s.id, g.code)}
-                      className="flex-1 min-w-[56px] rounded-lg py-2 text-xs font-semibold border active:scale-95 transition-transform"
+                      className={`flex-1 ${compact ? 'min-w-[40px] py-1.5' : 'min-w-[56px] py-2'} rounded-lg text-xs font-semibold border active:scale-95 transition-transform`}
                       style={{ fontFamily: F_DISPLAY, borderColor: on ? g.color : BORDER, backgroundColor: on ? g.color : 'transparent', color: on ? texteLisibleSur(g.color) : INK_SOFT }}
                       title={g.label}>
                       {g.code}
@@ -10545,7 +10648,7 @@ function ChainingWidget({ obj, entry, guidances, onChange }) {
   );
 }
 
-function BalanceWidget({ obj, entry, onChange }) {
+function BalanceWidget({ obj, entry, onChange, compact }) {
   const steps = obj.config.steps || [];
   const issues = balanceOutcomes(obj);
   const trials = balanceTrials(entry);
@@ -10635,7 +10738,7 @@ function BalanceWidget({ obj, entry, onChange }) {
                     <button
                       key={o.k}
                       onClick={() => setStep(st.id, { outcome: on ? null : o.k })}
-                      className="flex-1 min-w-[44px] rounded-lg py-2 text-xs font-semibold border active:scale-95 transition-transform"
+                      className={`flex-1 ${compact ? 'min-w-[36px] py-1.5' : 'min-w-[44px] py-2'} rounded-lg text-xs font-semibold border active:scale-95 transition-transform`}
                       style={{ fontFamily: F_DISPLAY, borderColor: on ? o.color : BORDER, backgroundColor: on ? o.color : 'transparent', color: on ? texteLisibleSur(o.color) : INK_SOFT }}
                       title={o.label}
                     >
