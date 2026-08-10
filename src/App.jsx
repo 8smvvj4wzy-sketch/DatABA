@@ -3451,6 +3451,19 @@ const REORDER_BORD_HAUT = 80;
 const REORDER_BORD_BAS = 120;
 const REORDER_VITESSE_MAX = 14;
 
+/* Prise d'une carte par appui long. Les deux valeurs vont ensemble : une
+   tolérance de 8 px demandait de tenir le doigt immobile au pixel près pendant
+   un tiers de seconde — sur tablette, la prise se refusait une fois sur deux et
+   il fallait rappuyer. 18 px laisse le doigt vivre ; un vrai défilement franchit
+   cette distance bien avant la fin du délai, la prise accidentelle reste donc
+   improbable, ce qui permet en retour de raccourcir le délai. */
+const REORDER_SLOP = 18;
+const REORDER_DELAI = 260;
+/* Le doigt est reconnu avant que la prise soit acquise : la carte se rétracte
+   légèrement dès ce délai, pour qu'on sache qu'il se passe quelque chose au
+   lieu de relâcher trop tôt. */
+const REORDER_DELAI_RETOUR = 120;
+
 /* Liste réordonnable : appui long (~0,3 s) puis glissement.
    Les écouteurs sont posés en natif avec passive:false, indispensable pour
    bloquer le défilement pendant le déplacement — React les poserait en passif.
@@ -3463,8 +3476,9 @@ const REORDER_VITESSE_MAX = 14;
 function ReorderList({ items, keyOf, onReorder, renderItem, className = '', style, itemStyle }) {
   const containerRef = useRef(null);
   const [dragKey, setDragKey] = useState(null);
+  const [presseKey, setPresseKey] = useState(null);
   const [apercu, setApercu] = useState(null);
-  const st = useRef({ timer: null, dragging: false, justDragged: false, liste: null, pos: null, raf: null, x: 0, y: 0 });
+  const st = useRef({ timer: null, timerRetour: null, dragging: false, justDragged: false, liste: null, pos: null, raf: null, x: 0, y: 0 });
 
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -3547,6 +3561,8 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
       s.startX = t.clientX;
       s.dragging = false;
       clearTimeout(s.timer);
+      clearTimeout(s.timerRetour);
+      s.timerRetour = setTimeout(() => setPresseKey(keyOfRef.current(itemsRef.current[i])), REORDER_DELAI_RETOUR);
       s.timer = setTimeout(() => {
         s.dragging = true;
         reorderDragging = true;
@@ -3558,16 +3574,18 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
         setApercu(s.liste);
         try { if (navigator.vibrate) navigator.vibrate(25); } catch (err) {}
         s.raf = requestAnimationFrame(boucleDefilement);
-      }, 320);
+      }, REORDER_DELAI);
     }
 
     function move(e) {
       const t = e.touches ? e.touches[0] : e;
       if (!s.dragging) {
         // Un mouvement franc avant la fin du délai = défilement, pas un déplacement
-        if (s.timer && (Math.abs(t.clientY - s.startY) > 8 || Math.abs(t.clientX - s.startX) > 8)) {
+        if (s.timer && (Math.abs(t.clientY - s.startY) > REORDER_SLOP || Math.abs(t.clientX - s.startX) > REORDER_SLOP)) {
           clearTimeout(s.timer);
+          clearTimeout(s.timerRetour);
           s.timer = null;
+          setPresseKey(null);
         }
         return;
       }
@@ -3579,7 +3597,9 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
 
     function end() {
       clearTimeout(s.timer);
+      clearTimeout(s.timerRetour);
       s.timer = null;
+      setPresseKey(null);
       if (s.raf) { cancelAnimationFrame(s.raf); s.raf = null; }
       if (s.dragging && s.liste) {
         const avant = itemsRef.current;
@@ -3608,6 +3628,7 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
     window.addEventListener('mouseup', end);
     return () => {
       clearTimeout(s.timer);
+      clearTimeout(s.timerRetour);
       if (s.raf) cancelAnimationFrame(s.raf);
       reorderDragging = false;
       el.removeEventListener('touchstart', start);
@@ -3630,6 +3651,7 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
       {affiches.map((it, i) => {
         const k = keyOf(it);
         const isDragging = dragKey === k;
+        const isPresse = !isDragging && presseKey === k;
         return (
           <div
             key={k}
@@ -3639,7 +3661,8 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
               outline: isDragging ? `2px solid ${INK}` : 'none',
               outlineOffset: '2px',
               borderRadius: isDragging ? '1rem' : undefined,
-              transition: 'opacity .15s',
+              transform: isPresse ? 'scale(.97)' : undefined,
+              transition: 'opacity .15s, transform .12s',
               touchAction: dragKey !== null ? 'none' : 'auto',
             }}
           >
@@ -3661,17 +3684,23 @@ function ReorderList({ items, keyOf, onReorder, renderItem, className = '', styl
    sur l'abscisse, le rang sur l'ordonnée par rapport aux milieux des cartes de
    cette colonne — d'où la possibilité de déposer sous la dernière carte d'une
    colonne courte, ou dans une colonne vide, ce qu'un repli « le plus proche
-   par le centre » ne permettait pas. */
-function ToileCotation({ repartition, renderItem, onPlacer, style, colonneStyle, itemStyle }) {
+   par le centre » ne permettait pas.
+
+   `libre` supprime l'appui long : la prise s'arme dès que le doigt touche une
+   carte et s'engage au premier mouvement. C'est le mode Réorganiser, où plus
+   rien d'autre ne se fait dans la zone — donc plus aucun geste à départager. */
+function ToileCotation({ repartition, renderItem, onPlacer, style, colonneStyle, itemStyle, libre = false }) {
   const containerRef = useRef(null);
   const [dragKey, setDragKey] = useState(null);
+  const [presseKey, setPresseKey] = useState(null);
   const [apercu, setApercu] = useState(null);
-  const st = useRef({ timer: null, dragging: false, justDragged: false, toile: null, cle: null, raf: null, x: 0, y: 0 });
+  const st = useRef({ timer: null, timerRetour: null, dragging: false, justDragged: false, toile: null, cle: null, raf: null, x: 0, y: 0, libre: false });
 
   const repRef = useRef(repartition);
   repRef.current = repartition;
   const onPlacerRef = useRef(onPlacer);
   onPlacerRef.current = onPlacer;
+  st.current.libre = libre;
 
   useEffect(() => {
     const el = containerRef.current;
@@ -3756,6 +3785,20 @@ function ToileCotation({ repartition, renderItem, onPlacer, style, colonneStyle,
       s.raf = requestAnimationFrame(boucleDefilement);
     }
 
+    function prendre(cle) {
+      s.dragging = true;
+      reorderDragging = true;
+      s.toile = repRef.current.map((col) => col.slice());
+      s.cle = cle;
+      s.x = s.startX;
+      s.y = s.startY;
+      setDragKey(cle);
+      setPresseKey(null);
+      setApercu(s.toile);
+      try { if (navigator.vibrate) navigator.vibrate(25); } catch (err) {}
+      s.raf = requestAnimationFrame(boucleDefilement);
+    }
+
     function start(e) {
       const t = e.touches ? e.touches[0] : e;
       const cle = cleDepuisCible(e.target);
@@ -3764,26 +3807,22 @@ function ToileCotation({ repartition, renderItem, onPlacer, style, colonneStyle,
       s.startX = t.clientX;
       s.dragging = false;
       clearTimeout(s.timer);
-      s.timer = setTimeout(() => {
-        s.dragging = true;
-        reorderDragging = true;
-        s.toile = repRef.current.map((col) => col.slice());
-        s.cle = cle;
-        s.x = s.startX;
-        s.y = s.startY;
-        setDragKey(cle);
-        setApercu(s.toile);
-        try { if (navigator.vibrate) navigator.vibrate(25); } catch (err) {}
-        s.raf = requestAnimationFrame(boucleDefilement);
-      }, 320);
+      clearTimeout(s.timerRetour);
+      /* En mode Réorganiser la prise est immédiate : il n'y a plus rien
+         d'autre à faire dans la zone, donc plus de geste à départager. */
+      if (s.libre) { prendre(cle); return; }
+      s.timerRetour = setTimeout(() => setPresseKey(cle), REORDER_DELAI_RETOUR);
+      s.timer = setTimeout(() => prendre(cle), REORDER_DELAI);
     }
 
     function move(e) {
       const t = e.touches ? e.touches[0] : e;
       if (!s.dragging) {
-        if (s.timer && (Math.abs(t.clientY - s.startY) > 8 || Math.abs(t.clientX - s.startX) > 8)) {
+        if (s.timer && (Math.abs(t.clientY - s.startY) > REORDER_SLOP || Math.abs(t.clientX - s.startX) > REORDER_SLOP)) {
           clearTimeout(s.timer);
+          clearTimeout(s.timerRetour);
           s.timer = null;
+          setPresseKey(null);
         }
         return;
       }
@@ -3795,7 +3834,9 @@ function ToileCotation({ repartition, renderItem, onPlacer, style, colonneStyle,
 
     function end() {
       clearTimeout(s.timer);
+      clearTimeout(s.timerRetour);
       s.timer = null;
+      setPresseKey(null);
       if (s.raf) { cancelAnimationFrame(s.raf); s.raf = null; }
       if (s.dragging && s.toile) {
         const avant = repRef.current;
@@ -3826,6 +3867,7 @@ function ToileCotation({ repartition, renderItem, onPlacer, style, colonneStyle,
     window.addEventListener('mouseup', end);
     return () => {
       clearTimeout(s.timer);
+      clearTimeout(s.timerRetour);
       if (s.raf) cancelAnimationFrame(s.raf);
       reorderDragging = false;
       el.removeEventListener('touchstart', start);
@@ -3849,9 +3891,26 @@ function ToileCotation({ repartition, renderItem, onPlacer, style, colonneStyle,
   return (
     <div ref={containerRef} data-no-swipe data-reorder className="flex gap-3 items-start" style={style}>
       {affichee.map((colonne, ci) => (
-        <div key={ci} className="flex-1 min-w-0" style={colonneStyle}>
+        /* Pendant un déplacement, chaque colonne se montre : hauteur minimale
+           et liseré pointillé. Sans ça une colonne vide ou courte est une
+           cible invisible — alors que c'est justement là qu'il reste de la
+           place. */
+        <div
+          key={ci}
+          className="flex-1 min-w-0"
+          style={{
+            ...colonneStyle,
+            minHeight: dragKey !== null ? '5rem' : undefined,
+            border: dragKey !== null ? `1px dashed ${BORDER}` : undefined,
+            borderRadius: dragKey !== null ? '1rem' : undefined,
+            padding: dragKey !== null ? '0.25rem' : undefined,
+            margin: dragKey !== null ? '-0.25rem' : undefined,
+            transition: 'border-color .15s',
+          }}
+        >
           {colonne.map((cle, i) => {
             const isDragging = dragKey === cle;
+            const isPresse = !isDragging && presseKey === cle;
             return (
               <div
                 key={cle}
@@ -3862,8 +3921,9 @@ function ToileCotation({ repartition, renderItem, onPlacer, style, colonneStyle,
                   outline: isDragging ? `2px solid ${INK}` : 'none',
                   outlineOffset: '2px',
                   borderRadius: isDragging ? '1rem' : undefined,
-                  transition: 'opacity .15s',
-                  touchAction: dragKey !== null ? 'none' : 'auto',
+                  transform: isPresse ? 'scale(.97)' : undefined,
+                  transition: 'opacity .15s, transform .12s',
+                  touchAction: dragKey !== null || libre ? 'none' : 'auto',
                 }}
               >
                 {renderItem(cle, i, isDragging)}
