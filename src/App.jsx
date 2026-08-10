@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, CartesianGrid } from 'recharts';
 import {
-  Plus, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
+  Plus, Minus, Columns, Move, X, Play, Pause, Square, Check, ChevronRight, Hash, Route, MessageSquare, Gift,
   Timer as TimerIcon, LayoutGrid, RotateCcw, Save,
   Users, Layers, AlertTriangle, Trash2, FileSpreadsheet, ListChecks,
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
@@ -3396,6 +3396,30 @@ function deplacerDansListe(items, from, to) {
    colonne. Un placement dont la colonne dépasse le nombre courant est ramené
    dans la dernière à l'affichage, sans être réécrit : revenir à la largeur
    précédente restitue la disposition d'origine. */
+
+/* Largeur minimale d'une colonne pour rester lisible, en pixels RENDUS (après
+   le zoom CSS de densité) — c'est ce plafond qui garantit qu'un nombre de
+   colonnes demandé à la main ne fasse jamais déborder la toile hors de
+   l'écran. L'écart entre colonnes vaut 12 px (gap-3). */
+const COLONNE_MIN = 150;
+const COLONNE_GAP = 12;
+const COLONNES_MAX = 4;
+
+/* Combien de colonnes tiennent dans `rendue` pixels.
+
+   Sans `voulu`, c'est l'automatisme d'origine : autant de colonnes de
+   `colWidth` que la largeur en contient. Avec `voulu`, l'éducateur impose son
+   nombre — mais borné par ce qui reste lisible, jamais au-delà : la toile
+   n'est pas une bande qui défile, elle tient dans l'écran. Demander quatre
+   colonnes sur un téléphone en portrait en donne donc une ou deux, sans
+   erreur ni message. */
+function colonnesPourLargeur(rendue, colWidth, voulu) {
+  const large = Math.max(1, rendue || colWidth || 1);
+  const auto = Math.max(1, Math.min(COLONNES_MAX, Math.floor(large / Math.max(1, colWidth || 1))));
+  if (!Number.isInteger(voulu) || voulu < 1) return auto;
+  const tiennent = Math.max(1, Math.min(COLONNES_MAX, Math.floor((large + COLONNE_GAP) / (COLONNE_MIN + COLONNE_GAP))));
+  return Math.min(tiennent, voulu);
+}
 
 /* Répartit des clés ordonnées en `colonnes` listes. Une clé placée va dans sa
    colonne (bornée), une clé sans placement va dans la colonne la moins
@@ -9835,6 +9859,23 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
     const suivant = ZOOM_LEVELS.filter((z) => z.v < zoom - 0.001).sort((a, b) => b.v - a.v)[0];
     fixerZoom(suivant ? suivant.v : ZOOM_LEVELS[0].v);
   }
+  /* Nombre de colonnes de la toile, imposé à la main. Réglage d'affichage de
+     la tablette au même titre que la densité — jamais une donnée de séance —
+     et propre à l'orientation : portrait et paysage n'ont pas la même largeur,
+     une valeur unique pour les deux ne voudrait rien dire. Absent = le calcul
+     automatique d'avant, donc rien ne change tant qu'on n'y touche pas. */
+  const [colonnesPref, setColonnesPref] = useState({});
+  useEffect(() => {
+    (async () => {
+      const v = await store.getRaw('aba:colonnes');
+      if (!v) return;
+      try {
+        const o = JSON.parse(v);
+        if (o && typeof o === 'object') setColonnesPref(o);
+      } catch (e) { /* préférence illisible : on reste en automatique */ }
+    })();
+  }, []);
+
   const cotationRef = useRef(null);
   usePinchDensite(cotationRef, { valeur: zoom, onChange: fixerZoom });
   /* Colonne de contenu proprement dite, sans le rail de personnes : c'est sa
@@ -9882,6 +9923,21 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      navigateur. */
   const carteStyle = { marginBottom: '0.75rem' };
 
+  /* Réglage des colonnes pour l'orientation courante. `colonnesAuto` sert de
+     point de départ au pas-à-pas quand on n'a encore rien imposé, et
+     `colonnesMax` borne le « + » à ce qui tient réellement. */
+  const colonnesVoulues = colonnesPref[orientation];
+  const colonnesAuto = colonnesPourLargeur(largeurColonne, 210, null);
+  const colonnesMax = colonnesPourLargeur(largeurColonne, 210, COLONNES_MAX);
+  function fixerColonnes(n) {
+    setColonnesPref((p) => {
+      const suite = { ...p };
+      if (n) suite[orientation] = n; else delete suite[orientation];
+      store.setRaw('aba:colonnes', JSON.stringify(suite));
+      return suite;
+    });
+  }
+
   /* Combien de colonnes, et faut-il resserrer les cartes.
 
      `colWidth` est la largeur RENDUE minimale d'une colonne, en pixels écran
@@ -9898,8 +9954,8 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
      directement à `colWidth`, sans passer par `largeurColonne / zoom`. */
   const pack = (colWidth) => {
     const rendue = largeurColonne || colWidth;
-    const colonnes = Math.max(1, Math.min(4, Math.floor(rendue / colWidth)));
-    const largeurRendueParColonne = (rendue - (colonnes - 1) * 12) / colonnes;
+    const colonnes = colonnesPourLargeur(rendue, colWidth, colonnesVoulues);
+    const largeurRendueParColonne = (rendue - (colonnes - 1) * COLONNE_GAP) / colonnes;
     /* Deux déclencheurs, pas un. La largeur seule ne suffisait pas : sur
        téléphone en portrait il n'y a qu'une colonne, large de ~290 px, donc
        jamais « étroite » — et la compaction ne s'activait justement pas là où
@@ -10205,6 +10261,37 @@ function SessionRunning({ session, setSession, students, ateliers, intervenants,
                 <LayoutGrid size={15} />
                 <span className="text-xs" style={{ fontFamily: F_MONO }}>{Math.round(zoom * 100)}%</span>
               </button>
+            )}
+            {!isEdit && (
+              /* Colonnes de la toile. Le « − » jusqu'à 1 empile tout, le « + »
+                 étale jusqu'à ce que la largeur ne suive plus ; le nombre au
+                 centre ramène à l'automatique. */
+              <div className="rounded-xl border flex items-center" style={{ borderColor: BORDER, backgroundColor: CARD, color: INK_SOFT }}>
+                <button
+                  onClick={() => fixerColonnes(Math.max(1, (colonnesVoulues || colonnesAuto) - 1))}
+                  disabled={(colonnesVoulues || colonnesAuto) <= 1}
+                  className="px-2 py-2 disabled:opacity-30"
+                  title="Moins de colonnes — tout empiler"
+                >
+                  <Minus size={14} />
+                </button>
+                <button
+                  onClick={() => fixerColonnes(null)}
+                  className="flex items-center gap-1 px-1"
+                  title="Revenir au nombre de colonnes automatique"
+                >
+                  <Columns size={14} />
+                  <span className="text-xs" style={{ fontFamily: F_MONO }}>{colonnesVoulues || 'auto'}</span>
+                </button>
+                <button
+                  onClick={() => fixerColonnes(Math.min(colonnesMax, (colonnesVoulues || colonnesAuto) + 1))}
+                  disabled={(colonnesVoulues || colonnesAuto) >= colonnesMax}
+                  className="px-2 py-2 disabled:opacity-30"
+                  title="Plus de colonnes — étaler à l'horizontale"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
             )}
             {!isEdit && onBasculerPleinEcran && (
               <button

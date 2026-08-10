@@ -48,13 +48,16 @@ const NOMS = [
   'fenetrePresence', 'estPresent', 'fenetresPause', 'chevauchementMs', 'dureePresence',
   'objectifsParDefaut', 'construireDonneesSeance',
   'ajouterPersonne', 'retirerPersonne', 'supprimerPersonne', 'chainerAtelier',
-  'filtrerToile', 'repartirEnColonnes', 'placerDansToile',
+  'filtrerToile', 'colonnesPourLargeur', 'repartirEnColonnes', 'placerDansToile',
   'placementDepuisToile', 'ordreDepuisToile',
   'deplacerDansListe', 'reinjecterSousEnsemble',
 ];
 
 const code = `
   const DEFAULT_PHASES = ${extraireLigne('DEFAULT_PHASES')};
+  const COLONNE_MIN = ${extraireLigne('COLONNE_MIN')};
+  const COLONNE_GAP = ${extraireLigne('COLONNE_GAP')};
+  const COLONNES_MAX = ${extraireLigne('COLONNES_MAX')};
   ${NOMS.map(extraire).join('\n')}
   return { ${NOMS.join(', ')} };
 `;
@@ -354,6 +357,30 @@ t('objectif inconnu ignoré plutôt que planter',
     F.reinjecterSousEnsemble([], ['a', 'b']),
     ['a', 'b']
   );
+}
+
+/* ---- Toile de cotation : combien de colonnes ---- */
+
+{
+  /* Sans valeur imposée, c'est l'automatisme d'avant, au pixel près. */
+  t('automatique : autant de colonnes que la largeur en contient', F.colonnesPourLargeur(716, 210, null), 3);
+  t('automatique : téléphone en portrait, une seule colonne', F.colonnesPourLargeur(290, 210, null), 1);
+  t('automatique : jamais plus de quatre', F.colonnesPourLargeur(5000, 210, null), 4);
+
+  /* Valeur imposée : elle prime sur l'automatisme, dans les deux sens. */
+  t('imposé : tout empiler malgré la largeur', F.colonnesPourLargeur(716, 210, 1), 1);
+  t('imposé : plus de colonnes que l\'automatisme', F.colonnesPourLargeur(716, 210, 4), 4);
+
+  /* Le plafond de lisibilité : c'est lui qui tient la promesse « la toile ne
+     déborde jamais de l'écran ». 290 px ne peuvent porter que 1 colonne de
+     150 px rendus (2 en demanderaient 312), 4 colonnes en demandent 636. */
+  t('imposé : raboté par la largeur minimale de colonne', F.colonnesPourLargeur(290, 210, 4), 1);
+  t('imposé : deux colonnes dès que la largeur suit', F.colonnesPourLargeur(312, 210, 4), 2);
+  t('imposé : jamais plus de quatre', F.colonnesPourLargeur(5000, 210, 9), 4);
+  t('imposé : zéro ou négatif ignoré', F.colonnesPourLargeur(716, 210, 0), 3);
+
+  /* Largeur pas encore mesurée : on se rabat sur la largeur de colonne. */
+  t('largeur inconnue : une colonne', F.colonnesPourLargeur(0, 210, null), 1);
 }
 
 /* ---- Toile de cotation : placement libre des cartes ---- */
