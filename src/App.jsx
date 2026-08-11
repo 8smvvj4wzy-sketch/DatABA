@@ -5613,14 +5613,17 @@ function AbaApp() {
      On y joint la configuration des personnes concernées : Manager en a besoin
      pour retrouver les critères d'acquisition. Les personnes absentes de la
      sélection n'y figurent pas. */
-  function payloadManager(seancesRetenues) {
+  function payloadManager(seancesRetenues, crisesRetenues, relevesRetenus) {
+    /* Les personnes à joindre sont celles que le fichier cite, quelle que soit
+       la collection qui les cite. Les faire dériver des seules séances avait
+       une conséquence qu'on ne voyait pas : cocher des journées de suivi sans
+       cocher de séance produisait un fichier vide de bout en bout —
+       `students`, `suivi` et `crises` compris — pendant que l'écran marquait
+       les relevés comme transmis. Perte silencieuse. */
     const idsConcernes = new Set();
     seancesRetenues.forEach((se) => (se.studentIds || []).forEach((id) => idsConcernes.add(id)));
-    const crisesRetenues = crises.filter((c) => !c.sessionId || seancesRetenues.some((se) => se.id === c.sessionId));
-    /* Les relevés de suivi continu ne sont rattachés à aucune séance : on
-       joint ceux des personnes concernées par la sélection. C'est Manager qui
-       les croisera ensuite avec les bornes horaires des séances. */
-    const relevesRetenus = releves.filter((r) => idsConcernes.has(r.studentId));
+    (relevesRetenus || []).forEach((r) => { if (r.studentId) idsConcernes.add(r.studentId); });
+    (crisesRetenues || []).forEach((c) => { if (c.studentId) idsConcernes.add(c.studentId); });
     return {
       format: 'aba-backup',
       version: 4,
@@ -5654,8 +5657,8 @@ function AbaApp() {
      transmises) n'est appelée que si le fichier est réellement parti. Pour le
      chemin chiffré, la continuation attend la validation de la passphrase :
      voir confirmExport. */
-  async function exportManager(seancesRetenues, chiffre, apresExport) {
-    const payload = payloadManager(seancesRetenues);
+  async function exportManager(seancesRetenues, crisesRetenues, relevesRetenus, chiffre, apresExport) {
+    const payload = payloadManager(seancesRetenues, crisesRetenues, relevesRetenus);
     const nom = nomFichier('pour-manager', appareil, 'json');
     if (!chiffre) {
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -13108,9 +13111,15 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, clas
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
           Le rapport Excel se lit, mais ne contient pas les critères d'acquisition. Ce fichier-ci
           les emporte : c'est lui que le cadre pédagogique charge dans DatABA Manager.
+          Il reprend les trois collections cochées ci-dessus — séances, crises et journées de
+          suivi — y compris des journées de suivi sans aucune séance.
         </p>
         <div className="flex gap-2">
-          <Btn variant="outline" onClick={() => { if (confirmIfNeeded()) onExportManager(chosen, true, marquerEnvoye); }} disabled={!canExport} className="flex-1">
+          {/* Les trois sélections partent ensemble. Ne transmettre que `chosen`
+              produisait un fichier sans relevés ni crises dès qu'aucune séance
+              n'était cochée, alors que marquerEnvoye les archivait quand
+              même — voir payloadManager. */}
+          <Btn variant="outline" onClick={() => { if (confirmIfNeeded()) onExportManager(chosen, chosenCrises, chosenReleves, true, marquerEnvoye); }} disabled={!canExport} className="flex-1">
             <Lock size={16} /> Chiffré
           </Btn>
           <Btn
@@ -13119,7 +13128,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, clas
               if (!confirmIfNeeded()) return;
               if (window.confirm(
                 "Exporter sans chiffrement ?\n\nLe fichier sera lisible par quiconque y a accès. À réserver à un dépôt dans un dossier déjà restreint."
-              )) onExportManager(chosen, false, marquerEnvoye);
+              )) onExportManager(chosen, chosenCrises, chosenReleves, false, marquerEnvoye);
             }}
             disabled={!canExport}
             className="flex-1"
