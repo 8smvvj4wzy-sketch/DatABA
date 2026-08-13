@@ -87,7 +87,10 @@ un contenu de démonstration ou de maquette.
 - L'application ne pousse jamais un usage automatique d'une donnée sensible
   sans relecture par un professionnel.
 - Les outils de croisement (dans Manager) montrent des pistes à vérifier,
-  jamais des preuves de causalité — le texte d'accompagnement doit le dire.
+  jamais des preuves de causalité. La contrainte porte sur ce que l'outil
+  calcule et présente, pas sur un texte à afficher : pas de rappel
+  d'interprétation dans l'interface. Les textes d'accompagnement expliquent le
+  fonctionnement de l'outil, jamais la méthode de celui qui lit.
 - Un seul fichier applicatif assumé : pas de fragmentation en modules sans
   demande explicite.
 
