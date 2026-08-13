@@ -76,6 +76,11 @@ projet.
   responsabilité qu'elle porte. La supervision humaine ne se remplace pas par
   des cases à cocher.
 - Les outils de croisement de Manager montrent des pistes à vérifier, jamais
-  des preuves de causalité. Le texte d'accompagnement doit le dire.
+  des preuves de causalité. C'est une contrainte sur ce que l'outil calcule et
+  sur la façon dont il le présente, pas un texte à afficher : **aucun rappel
+  d'interprétation dans l'interface**. Les textes d'accompagnement expliquent
+  le fonctionnement de l'outil — ce qu'une vue prend en compte, ce qu'elle
+  écarte, comment un chiffre est calculé — jamais la méthode de celui qui lit.
+  Ils s'adressent à des professionnels.
 - Rien qui pousse un usage automatique d'une donnée sensible sans qu'un
   professionnel la relise.

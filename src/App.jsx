@@ -8853,8 +8853,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
               </span>
             </div>
             <p className="text-xs mt-1.5" style={{ color: INK_SOFT }}>
-              De 10 secondes à 60 minutes. Un pas court donne une mesure plus fine, mais demande
-              une attention soutenue pendant toute la séance.
+              De 10 secondes à 60 minutes. Un pas court donne une mesure plus fine.
             </p>
           </div>
           <div>
@@ -13455,8 +13454,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
         })}
 
         <div>
-          <div className="text-sm font-medium mb-1" style={{ fontFamily: F_DISPLAY }}>Fonction supposée</div>
-          <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>Hypothèse de travail, à confronter aux observations répétées</div>
+          <div className="text-sm font-medium mb-1.5" style={{ fontFamily: F_DISPLAY }}>Fonction supposée</div>
           {/* Les 4 fonctions classiques du comportement d'abord ; « Indéterminée »
               est le repli, pas une 5e fonction du même rang — elle reste à
               un tap, juste visuellement à part pour ne pas faire 5 choix
@@ -13487,10 +13485,7 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
 
         {!estObservation && (
           <div>
-            <div className="text-sm font-medium mb-1" style={{ fontFamily: F_DISPLAY }}>Intensité ressentie</div>
-            <div className="text-xs mb-1.5" style={{ color: INK_SOFT }}>
-              Appréciation de l'intervenant sur le moment, non une mesure
-            </div>
+            <div className="text-sm font-medium mb-1.5" style={{ fontFamily: F_DISPLAY }}>Intensité ressentie</div>
             <div className="flex gap-2">
               {CRISIS_INTENSITES.map((i) => {
                 const on = crisis.intensite === i.n;
