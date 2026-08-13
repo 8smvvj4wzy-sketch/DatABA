@@ -2797,6 +2797,66 @@ function currentPhase(obj) {
   return h[h.length - 1];
 }
 
+/* Repères de changement de phase, même règle des deux côtés (DatABA et
+   Manager) : la verticale se pose sur le premier point postérieur au
+   changement, seul point de la courbe où elle est lisible. Deux cas rendent
+   zéro repère plutôt qu'un repère faux — la première entrée de l'historique
+   n'est pas datée (c'est la phase d'origine, elle ne marque aucun
+   changement), et un changement postérieur au dernier point coté n'a rien à
+   marquer sur cette période. */
+function reperesDePhase(points, historique) {
+  return (historique || [])
+    .filter((ph) => ph && ph.date)
+    .map((ph) => {
+      const index = (points || []).findIndex((p) => new Date(p.date) >= new Date(ph.date));
+      return index < 0 ? null : { id: ph.id, name: ph.name, repere: !!ph.repere, index };
+    })
+    .filter(Boolean);
+}
+
+/* Position et empilement des étiquettes de repère, pour qu'un nom entier
+   reste dans le cadre d'un graphique de suivi (170 px de haut, quelques
+   centaines de large sur une carte). Sans mesure réelle du SVG rendu — une
+   estimation à 5,6 px/caractère (IBM Plex Sans, 10 px) rapportée à une
+   largeur de tracé de référence de 360 px, la carte la plus étroite des deux
+   applications. Le compromis assumé : basculer un peu trop tôt sur deux
+   lignes sur un grand écran plutôt que laisser deux noms se chevaucher sur un
+   petit. */
+const LARGEUR_TRACE_REF = 360;
+const PX_PAR_CARACTERE = 5.6;
+function placerEtiquettesReperes(reperes, nbPoints) {
+  const dernierParLigne = [null, null];
+  return reperes.map((r) => {
+    const texte = r.name.length > 18 ? `${r.name.slice(0, 17)}…` : r.name;
+    const demi = Math.min(0.45, (texte.length * PX_PAR_CARACTERE) / 2 / LARGEUR_TRACE_REF);
+    const pos = nbPoints > 1 ? r.index / (nbPoints - 1) : 0.5;
+    const ancre = pos - demi < 0 ? 'start' : pos + demi > 1 ? 'end' : 'middle';
+    const debut = ancre === 'start' ? pos : ancre === 'end' ? pos - 2 * demi : pos - demi;
+    const fin = ancre === 'start' ? pos + 2 * demi : ancre === 'end' ? pos : pos + demi;
+    let ligne = 0;
+    if (dernierParLigne[0] != null && debut < dernierParLigne[0]) ligne = 1;
+    if (ligne === 1 && dernierParLigne[1] != null && debut < dernierParLigne[1]) ligne = 0;
+    dernierParLigne[ligne] = fin;
+    return { ...r, texte, ancre, ligne };
+  });
+}
+
+/* Phase choisie depuis le paramétrage complet de l'objectif. Trois cas, un
+   seul trace un repère : la phase choisie est déjà celle en cours (rouvrir le
+   formulaire pour corriger un intitulé ne doit pas semer de repères), aucune
+   entrée datée n'existe encore (l'objectif est à sa phase d'origine, on
+   renomme la première entrée, toujours non datée), ou l'historique porte déjà
+   au moins une date (on ajoute une entrée datée, comme le bouton de phase du
+   suivi). Une entrée `repere: true` n'est jamais réécrite : la comparaison
+   passe par currentPhase, qui les ignore déjà. */
+function appliquerPhaseChoisie(historique, nom, maintenant) {
+  const h = phaseHistory({ phaseHistory: historique });
+  if (currentPhase({ phaseHistory: h }).name === nom) return h;
+  const dateDeja = h.some((ph) => ph.date);
+  if (!dateDeja) return h.map((ph, i) => (i === 0 ? { ...ph, name: nom } : ph));
+  return [...h, { id: uid(), name: nom, date: maintenant }];
+}
+
 /* --- Cibles d'un objectif ---
    Un objectif peut être découpé en cibles successives (ex. « rouge », puis
    « bleu », puis « vert »). La cotation porte sur la cible courante ; dès que
@@ -8723,9 +8783,7 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
   const [rLabel, setRLabel] = useState('');
   const [rColor, setRColor] = useState(GUIDANCE_PALETTE[0]);
   const [rIndep, setRIndep] = useState(false);
-  const [phaseName, setPhaseName] = useState(
-    init.phaseHistory && init.phaseHistory.length ? init.phaseHistory[init.phaseHistory.length - 1].name : DEFAULT_PHASES[0]
-  );
+  const [phaseName, setPhaseName] = useState(() => currentPhase(init).name);
   const [avecCompteur, setAvecCompteur] = useState(!!initConfig.avecCompteur);
   const [avecChrono, setAvecChrono] = useState(!!initConfig.avecChrono);
   const [chronoMode, setChronoMode] = useState(initConfig.chronoMode || 'chrono');
@@ -8811,13 +8869,6 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
       // Les cibles successives ne concernent que les types à pourcentage.
       if (PERCENT_TYPES.includes(type) && targets.length) config.targets = targets;
     }
-    /* Une phase renommée à la création remplace la première entrée ; un
-       changement de phase en cours de suivi passe par le bouton dédié, qui
-       ajoute une entrée datée et trace un repère sur la courbe. */
-    const histo = init.phaseHistory && init.phaseHistory.length
-      ? init.phaseHistory.map((ph, i) => (i === init.phaseHistory.length - 1 ? { ...ph, name: phaseName } : ph))
-      : [{ id: uid(), name: phaseName, date: null }];
-
     onSubmit({
       id: init.id || uid(),
       name: name.trim(),
@@ -8826,7 +8877,8 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
       favorite: !!init.favorite,
       currentTargetId: init.currentTargetId || null,
       masteredTargetIds: init.masteredTargetIds || [],
-      phaseHistory: histo,
+      phaseHistory: appliquerPhaseChoisie(init.phaseHistory, phaseName, new Date().toISOString()),
+      trackingResetAt: init.trackingResetAt || null,
     });
   }
 
@@ -8845,6 +8897,11 @@ function ObjectiveForm({ initial, guidances, onSubmit, onCancel, libelleValidati
               </button>
             ))}
           </div>
+          {init.phaseHistory && init.phaseHistory.some((ph) => ph.date) && (
+            <div className="text-xs mt-1.5" style={{ color: INK_SOFT }}>
+              Choisir une autre phase ajoute un repère daté sur la courbe.
+            </div>
+          )}
         </div>
       )}
 
@@ -12597,16 +12654,14 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
   const meta = typeMeta(obj.type);
   const Icon = meta.icon;
 
-  /* Repères de phase : on place la ligne sur la première séance postérieure au
-     changement, seul point de la courbe où il devient lisible. */
-  const phases = phaseHistory(obj).filter((ph) => ph.date);
-
   const targets = objectiveTargets(obj);
   const cible = currentTarget(obj);
   const doneTargets = obj.masteredTargetIds || [];
 
   // Avec des cibles, la courbe et le critère ne portent que sur la cible en cours
   const points = objectivePoints(obj, studentId, sessions, guidances, cible ? cible.id : null);
+  const reperes = placerEtiquettesReperes(reperesDePhase(points, phaseHistory(obj)), points.length);
+  const deuxLignes = reperes.some((r) => r.ligne === 1);
 
   const percent = PERCENT_TYPES.includes(obj.type);
   const mastery = points.length ? masteryStatus(obj, points) : null;
@@ -12666,7 +12721,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
       ) : (
         <div style={{ height: 170 }} data-no-swipe>
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={points} margin={{ top: 6, right: 10, bottom: 0, left: -18 }}>
+            <LineChart data={points} margin={{ top: reperes.length ? (deuxLignes ? 30 : 18) : 6, right: 10, bottom: 0, left: -18 }}>
               <CartesianGrid stroke={BORDER} vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: INK_SOFT, fontFamily: 'IBM Plex Mono' }} axisLine={{ stroke: BORDER }} tickLine={false} />
               <YAxis
@@ -12684,17 +12739,30 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
               {mastery && (
                 <ReferenceLine y={mastery.threshold} stroke={CAT_TEAL} strokeDasharray="4 4" strokeWidth={1.5} />
               )}
-              {phases.map((ph) => {
-                const pt = points.find((x) => new Date(x.date) >= new Date(ph.date));
+              {/* Changement de phase : tirets longs. Repère de procédure :
+                  pointillé fin. Même encre pour les deux — pas de couleur
+                  ajoutée, lisible en thème sombre comme à l'impression du
+                  rapport Manager. */}
+              {reperes.map((r) => {
+                const pt = points[r.index];
                 if (!pt) return null;
                 return (
                   <ReferenceLine
-                    key={ph.id}
+                    key={r.id}
                     x={pt.label}
-                    stroke={INK}
-                    strokeDasharray="3 3"
-                    strokeWidth={1.5}
-                    label={{ value: ph.name, position: 'top', fontSize: 10, fill: INK_SOFT }}
+                    stroke={r.repere ? INK_SOFT : INK}
+                    strokeDasharray={r.repere ? '1 3' : '5 3'}
+                    strokeWidth={r.repere ? 1 : 1.5}
+                    label={({ viewBox }) => (
+                      <text
+                        x={viewBox.x + (r.ancre === 'start' ? 2 : r.ancre === 'end' ? -2 : 0)}
+                        y={viewBox.y - (r.ligne ? 17 : 6)}
+                        textAnchor={r.ancre}
+                        fontSize={10}
+                        fontFamily="IBM Plex Sans"
+                        fill={r.repere ? INK_SOFT : INK}
+                      >{r.texte}</text>
+                    )}
                   />
                 );
               })}

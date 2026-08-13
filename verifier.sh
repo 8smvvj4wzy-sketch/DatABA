@@ -274,6 +274,40 @@ else
   echo "  ✓ aucun import dupliqué"
 fi
 
+# ── 2 septies. Champ d'objectif perdu à l'édition ──────────────────────
+# `modeleDepuisObjectif` énumère par déstructuration tout ce qui distingue une
+# instance suivie d'un modèle (id, priorité, cible en cours, cibles acquises,
+# historique de phase, date de réinitialisation du suivi) : c'est le registre
+# des champs d'instance d'un objectif. `ObjectiveForm.submit()` reconstruit un
+# objet complet à la main pour onSubmit() ; `updateObjective` remplace
+# l'objectif entier par ce que submit() renvoie. Un champ absent de cet objet
+# littéral n'est pas simplement ignoré : il est effacé de l'objectif à chaque
+# édition, aussi anodine soit-elle (renommer l'intitulé, par exemple). C'est
+# arrivé à trackingResetAt — la date de reprise du suivi disparaissait à la
+# première édition d'objectif, rouvrant tout l'historique dans la courbe et
+# le calcul du critère d'acquisition.
+echo
+echo "── 2 septies. Champ d'objectif perdu à l'édition ──"
+CHAMPS_INSTANCE=$(awk '/^function modeleDepuisObjectif\(/,/^}/' src/App.jsx \
+  | grep -oP '^\s*const \{ \K[^}]+(?=\} = obj;)' \
+  | tr ',' '\n' | sed -E 's/\.\.\.[a-zA-Z0-9_]+//; s/^[ \t]+|[ \t]+$//g' | grep -v '^$')
+CORPS_SUBMIT=$(awk '/^  function submit\(\) \{/{grab=1} grab{print} grab && /^  \}$/{exit}' src/App.jsx)
+if [ -z "$CHAMPS_INSTANCE" ] || [ -z "$CORPS_SUBMIT" ]; then
+  echo "  ✗ modeleDepuisObjectif ou ObjectiveForm.submit() introuvable"
+  ECHECS=$((ECHECS + 1))
+else
+  CHAMPS_PERDUS=""
+  for CHAMP in $CHAMPS_INSTANCE; do
+    echo "$CORPS_SUBMIT" | grep -qE "^\s*${CHAMP}[,:]" || CHAMPS_PERDUS="${CHAMPS_PERDUS} ${CHAMP}"
+  done
+  if [ -n "$CHAMPS_PERDUS" ]; then
+    echo "  ✗ champ(s) d'instance absent(s) de l'objet renvoyé par submit() :$CHAMPS_PERDUS"
+    ECHECS=$((ECHECS + 1))
+  else
+    echo "  ✓ tous les champs d'instance survivent à l'édition"
+  fi
+fi
+
 # ── 3. Tests ───────────────────────────────────────────────────────────
 echo
 echo "── 3. Tests ──"
