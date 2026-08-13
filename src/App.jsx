@@ -10691,7 +10691,7 @@ function FeuilleAtelier({ session, ateliers, students, aCoter, onClose, onConfir
         </div>
         <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
           La séance en cours est enregistrée telle quelle. La nouvelle démarre avec un
-          chronomètre et un temps de renforcement remis à zéro.
+          chronomètre remis à zéro.
         </p>
         {ordonnes.length === 0 ? (
           <Empty>Aucun autre atelier n'est configuré.</Empty>
