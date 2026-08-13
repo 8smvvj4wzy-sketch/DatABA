@@ -39,8 +39,10 @@ const { objectifsPrevusNonCotes } = new Function(code)();
 const MAINTENANT = new Date(2026, 7, 5, 15, 0).getTime(); // 5 août 2026 (mercredi), 15h
 const JOUR = new Date(MAINTENANT).getDay();
 
-const objTrials = { id: 'ot1', name: 'Pointer une image', type: 'trials', config: { trialCount: 3 } };
-const objProbe = { id: 'op1', name: 'Salutation', type: 'probe', config: { probesParJour: 2 } };
+/* Restreint aux prioritaires (voir Règle 6) : toutes les fixtures d'un
+   objectif attendu dans l'encadré portent donc favorite: true. */
+const objTrials = { id: 'ot1', name: 'Pointer une image', type: 'trials', config: { trialCount: 3 }, favorite: true };
+const objProbe = { id: 'op1', name: 'Salutation', type: 'probe', config: { probesParJour: 2 }, favorite: true };
 
 const eleve = { id: 'e1', initials: 'A.B.', objectives: [objTrials, objProbe] };
 
@@ -112,6 +114,24 @@ t('atelier sans objectifs réglés pour la personne : rien', objectifsPrevusNonC
 const sessionCourante = session('at1', 'ot1', { trials: ['I', null, null], running: false, startedAt: null, mesures: { compteur: { total: 0, valideA: null }, chrono: { elapsedMs: 0, running: false, startedAt: null, valideA: null } } }, new Date(MAINTENANT).toISOString());
 const avecCourante = objectifsPrevusNonCotes([eleve], ateliersTrials, { [String(JOUR)]: ['at1'] }, [], sessionCourante, MAINTENANT);
 t('la séance en cours compte aussi, pas seulement l\'historique', avecCourante.length, 0);
+
+/* ==================== Règle 6 : restreint aux prioritaires ====================
+   L'encadré ne rappelle que les objectifs marqués prioritaires : un objectif
+   ordinaire prévu et non coté ne doit produire aucun rappel, seul ou mêlé à
+   un prioritaire. */
+const objOrdinaire = { id: 'ot2', name: 'Ranger le matériel', type: 'trials', config: { trialCount: 3 }, favorite: false };
+const eleveOrdinaire = { id: 'e1', initials: 'A.B.', objectives: [objOrdinaire] };
+const ateliersOrdinaire = [{ id: 'at1', name: 'Motricité', usualStudentIds: ['e1'], usualObjectives: { e1: ['ot2'] } }];
+t(
+  'un objectif non prioritaire, prévu et non coté : aucun rappel',
+  objectifsPrevusNonCotes([eleveOrdinaire], ateliersOrdinaire, { [String(JOUR)]: ['at1'] }, [], null, MAINTENANT),
+  []
+);
+
+const eleveMixte = { id: 'e1', initials: 'A.B.', objectives: [objTrials, objOrdinaire] };
+const ateliersMixte = [{ id: 'at1', name: 'Motricité', usualStudentIds: ['e1'], usualObjectives: { e1: ['ot1', 'ot2'] } }];
+const resMixte = objectifsPrevusNonCotes([eleveMixte], ateliersMixte, { [String(JOUR)]: ['at1'] }, [], null, MAINTENANT);
+t('prioritaire et ordinaire prévus ensemble : seul le prioritaire ressort', resMixte[0].objectifs.map((o) => o.objectifId), ['ot1']);
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko > 0 ? 1 : 0);
