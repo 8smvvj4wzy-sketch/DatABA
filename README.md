@@ -297,10 +297,18 @@ cotation.
 
 ### Changer de phase
 
-Le bouton portant le nom de la phase, sous l'intitulé, la fait passer à la
-suivante après confirmation. Le changement est **daté** et trace un **repère
-vertical sur la courbe de suivi** : on voit alors précisément à partir de
-quelle séance l'intervention a commencé.
+Le bouton portant le nom de la phase, sous l'intitulé, ouvre deux actions :
+
+- **Passer à la phase suivante** — après confirmation, la phase avance
+  (Ligne de base → Intervention → Maintien → Généralisation). Le changement
+  est **daté** et trace un **repère vertical sur la courbe de suivi** : on
+  voit alors précisément à partir de quelle séance l'intervention a commencé.
+- **Marquer un changement de procédure** — un court libellé (« Guidance
+  dégressive », « Délai augmenté »…) trace lui aussi un repère daté, sans
+  faire changer la phase affichée. Utile pour dater un ajustement de
+  protocole à l'intérieur d'une même phase, sans multiplier les phases.
+  Seuls le libellé et la date sont enregistrés — jamais le contenu du
+  protocole.
 
 ### Actions sur un objectif
 
@@ -607,7 +615,8 @@ En dessous, une courbe par objectif, avec :
 - un badge **Acquis**, ou l'avancement (« 2/3 séances à 80 % ») ;
 - pour les objectifs à cibles, la liste des cibles avec celles déjà acquises,
   la courbe ne portant que sur la **cible en cours** ;
-- des **repères verticaux datés** à chaque changement de phase, avec son nom.
+- des **repères verticaux datés** à chaque changement de phase et à chaque
+  changement de procédure marqué, avec son nom.
 
 Sous la courbe, deux actions rapides : **changer de phase** (même bouton et
 même effet que sur la fiche personne, section 5) et **modifier l'objectif**,

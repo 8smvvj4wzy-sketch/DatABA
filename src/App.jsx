@@ -1383,13 +1383,16 @@ function objectifEstCote(obj, entry) {
   return false;
 }
 
-/* Objectifs prévus par l'emploi du temps du jour et pas encore cotés
-   aujourd'hui — pour la fenêtre « Prévus non cotés » de l'écran Suivi. Un
-   même objectif présent dans plusieurs ateliers du jour ne ressort qu'une
-   fois, avec la liste de ces ateliers. `sessionCourante` s'ajoute à
-   `sessions`, même principe que probesDuJour : une séance n'est écrite dans
-   l'historique qu'à sa fin, et un atelier en cours ne doit pas réapparaître
-   comme « non coté » sous prétexte que rien n'est encore enregistré. */
+/* Objectifs prioritaires prévus par l'emploi du temps du jour et pas encore
+   cotés aujourd'hui — pour la fenêtre « Prévus non cotés » de l'écran Suivi.
+   Restreint aux objectifs prioritaires (`favorite`) : ce sont les seuls
+   systématiquement présentés à l'éducateur, les seuls dont l'absence de
+   cotation mérite un rappel actif. Un même objectif présent dans plusieurs
+   ateliers du jour ne ressort qu'une fois, avec la liste de ces ateliers.
+   `sessionCourante` s'ajoute à `sessions`, même principe que probesDuJour :
+   une séance n'est écrite dans l'historique qu'à sa fin, et un atelier en
+   cours ne doit pas réapparaître comme « non coté » sous prétexte que rien
+   n'est encore enregistré. */
 function objectifsPrevusNonCotes(students, ateliers, emploiDuTemps, sessions, sessionCourante, maintenant) {
   const ref = new Date(maintenant);
   const jour = ref.getDay();
@@ -1419,7 +1422,11 @@ function objectifsPrevusNonCotes(students, ateliers, emploiDuTemps, sessions, se
     const lignes = [];
     objectifsPersonne.forEach((ateliersSet, oid) => {
       const obj = (st.objectives || []).find((o) => o.id === oid);
-      if (!obj) return;
+      /* Restreint aux prioritaires : l'encadré ne doit pas noyer l'éducateur
+         sous la dizaine d'objectifs qu'un atelier peut prévoir. Ce sont les
+         objectifs marqués « prioritaire » qui justifient un rappel actif —
+         les autres restent visibles dans l'écran Suivi sans relance. */
+      if (!obj || !obj.favorite) return;
       if (obj.type === 'probe') {
         const quota = obj.config.probesParJour || 1;
         const { faites } = probesDuJour(duJourSessions, null, st.id, oid, ref);
@@ -2772,13 +2779,21 @@ function balanceStats(obj, entry) {
 }
 
 /* --- Phases ---
-   La dernière entrée de l'historique est la phase en cours. */
+   La dernière entrée de l'historique est la phase en cours — sauf qu'un
+   changement de procédure (`repere: true`) n'en est pas une : la phase de
+   fond ne bouge pas quand on ajuste un protocole à l'intérieur de
+   l'intervention. currentPhase ignore donc les repères ; ObjectiveChart, lui,
+   les affiche tous, au même titre que les phases, puisque les deux sont de
+   simples entrées datées sur la même courbe. */
 function phaseHistory(obj) {
   if (obj.phaseHistory && obj.phaseHistory.length) return obj.phaseHistory;
   return [{ id: 'p0', name: DEFAULT_PHASES[0], date: null }];
 }
 function currentPhase(obj) {
   const h = phaseHistory(obj);
+  for (let i = h.length - 1; i >= 0; i--) {
+    if (!h[i].repere) return h[i];
+  }
   return h[h.length - 1];
 }
 
@@ -5891,6 +5906,18 @@ function AbaApp() {
           ? { ...o, phaseHistory: [...phaseHistory(o), { id: uid(), name: nom, date: new Date().toISOString() }] }
           : o)) }
       : st)));
+  /* Un changement de procédure trace un repère daté sans changer la phase de
+     fond : `repere: true` est ce qui distingue les deux dans currentPhase et
+     n'affecte en rien le tracé de la courbe, qui affiche toute entrée datée
+     sans se soucier de ce qu'elle est. On n'enregistre qu'un libellé et une
+     date — jamais le contenu d'un protocole, ce serait un pas vers la liste
+     de vérification procédurale que ce projet écarte. */
+  const marquerRepere = (studentId, objId, nom) =>
+    setStudents((s) => s.map((st) => (st.id === studentId
+      ? { ...st, objectives: st.objectives.map((o) => (o.id === objId
+          ? { ...o, phaseHistory: [...phaseHistory(o), { id: uid(), name: nom, date: new Date().toISOString(), repere: true }] }
+          : o)) }
+      : st)));
   const toggleFavorite = (studentId, objId) =>
     setStudents((s) => s.map((st) => (st.id === studentId ? { ...st, objectives: st.objectives.map((o) => (o.id === objId ? { ...o, favorite: !o.favorite } : o)) } : st)));
 
@@ -6257,7 +6284,7 @@ function AbaApp() {
             onCreerSuivi={creerSuiviPour}
             onAjouterCompteur={ajouterCompteur} onRenommerCompteur={renommerCompteur} onSupprimerCompteur={supprimerCompteur}
             addObjective={addObjective} removeObjective={removeObjective} updateObjective={updateObjective}
-            duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase}
+            duplicateObjective={duplicateObjective} toggleFavorite={toggleFavorite} changePhase={changePhase} marquerRepere={marquerRepere}
             onSaveTemplate={saveTemplate}
             onOuvrirGuidances={() => ouvrirEcran('guidances')} onOuvrirModeles={() => ouvrirEcran('modeles')}
             onOuvrirAteliers={() => ouvrirEcran('ateliers')} onOuvrirIntervenants={() => ouvrirEcran('intervenants')}
@@ -6309,7 +6336,7 @@ function AbaApp() {
             releves={releves} axesSuivi={axesSuivi}
             ateliers={ateliers} emploiDuTemps={emploiDuTemps} activeSession={activeSession}
             onResetTracking={resetTracking} onOuvrirMenu={ouvrirMenu}
-            onChangePhase={changePhase}
+            onChangePhase={changePhase} onRepere={marquerRepere}
             onOuvrirObjectif={(sid, oid) => ouvrirEcran('personnes', { personne: sid, objectif: oid })}
             onAjouterObjectif={(sid) => ouvrirEcran('personnes', { personne: sid, nouveau: true })}
             onOuvrirSuivi={(sid) => setChoixSuivi(sid)}
@@ -7889,23 +7916,98 @@ function PanneauDonnees({ appareil, onSetAppareil, classes, classeAppareil, onSe
 /* Bouton de phase d'un objectif : fait tourner sur DEFAULT_PHASES, avec
    confirmation puisque le changement trace un repère daté sur la courbe de
    suivi. Partagé par la fiche personne et le graphe de suivi, plutôt que
-   deux versions qui divergeraient. */
-function BoutonPhase({ obj, onChange }) {
+   deux versions qui divergeraient.
+
+   Un second geste, « Marquer un changement de procédure », trace lui aussi un
+   repère daté mais ne touche pas à la phase de fond (currentPhase l'ignore) —
+   il sert à dater un ajustement de protocole (guidance dégressive, délai
+   allongé…) sans en faire une phase à part entière. On demande un libellé, pas
+   un contenu : l'application n'enregistre jamais la description d'un
+   protocole, seulement qu'un changement a eu lieu et quand. */
+function BoutonPhase({ obj, onChange, onRepere }) {
+  const [ouvert, setOuvert] = useState(false);
+  const [libelle, setLibelle] = useState('');
+  const ref = useRef(null);
   const actuelle = currentPhase(obj).name;
   const suivante = DEFAULT_PHASES[(DEFAULT_PHASES.indexOf(actuelle) + 1) % DEFAULT_PHASES.length];
+
+  useEffect(() => {
+    if (!ouvert) return;
+    const surExterieur = (ev) => { if (ref.current && !ref.current.contains(ev.target)) setOuvert(false); };
+    document.addEventListener('pointerdown', surExterieur);
+    return () => document.removeEventListener('pointerdown', surExterieur);
+  }, [ouvert]);
+
+  if (!onRepere) {
+    // Historique : pas de second geste, on garde le comportement d'origine.
+    return (
+      <button
+        onClick={() => {
+          if (window.confirm(`Passer « ${obj.name} » en phase « ${suivante} » ?\n\nUn repère daté sera tracé sur la courbe de suivi.`)) {
+            onChange(suivante);
+          }
+        }}
+        className="text-xs inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border"
+        style={{ borderColor: BORDER, color: INK }}
+        title="Changer de phase"
+      >
+        <Flag size={11} /> {actuelle}
+      </button>
+    );
+  }
+
   return (
-    <button
-      onClick={() => {
-        if (window.confirm(`Passer « ${obj.name} » en phase « ${suivante} » ?\n\nUn repère daté sera tracé sur la courbe de suivi.`)) {
-          onChange(suivante);
-        }
-      }}
-      className="text-xs inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border"
-      style={{ borderColor: BORDER, color: INK }}
-      title="Changer de phase"
-    >
-      <Flag size={11} /> {actuelle}
-    </button>
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOuvert((v) => !v)}
+        className="text-xs inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border"
+        style={{ borderColor: BORDER, color: INK }}
+        title="Phase et repères"
+      >
+        <Flag size={11} /> {actuelle}
+      </button>
+      {ouvert && (
+        <div className="absolute z-10 mt-1 left-0 w-56 rounded-lg border p-2.5 space-y-2.5" style={{ borderColor: BORDER, backgroundColor: CARD }}>
+          <button
+            onClick={() => {
+              if (window.confirm(`Passer « ${obj.name} » en phase « ${suivante} » ?\n\nUn repère daté sera tracé sur la courbe de suivi.`)) {
+                onChange(suivante);
+                setOuvert(false);
+              }
+            }}
+            className="w-full text-left text-xs rounded-lg px-2 py-1.5 border"
+            style={{ borderColor: BORDER, color: INK }}
+          >
+            Passer en phase « {suivante} »
+          </button>
+          <div>
+            <div className="text-xs mb-1" style={{ color: INK_SOFT }}>Changement de procédure</div>
+            <Field value={libelle} onChange={setLibelle} placeholder="Ex. Guidance dégressive"
+              onEnter={() => {
+                const nom = libelle.trim();
+                if (!nom) return;
+                onRepere(nom);
+                setLibelle('');
+                setOuvert(false);
+              }} className="text-xs" />
+            <button
+              onClick={() => {
+                const nom = libelle.trim();
+                if (!nom) return;
+                onRepere(nom);
+                setLibelle('');
+                setOuvert(false);
+              }}
+              disabled={!libelle.trim()}
+              className="w-full mt-1.5 text-xs rounded-lg px-2 py-1.5 border disabled:opacity-40"
+              style={{ borderColor: BORDER, color: INK }}
+            >
+              Marquer un repère daté
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -7923,7 +8025,7 @@ function PanneauPersonnes({
   onAjouterClasseAvecMembres, onRenameClasse, onRemoveClasse,
   axesSuivi, onToggleAxeSuivi, onCreerSuivi,
   onAjouterCompteur, onRenommerCompteur, onSupprimerCompteur,
-  addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, onSaveTemplate,
+  addObjective, removeObjective, updateObjective, duplicateObjective, toggleFavorite, changePhase, marquerRepere, onSaveTemplate,
   onOuvrirGuidances, onOuvrirModeles, onOuvrirAteliers, onOuvrirIntervenants,
 }) {
   const [openId, setOpenId] = useState(null);
@@ -8182,7 +8284,7 @@ function PanneauPersonnes({
                             <div>
                               <div className="text-sm">{o.name}</div>
                             <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                              <BoutonPhase obj={o} onChange={(nom) => changePhase(s.id, o.id, nom)} />
+                              <BoutonPhase obj={o} onChange={(nom) => changePhase(s.id, o.id, nom)} onRepere={(nom) => marquerRepere(s.id, o.id, nom)} />
                               {currentTarget(o) && (
                                 <span className="text-xs inline-flex items-center gap-1 rounded-md px-1.5 py-0.5" style={{ backgroundColor: CARD, color: INK }}>
                                   <Target size={11} /> cible en cours : {currentTarget(o).name}
@@ -12224,7 +12326,7 @@ function EcranArbitrageObjectifs({ conflits, students, sessions, onValider, onCl
   );
 }
 
-function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, ateliers, emploiDuTemps, activeSession, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onAjouterObjectif, onOuvrirSuivi, onChangePhase }) {
+function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, ateliers, emploiDuTemps, activeSession, onResetTracking, onOuvrirMenu, onOuvrirObjectif, onAjouterObjectif, onOuvrirSuivi, onChangePhase, onRepere }) {
   const [openId, setOpenId] = useState(students.length ? students[0].id : null);
   const [fenetreNonCotes, setFenetreNonCotes] = useState(false);
   const nonCotes = React.useMemo(
@@ -12282,7 +12384,7 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, atelie
           <ClipboardList size={18} style={{ color: CAT_AMBER }} className="shrink-0" />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium" style={{ fontFamily: F_DISPLAY }}>
-              {nbNonCotes} objectif{nbNonCotes > 1 ? 's' : ''} prévu{nbNonCotes > 1 ? 's' : ''} pas encore coté{nbNonCotes > 1 ? 's' : ''}
+              {nbNonCotes} objectif{nbNonCotes > 1 ? 's' : ''} prioritaire{nbNonCotes > 1 ? 's' : ''} pas encore coté{nbNonCotes > 1 ? 's' : ''}
             </div>
             <div className="text-xs" style={{ color: INK_SOFT }}>D'après l'emploi du temps du jour</div>
           </div>
@@ -12322,6 +12424,7 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, atelie
                         obj={o} studentId={s.id} sessions={ordered} guidances={guidances}
                         onReset={() => onResetTracking(s.id, o.id)}
                         onChangePhase={(nom) => onChangePhase(s.id, o.id, nom)}
+                        onRepere={(nom) => onRepere(s.id, o.id, nom)}
                         onOuvrirObjectif={() => onOuvrirObjectif(s.id, o.id)}
                       />
                     </div>
@@ -12334,9 +12437,9 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, atelie
       </div>
 
       {fenetreNonCotes && (
-        <Modale titre="Prévus non cotés aujourd'hui" onClose={() => setFenetreNonCotes(false)}>
+        <Modale titre="Prioritaires non cotés aujourd'hui" onClose={() => setFenetreNonCotes(false)}>
           {nonCotes.length === 0 ? (
-            <Empty>Tout ce qui était prévu aujourd'hui a été coté.</Empty>
+            <Empty>Tous les objectifs prioritaires prévus aujourd'hui ont été cotés.</Empty>
           ) : (
             <div className="space-y-4">
               {nonCotes.map((p) => (
@@ -12490,7 +12593,7 @@ function ResumeObjectifs({ students, sessions, guidances, onVoirGraphique }) {
   );
 }
 
-function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChangePhase, onOuvrirObjectif }) {
+function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChangePhase, onRepere, onOuvrirObjectif }) {
   const meta = typeMeta(obj.type);
   const Icon = meta.icon;
 
@@ -12601,7 +12704,7 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
         </div>
       )}
       <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-        {onChangePhase && <BoutonPhase obj={obj} onChange={onChangePhase} />}
+        {onChangePhase && <BoutonPhase obj={obj} onChange={onChangePhase} onRepere={onRepere} />}
         {onOuvrirObjectif && (
           <button onClick={onOuvrirObjectif} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
             <Pencil size={12} /> Modifier l'objectif
