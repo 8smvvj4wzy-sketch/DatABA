@@ -39,10 +39,15 @@ function extraireLigne(nom) {
   return m[1];
 }
 
-const NOMS = ['phaseHistory', 'currentPhase'];
-const code = `const DEFAULT_PHASES = ${extraireLigne('DEFAULT_PHASES')};\n${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')} };`;
+const NOMS = ['phaseHistory', 'currentPhase', 'reperesDePhase', 'placerEtiquettesReperes', 'appliquerPhaseChoisie'];
+const CONSTANTES = ['LARGEUR_TRACE_REF', 'PX_PAR_CARACTERE'];
+function uid() { return Math.random().toString(36).slice(2, 9); }
+const code = `const DEFAULT_PHASES = ${extraireLigne('DEFAULT_PHASES')};\n`
+  + CONSTANTES.map((c) => `const ${c} = ${extraireLigne(c)};`).join('\n') + '\n'
+  + `const uid = ${uid};\n`
+  + `${NOMS.map(extraire).join('\n')}\nreturn { ${NOMS.join(', ')} };`;
 // eslint-disable-next-line no-new-func
-const { phaseHistory, currentPhase } = new Function(code)();
+const { phaseHistory, currentPhase, reperesDePhase, placerEtiquettesReperes, appliquerPhaseChoisie } = new Function(code)();
 
 /* ==================== phaseHistory ==================== */
 t('un objectif sans historique replie sur la phase par défaut', phaseHistory({}).map((p) => p.name), ['Ligne de base']);
@@ -80,6 +85,74 @@ const repereApresMaintien = { phaseHistory: [
   { id: 'r1', name: 'Délai augmenté', date: '2026-07-10T09:00:00.000Z', repere: true },
 ] };
 t('un repère après un changement de phase ne masque pas la nouvelle phase', currentPhase(repereApresMaintien).name, 'Maintien');
+
+/* ==================== reperesDePhase ==================== */
+const pts = [
+  { date: '2026-06-01T09:00:00.000Z', label: '01/06' },
+  { date: '2026-06-08T09:00:00.000Z', label: '08/06' },
+  { date: '2026-06-15T09:00:00.000Z', label: '15/06' },
+];
+t('une entrée non datée ne produit aucun repère', reperesDePhase(pts, [{ id: 'p0', name: 'Ligne de base', date: null }]), []);
+t('un changement postérieur au dernier point est ignoré', reperesDePhase(pts, [{ id: 'p1', name: 'Maintien', date: '2026-07-01T09:00:00.000Z' }]), []);
+t('le repère se pose sur le premier point postérieur au changement',
+  reperesDePhase(pts, [{ id: 'p1', name: 'Intervention', date: '2026-06-05T09:00:00.000Z' }]),
+  [{ id: 'p1', name: 'Intervention', repere: false, index: 1 }]);
+t('le champ repere est transporté',
+  reperesDePhase(pts, [{ id: 'r1', name: 'Guidance dégressive', date: '2026-06-05T09:00:00.000Z', repere: true }]),
+  [{ id: 'r1', name: 'Guidance dégressive', repere: true, index: 1 }]);
+
+/* ==================== placerEtiquettesReperes ==================== */
+const r0 = { id: 'a', name: 'Intervention', repere: false, index: 0 };
+t('un repère au premier point est ancré à gauche', placerEtiquettesReperes([r0], 5)[0].ancre, 'start');
+const rFin = { id: 'b', name: 'Intervention', repere: false, index: 4 };
+t('un repère au dernier point est ancré à droite', placerEtiquettesReperes([rFin], 5)[0].ancre, 'end');
+const rMilieu = { id: 'c', name: 'Interv.', repere: false, index: 2 };
+t('un repère au centre, avec un nom court, est centré', placerEtiquettesReperes([rMilieu], 5)[0].ancre, 'middle');
+t('un nom long est tronqué à 18 caractères', placerEtiquettesReperes([{ id: 'd', name: 'Renforcement différé progressif', repere: false, index: 2 }], 5)[0].texte.length, 18);
+
+const proches = [
+  { id: 'e1', name: 'Intervention', repere: false, index: 2 },
+  { id: 'e2', name: 'Maintien', repere: false, index: 3 },
+];
+const placees = placerEtiquettesReperes(proches, 10);
+t('deux repères proches se répartissent sur deux lignes', placees.map((p) => p.ligne), [0, 1]);
+
+const troisProches = [
+  { id: 'f1', name: 'Ligne de base', repere: false, index: 1 },
+  { id: 'f2', name: 'Intervention', repere: false, index: 2 },
+  { id: 'f3', name: 'Maintien', repere: false, index: 3 },
+];
+t('un troisième chevauchement consécutif revient en ligne 0', placerEtiquettesReperes(troisProches, 10).map((p) => p.ligne), [0, 1, 0]);
+
+/* ==================== appliquerPhaseChoisie ==================== */
+const originePasDatee = [{ id: 'p0', name: 'Ligne de base', date: null }];
+t('phase déjà en cours : historique inchangé (pas de repère semé)',
+  appliquerPhaseChoisie(originePasDatee, 'Ligne de base', '2026-08-13T09:00:00.000Z'), originePasDatee);
+t('objectif encore à sa phase d’origine : la première entrée est renommée, non datée',
+  appliquerPhaseChoisie(originePasDatee, 'Intervention', '2026-08-13T09:00:00.000Z'),
+  [{ id: 'p0', name: 'Intervention', date: null }]);
+
+const dejaDatee = [
+  { id: 'p0', name: 'Ligne de base', date: null },
+  { id: 'p1', name: 'Intervention', date: '2026-06-01T09:00:00.000Z' },
+];
+const apresChangement = appliquerPhaseChoisie(dejaDatee, 'Maintien', '2026-08-13T09:00:00.000Z');
+t('un historique déjà daté : une nouvelle entrée datée est ajoutée', apresChangement.length, 3);
+t('la nouvelle entrée porte la phase choisie et la date fournie', [apresChangement[2].name, apresChangement[2].date], ['Maintien', '2026-08-13T09:00:00.000Z']);
+t('les entrées précédentes ne sont pas touchées', apresChangement.slice(0, 2), dejaDatee);
+
+const avecRepereEnFin = [
+  { id: 'p0', name: 'Ligne de base', date: null },
+  { id: 'p1', name: 'Intervention', date: '2026-06-01T09:00:00.000Z' },
+  { id: 'r1', name: 'Guidance dégressive', date: '2026-06-15T09:00:00.000Z', repere: true },
+];
+t('un repère de procédure en fin d’historique n’est jamais réécrit',
+  appliquerPhaseChoisie(avecRepereEnFin, 'Intervention', '2026-08-13T09:00:00.000Z'), avecRepereEnFin);
+const apresRepere = appliquerPhaseChoisie(avecRepereEnFin, 'Maintien', '2026-08-13T09:00:00.000Z');
+t('choisir une nouvelle phase après un repère de procédure ajoute une entrée, sans toucher au repère',
+  apresRepere.slice(0, 3), avecRepereEnFin);
+t('la nouvelle entrée porte la phase choisie, sans repère',
+  [apresRepere[3].name, apresRepere[3].date, !!apresRepere[3].repere], ['Maintien', '2026-08-13T09:00:00.000Z', false]);
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko > 0 ? 1 : 0);

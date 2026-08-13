@@ -64,7 +64,7 @@ const NOMS = [
   'balanceOutcomes', 'outcomeMeta', 'trialCode', 'trialMs', 'balanceTrials', 'balanceStats',
   'entryMatches', 'parseHM', 'segmentMinutes', 'segmentSeconds', 'intervalStepSec', 'intervalTotals',
   'masteryDe', 'toDayPoints', 'masteryStatus', 'objectiveScore', 'objectivePoints',
-  'releverAliasStabilite',
+  'releverAliasStabilite', 'reperesDePhase',
 ];
 const code = `const CRISIS = '#B3261E';
 const CAT_TEAL = ${extraireLigne('CAT_TEAL')};
@@ -88,7 +88,7 @@ return { ${NOMS.join(', ')}, PERCENT_TYPES, MASTERY_TYPES };`;
 // eslint-disable-next-line no-new-func
 const {
   masteryDe, toDayPoints, masteryStatus, objectiveScore, objectivePoints,
-  releverAliasStabilite, intervalTotals, balanceStats,
+  releverAliasStabilite, intervalTotals, balanceStats, reperesDePhase,
   PERCENT_TYPES, MASTERY_TYPES,
 } = new Function(code)();
 
@@ -480,20 +480,11 @@ t('un accord intermédiaire', accords.some((a) => a >= 55 && a < 80), true);
 t('un accord bas, sous le seuil ambre', accords.some((a) => a < 55), true);
 
 /* ==================== 7. Repères de phase ====================
-   Manager trace désormais une verticale datée à chaque changement de phase
-   (`reperesDePhase`, ajouté par 7e8235a) — mais seulement si `phaseHistory`
-   porte des dates. `reperesDePhase` appartient au dépôt Manager, hors de
-   portée d'un import ici : il est recopié, avec le même avertissement que
-   les seuils de classement en tête de fichier. */
-function reperesDePhase(points, historique) {
-  return (historique || [])
-    .filter((ph) => ph && ph.date)
-    .map((ph) => {
-      const index = (points || []).findIndex((p) => new Date(p.date) >= new Date(ph.date));
-      return index < 0 ? null : { id: ph.id, name: ph.name, index };
-    })
-    .filter(Boolean);
-}
+   DatABA trace désormais une verticale datée à chaque changement de phase
+   (`reperesDePhase`, ajouté par 7e8235a), et Manager fait le même calcul de
+   son côté — mais seulement si `phaseHistory` porte des dates.
+   `reperesDePhase` est désormais extraite de src/App.jsx comme le reste de
+   cette suite, plutôt que recopiée à la main. */
 
 /* Ligne de base : 3 à 5 cotations avant le premier repère daté, sur tout
    objectif qui en a reçu assez pour en porter une (voir nBaseEffectif —
