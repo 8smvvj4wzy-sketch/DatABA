@@ -563,13 +563,22 @@ export const PERSONNES = [
   {
     ini: 'J.L.',
     classe: 0,
-    profil: 'Données lacunaires — un objectif ouvert jamais coté, un autre laissé de côté depuis un mois',
+    profil: 'Données lacunaires — un prioritaire ouvert jamais coté, un autre laissé de côté depuis un mois',
     prioritaires: ['refus', 'pause'],
     objectifs: {
-      soin: FORME_JAMAIS,
+      /* L'objectif jamais coté doit être prioritaire : dans l'application,
+         l'encadré « Prévus non cotés » ne relance que sur les prioritaires
+         (voir src/App.jsx, objectifsPrevusNonCotes) — un objectif ordinaire
+         resté vierge n'y apparaîtrait jamais et ne démontrerait rien.
+         En essais, pas en occurrence : `entreeVide` d'un objectif en
+         occurrence pose `count: 0`, une mesure valide (zéro occurrence
+         observée) que Manager compte comme un point coté. Seuls les essais
+         restent structurellement vides — un tableau de `null` — et
+         produisent bien l'état « non acquis ». */
+      refus: FORME_JAMAIS,
       cheveux: FORME_DORMANTE,
-      refus: 'progression',
       pause: 'progression',
+      soin: 'progression',
       picto: 'progression',
       mains: 'progression',
       transition: 'progression',
@@ -706,7 +715,13 @@ function construirePersonnes() {
         favorite: p.prioritaires.includes(cle),
         currentTargetId: (modele.config.targets && modele.config.targets[0].id) || null,
         masteredTargetIds: [],
-        phaseHistory: phasesPour(forme),
+        /* Un seul point de départ, non daté : la phase d'origine ne marque
+           jamais de repère (voir reperesDePhase côté Manager). L'historique
+           réel se construit séance après séance dans construireSeances, à
+           mesure que les dates de cotation existent — c'est lui qui remplace
+           cette valeur de départ une fois la génération terminée
+           (appliquerPhaseHistoriquesFinales). */
+        phaseHistory: [{ id: `${idObjectif(p.ini, cle)}-p0`, name: 'Ligne de base', date: null }],
       };
     });
     return {
@@ -724,31 +739,60 @@ function construirePersonnes() {
   });
 }
 
-/* L'historique de phases n'a de sens que s'il suit la trajectoire : un
-   objectif en maintien n'a pas la même histoire qu'un objectif à peine ouvert.
-   La dernière entrée est la phase courante, et c'est elle que Manager croise
-   dans la dimension « phase » d'Explorer. */
-function phasesPour(forme) {
-  if (forme === 'maintien') {
-    return [
-      { id: 'ph-1', name: 'Ligne de base', date: null },
-      { id: 'ph-2', name: 'Intervention', date: null },
-      { id: 'ph-3', name: 'Maintien', date: null },
-    ];
+/* ==================== 6 bis. Trajectoires ====================
+   Une ligne de base plate avant l'intervention est ce qui rend un repère de
+   phase lisible sur une courbe : sans palier bas et stable, la verticale
+   tombe au milieu d'une progression déjà entamée. Chaque couple
+   personne-objectif reçoit donc 3 à 5 cotations de ligne de base — basses,
+   à peine bruitées — avant que FORMES[forme] ne prenne le relais.
+
+   Deux repères supplémentaires, optionnels :
+   - un changement de procédure (guidance dégressive, délai augmenté…),
+     daté mais sans effet sur la phase de fond — comme dans l'application,
+     ce n'est pas une phase, seulement un repère (`repere: true`) ;
+   - un passage en Maintien pour les objectifs qui atteignent leur critère
+     (forme 'acquis'), posé peu avant la fin de la période pour qu'il reste
+     au moins quelques points après lui.
+
+   Un objectif jamais coté (FORME_JAMAIS) n'a pas de trajectoire : sa fiche
+   reste `null` dans la table, et aucun code ne doit la lire. */
+const LIBELLES_PROCEDURE = [
+  'Guidance dégressive',
+  'Renforcement différé',
+  'Délai de réponse augmenté',
+  'Support visuel retiré',
+  'Estompage du signal',
+];
+
+function construireTrajectoires(rng, personnes) {
+  const trajectoires = new Map();
+  personnes.forEach((personne) => {
+    const profil = PERSONNES.find((x) => x.ini === personne.initials);
+    personne.objectives.forEach((obj) => {
+      const cle = obj.id.split('-').pop();
+      const forme = profil.objectifs[cle];
+      const cleTraj = `${personne.id}|${obj.id}`;
+      if (forme === FORME_JAMAIS) { trajectoires.set(cleTraj, null); return; }
+      const nBase = entier(rng, 3, 5);
+      /* Pas de repère de procédure sur un démarrage tardif : la période
+         d'intervention y est déjà courte, la charger d'un second repère la
+         rendrait illisible. Un objectif sur trois environ en reçoit un. */
+      const repere = forme !== 'tardif' && rng() < 0.35
+        ? { frac: 0.3 + rng() * 0.35, nom: parmi(rng, LIBELLES_PROCEDURE) }
+        : null;
+      trajectoires.set(cleTraj, { nBase, repere, maintien: forme === 'acquis' });
+    });
+  });
+  return trajectoires;
+}
+
+/* Un repère daté ignore la phase de fond, comme currentPhase côté
+   application : la dernière entrée SANS `repere` est la phase courante. */
+function phaseCourante(histo) {
+  for (let i = histo.length - 1; i >= 0; i--) {
+    if (!histo[i].repere) return histo[i];
   }
-  if (forme === 'acquis' || forme === 'bientot') {
-    return [
-      { id: 'ph-1', name: 'Ligne de base', date: null },
-      { id: 'ph-2', name: 'Intervention', date: null },
-    ];
-  }
-  if (forme === 'tardif' || forme === FORME_JAMAIS) {
-    return [{ id: 'ph-1', name: 'Ligne de base', date: null }];
-  }
-  return [
-    { id: 'ph-1', name: 'Ligne de base', date: null },
-    { id: 'ph-2', name: 'Intervention', date: null },
-  ];
+  return histo[histo.length - 1];
 }
 
 /* ==================== 7. Cotations ==================== */
@@ -896,20 +940,25 @@ function participants(rng, personnes, atelierId, indexJour) {
   return melange.slice(0, entier(rng, 3, 4));
 }
 
-/* Les objectifs retenus pour une personne dans une séance donnée. On tourne
-   sur sa liste plutôt que de tirer au sort : sur trois mois, chaque objectif
-   reçoit ainsi un nombre de cotations comparable, condition pour que les
-   courbes et les critères d'acquisition soient lisibles. */
+/* Les objectifs retenus pour une personne dans une séance donnée. Les
+   prioritaires sont épinglés à chaque séance — c'est ce qui en fait des
+   prioritaires, dans l'application comme ici — et les places restantes
+   tournent sur les autres objectifs plutôt que d'être tirées au sort : sur
+   trois mois, chacun reçoit ainsi un nombre de cotations comparable,
+   condition pour que les courbes et les critères d'acquisition soient
+   lisibles. */
 function objectifsDeLaSeance(personne, compteurs, nb) {
-  const cles = personne.objectives.map((o) => o.id);
+  const prioritaires = personne.objectives.filter((o) => o.favorite).map((o) => o.id);
+  const autres = personne.objectives.filter((o) => !o.favorite).map((o) => o.id);
+  const nAutres = Math.max(0, nb - prioritaires.length);
   const depart = compteurs.get(personne.id) || 0;
-  compteurs.set(personne.id, (depart + nb) % cles.length);
-  const retenus = [];
-  for (let i = 0; i < nb; i++) retenus.push(cles[(depart + i) % cles.length]);
+  if (autres.length) compteurs.set(personne.id, (depart + nAutres) % autres.length);
+  const retenus = [...prioritaires];
+  for (let i = 0; i < nAutres && autres.length; i++) retenus.push(autres[(depart + i) % autres.length]);
   return retenus;
 }
 
-function construireSeances(rng, personnes, calendrier) {
+function construireSeances(rng, personnes, calendrier, trajectoires) {
   const seances = [];
   const compteurs = new Map();
   /* Un compteur de cotations par couple personne-objectif : les formes de
@@ -955,9 +1004,59 @@ function construireSeances(rng, personnes, calendrier) {
     });
   });
 
+  /* `ateliersDuJour.forEach` pousse dans l'ordre du tableau EMPLOI_DU_TEMPS,
+     pas dans celui des créneaux horaires : le jeudi, Repas (11 h 45) est posé
+     avant Hygiène (8 h 30). Sans remise en ordre, le rang d'une cotation ne
+     correspond plus à sa date réelle dès qu'une personne — typiquement pour
+     un prioritaire, épinglé à chaque atelier — est présente à plusieurs
+     ateliers le même jour, et la ligne de base ou un repère de phase se pose
+     alors sur la mauvaise cotation. Le tri final de `seances` (plus bas) ne
+     corrige que l'ordre d'affichage, pas celui, antérieur, de matérialisation. */
+  plan.sort((a, b) => {
+    const ta = horodatage(a.jour, CRENEAUX_ATELIER[a.atelierId].h, CRENEAUX_ATELIER[a.atelierId].min).getTime();
+    const tb = horodatage(b.jour, CRENEAUX_ATELIER[b.atelierId].h, CRENEAUX_ATELIER[b.atelierId].min).getTime();
+    return ta - tb;
+  });
+
+  /* Le total réel de chaque couple personne-objectif n'est connu qu'une fois
+     le plan complet posé : la ligne de base et les repères s'y calent, jamais
+     sur les 3 à 5 cotations demandées au tirage si l'objectif n'en reçoit pas
+     assez sur toute la période — un objectif dormant ou tardif peut n'être
+     coté que quelques fois en tout. */
+  trajectoires.forEach((traj, cle) => {
+    if (!traj) return;
+    const total = prevision.get(cle) || 0;
+    traj.nBaseEffectif = Math.min(traj.nBase, Math.max(0, total - 1));
+    const totalIntervention = Math.max(1, total - traj.nBaseEffectif);
+    if (traj.repere) {
+      const brut = traj.nBaseEffectif + Math.max(1, Math.min(totalIntervention - 1, Math.round(traj.repere.frac * totalIntervention)));
+      traj.repereRang = brut;
+    }
+    if (traj.maintien) {
+      traj.maintienRang = traj.nBaseEffectif + Math.max(1, totalIntervention - 3);
+    }
+    // Un repère et un passage en Maintien ne tombent jamais sur le même rang.
+    if (traj.repere && traj.maintien && traj.repereRang === traj.maintienRang) {
+      traj.repereRang = Math.max(traj.nBaseEffectif + 1, traj.repereRang - 1);
+    }
+  });
+
   const rangs = new Map();
+  const phaseHistories = new Map();
   plan.forEach((etape, indexSeance) => {
-    seances.push(materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs, calendrier));
+    seances.push(materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs, calendrier, trajectoires, phaseHistories));
+  });
+
+  /* La trajectoire finale de chaque objectif — celle que verrait un
+     éducateur en ouvrant l'écran Suivi aujourd'hui — remplace l'entrée
+     unique posée à la construction des personnes. Chaque objectiveSnapshot
+     de séance garde, lui, son histoire propre : la personne mutée ici ne le
+     modifie pas rétroactivement. */
+  personnes.forEach((personne) => {
+    personne.objectives = personne.objectives.map((obj) => {
+      const histo = phaseHistories.get(`${personne.id}|${obj.id}`);
+      return histo && histo.length ? { ...obj, phaseHistory: histo.slice() } : obj;
+    });
   });
 
   /* Manager comme DatABA lisent les séances du plus récent au plus ancien.
@@ -974,7 +1073,7 @@ const NOTES = [
   'Bonne coopération sur les consignes de sécurité.',
 ];
 
-function materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs, calendrier) {
+function materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs, calendrier, trajectoires, phaseHistories) {
   const { jour, atelierId, rangAtelier, selection } = etape;
   const creneau = CRENEAUX_ATELIER[atelierId];
   const debut = horodatage(jour, creneau.h, creneau.min);
@@ -999,6 +1098,31 @@ function materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs
       const cle = oid.split('-').pop();
       const forme = profil.objectifs[cle];
       const cible = cibleCourante(obj, personne, jour, calendrier);
+      const cleRang = `${sid}|${oid}`;
+      const traj = trajectoires.get(cleRang);
+      // Rang de CETTE cotation, avant incrément — sert autant à la ligne de
+      // base et aux repères qu'au niveau produit plus bas.
+      const rang = rangs.get(cleRang) || 0;
+
+      let histo = phaseHistories.get(cleRang);
+      if (!histo) {
+        histo = [{ id: `${oid}-p0`, name: 'Ligne de base', date: null }];
+        phaseHistories.set(cleRang, histo);
+      }
+      /* Un objectif jamais coté n'a pas de trajectoire (traj est null) :
+         il reste sur sa phase d'origine, jamais datée, pour toujours. */
+      if (traj) {
+        const horoPhase = debut.toISOString();
+        if (rang === traj.nBaseEffectif) {
+          histo.push({ id: `${oid}-intervention`, name: 'Intervention', date: horoPhase });
+        }
+        if (traj.repere && rang === traj.repereRang) {
+          histo.push({ id: `${oid}-repere`, name: traj.repere.nom, date: horoPhase, repere: true });
+        }
+        if (traj.maintien && rang === traj.maintienRang) {
+          histo.push({ id: `${oid}-maintien`, name: 'Maintien', date: horoPhase });
+        }
+      }
 
       objectiveSnapshot[oid] = {
         ...obj,
@@ -1006,7 +1130,10 @@ function materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs
         masteredTargetIds: cible ? cible.acquises : obj.masteredTargetIds,
         favorite: obj.favorite,
         activeTargetName: cible ? cible.name : null,
-        activePhaseName: obj.phaseHistory[obj.phaseHistory.length - 1].name,
+        // Instantané de l'historique à la date de CETTE séance — jamais des
+        // changements à venir, qu'une vraie tablette ne peut pas connaître.
+        phaseHistory: histo.slice(),
+        activePhaseName: phaseCourante(histo).name,
       };
 
       /* Un objectif ouvert mais jamais coté reste une entrée vide : c'est ce
@@ -1019,12 +1146,21 @@ function materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs
         return;
       }
 
-      const cleRang = `${sid}|${oid}`;
-      const rang = rangs.get(cleRang) || 0;
       rangs.set(cleRang, rang + 1);
       const total = prevision.get(cleRang) || 1;
-      const fonction = FORMES[forme] || FORMES.progression;
-      const niveau = Math.min(1, Math.max(0, fonction(rang, total)));
+      const nBaseEffectif = traj ? traj.nBaseEffectif : 0;
+      let niveau;
+      if (rang < nBaseEffectif) {
+        // Ligne de base : basse et plate, à peine bruitée — c'est ce qui
+        // rend le repère « Intervention » lisible une fois posé.
+        niveau = 0.12 + rng() * 0.06;
+      } else {
+        const totalIntervention = Math.max(1, total - nBaseEffectif);
+        const rangIntervention = rang - nBaseEffectif;
+        const fonction = FORMES[forme] || FORMES.progression;
+        niveau = fonction(rangIntervention, totalIntervention);
+      }
+      niveau = Math.min(1, Math.max(0, niveau));
 
       const horo = new Date(debut.getTime() + entier(rng, 2, creneau.duree - 2) * 60000).toISOString();
       data[sid][oid] = entreeDepuisNiveau(obj, niveau, rng, {
@@ -1369,7 +1505,8 @@ export function genererDemo({ fin, graine = 42 } = {}) {
   const rng = mulberry32(graine);
   const calendrier = construireCalendrier(finJour);
   const personnes = construirePersonnes();
-  const seances = construireSeances(rng, personnes, calendrier);
+  const trajectoires = construireTrajectoires(rng, personnes);
+  const seances = construireSeances(rng, personnes, calendrier, trajectoires);
   const { releves, crisesDepuisSuivi } = construireSuivi(rng, personnes, calendrier, seances);
   const crises = construireCrises(rng, crisesDepuisSuivi, seances, calendrier);
   const ateliers = construireAteliers(personnes, seances);
@@ -1426,8 +1563,14 @@ function construireSecondeTablette(rng, personnes, seances, finJour) {
   const doubles = seances.filter((s) => s.doubleCotation && s.atelierId).slice(0, 6);
   /* Trois niveaux d'accord, deux paires chacun : Manager colore le résultat
      au-dessus de 80 % puis de 60 %, et une démonstration qui ne montre qu'un
-     accord parfait ne dit rien de l'outil. */
-  const desaccords = [1, 2, 3, 4, 5, 5];
+     accord parfait ne dit rien de l'outil.
+
+     Un TAUX plutôt qu'un compte fixe de désaccords : une séance à deux
+     personnes ne produit pas le même nombre d'essais communs qu'une séance
+     à quatre, et un compte fixe de « 3 essais retournés » dérive alors d'une
+     paire à l'autre selon qui s'y trouve. Le taux, lui, cible directement
+     l'accord voulu quel que soit le nombre d'essais comparés. */
+  const tauxDesaccord = [0.03, 0.15, 0.35, 0.5, 0.55, 0.62];
 
   const idsPersonnes = new Map();
   const idsObjectifs = new Map();
@@ -1453,23 +1596,37 @@ function construireSecondeTablette(rng, personnes, seances, finJour) {
         const obj = personne.objectives.find((o) => o.id === oid);
         /* On ne rejoue que les essais par essais : l'IOA se lit essai par
            essai et le désaccord y est contrôlable au coup près. Sur un
-           chaînage ou un équilibre, on ne saurait pas viser 70 % précisément. */
-        if (!obj || obj.type !== 'trials') return;
+           chaînage ou un équilibre, on ne saurait pas viser 70 % précisément.
+           Un objectif prioritaire jamais coté (voir J.L.) reste sélectionné à
+           chaque séance mais n'a rien à comparer : ses essais sont tous
+           `null`, et un second observateur ne cote pas ce que le premier n'a
+           pas présenté. Le répliquer produirait une paire sans le moindre
+           essai commun. */
+        const origineTrials = (s.data[sid] && s.data[sid][oid] && s.data[sid][oid].trials) || [];
+        if (!obj || obj.type !== 'trials' || !origineTrials.some((c) => c != null)) return;
         if (!idsObjectifs.has(oid)) idsObjectifs.set(oid, oid.replace(P, P2));
         const oid2 = idsObjectifs.get(oid);
         const copie = { ...obj, id: oid2 };
         utilisees.get(sid2).objectives.set(oid2, copie);
         selection[sid2].push(oid2);
+        /* La phase et son historique se lisent sur le snapshot de la séance
+           d'origine, déjà tronqué à sa date — jamais sur `obj.phaseHistory`,
+           qui porte la trajectoire complète et finale une fois la génération
+           terminée. Une séance de mai ne peut pas déjà savoir qu'un repère
+           d'août existe. */
+        const snapOrigine = s.objectiveSnapshot[oid];
         snapshot[oid2] = {
           ...copie,
           favorite: obj.favorite,
           activeTargetName: null,
-          activePhaseName: obj.phaseHistory[obj.phaseHistory.length - 1].name,
+          phaseHistory: snapOrigine.phaseHistory,
+          activePhaseName: snapOrigine.activePhaseName,
         };
 
         const origine = s.data[sid][oid];
         const codes = (origine.trials || []).slice();
-        const aChanger = melanger(rng, codes.map((_, i) => i)).slice(0, desaccords[index]);
+        const nAChanger = Math.round(tauxDesaccord[index] * codes.length);
+        const aChanger = melanger(rng, codes.map((_, i) => i)).slice(0, nAChanger);
         aChanger.forEach((i) => {
           codes[i] = codes[i] === 'I' ? parmi(rng, NON_INDEPENDANTS) : 'I';
         });

@@ -36,7 +36,19 @@ unités. Dix objectifs chacune, tous dérivés des essentiels de l'EFL — faire
 des demandes, attendre, tolérer le non, suivre une consigne de sécurité,
 enchaîner des tâches acquises, faire une transition, les gestes d'hygiène,
 tolérer une situation de santé. Un ou deux objectifs prioritaires par
-personne, en essais par essais ou en occurrence.
+personne, en essais par essais ou en occurrence — épinglés à chaque séance,
+comme dans l'application.
+
+Chaque objectif coté démarre par une **ligne de base plate de 3 à 5
+cotations**, basse et à peine bruitée, avant que l'intervention ne commence :
+c'est ce qui rend lisible le repère vertical daté que Manager trace au premier
+point qui suit (`reperesDePhase`, ajouté par `7e8235a`). Une partie des
+objectifs reçoit en plus un **repère de changement de procédure** (guidance
+dégressive, délai augmenté…) en cours d'intervention — daté comme un
+changement de phase, mais sans faire bouger la phase affichée, exactement
+comme le second geste de `BoutonPhase` sur la tablette — et les objectifs qui
+atteignent leur critère passent en **Maintien** avant la fin de la période :
+plusieurs verticales sur une même courbe.
 
 Trois mois de séances du lundi au vendredi sur quatre ateliers récurrents,
 trois intervenants, **une semaine de congés sans aucune trace**, des crises et
@@ -51,7 +63,7 @@ chose à lire dans chaque vue :
 | C.D. | plateau installé sous le seuil |
 | E.F. | régression après les congés, remontée partielle |
 | G.H. | démarrage tardif en cours de trimestre |
-| J.L. | données lacunaires — un objectif jamais coté, un autre laissé de côté |
+| J.L. | données lacunaires — un prioritaire ouvert jamais coté, un autre laissé de côté |
 | K.M. | à une séance du critère |
 | N.P. | comportement problème qui passe sous son seuil |
 | R.S. | crises fréquentes et intenses |
@@ -67,11 +79,14 @@ Les données sont fictives. Aucune ne provient d'une personne réelle.
 > La restauration **remplace** toutes les données de la tablette. À ne faire
 > que sur un appareil de démonstration, jamais sur une tablette en service.
 
-Ensuite : l'écran Suivi montre les états d'acquisition et les courbes, l'écran
-Session permet d'ouvrir une séance sur un atelier existant et de coter dans
-chacun des six modes, l'écran Export produit le fichier pour Manager. Les
-séances de la dernière semaine ne sont pas marquées comme transmises : l'écran
-Export a donc quelque chose à proposer.
+Ensuite : l'écran Suivi montre les états d'acquisition et les courbes, avec
+leurs repères de phase et de procédure ; l'encadré orange « Objectifs
+prioritaires pas encore cotés » ne relance que sur les prioritaires — c'est le
+seul objectif de J.L. qui doit y apparaître. L'écran Session permet d'ouvrir
+une séance sur un atelier existant et de coter dans chacun des six modes,
+l'écran Export produit le fichier pour Manager. Les séances de la dernière
+semaine ne sont pas marquées comme transmises : l'écran Export a donc quelque
+chose à proposer.
 
 ## Démonstration de Manager
 
@@ -102,15 +117,16 @@ Ce que chaque destination a de quoi montrer :
   des séances libres sans atelier, des notes par personne, des probes avec
   créneau matin et après-midi.
 - **Personnes accompagnées** — les cinq sous-vues sont peuplées. Le bilan des
-  objectifs, le radar (chaque personne a au moins trois objectifs cotés sur
-  les trente derniers jours), les crises, le suivi continu, le croisement.
-  L'export « Détail des cotations » descend jusqu'à l'essai, l'étape et
-  l'intervalle.
-- **Crises** — 121 crises et 62 observations ABC. Neuf antécédents et neuf
-  comportements distincts : le regroupement « Autres » se déclenche. Des
-  crises à plusieurs étiquettes, les trois intensités, quelques crises sans
-  intensité notée, les cinq fonctions, une répartition sur les cinq jours
-  ouvrés.
+  objectifs, avec ses **repères verticaux datés** — un changement de phase, un
+  changement de procédure, parfois les deux sur la même courbe — le radar
+  (chaque personne a au moins trois objectifs cotés sur les trente derniers
+  jours), les crises, le suivi continu, le croisement. L'export « Détail des
+  cotations » descend jusqu'à l'essai, l'étape et l'intervalle.
+- **Crises** — une centaine de crises et 62 observations ABC. Neuf
+  antécédents et neuf comportements distincts : le regroupement « Autres » se
+  déclenche. Des crises à plusieurs étiquettes, les trois intensités,
+  quelques crises sans intensité notée, les cinq fonctions, une répartition
+  sur les cinq jours ouvrés.
 - **Explorer** — les douze mesures rendent toutes un chiffre. Deux réserves
   qui ne sont pas des trous dans les données mais des choix de Manager, et qui
   se font remarquer si on ne les annonce pas : le taux d'autonomie ne porte

@@ -256,7 +256,7 @@ ATTENDUS.forEach((e) => {
 t('A.B. — « Se laver les mains » est acquis', etatParCouple.get('A.B.|Se laver les mains'), 'acquis');
 t('C.D. — « Accepter un refus sans comportement problème » est en plateau', etatParCouple.get('C.D.|Accepter un refus sans comportement problème'), 'plateau');
 t('K.M. — « Transition entre deux activités » est bientôt acquis', etatParCouple.get('K.M.|Transition entre deux activités'), 'bientot');
-t('J.L. — « Tolérer un soin cutané » reste non acquis, faute de cotation', etatParCouple.get('J.L.|Tolérer un soin cutané'), 'non_acquis');
+t('J.L. — « Accepter un refus sans comportement problème » (prioritaire) reste non acquis, faute de cotation', etatParCouple.get('J.L.|Accepter un refus sans comportement problème'), 'non_acquis');
 t('J.L. — « Tolérer le brossage des cheveux » est dormant', etatParCouple.get('J.L.|Tolérer le brossage des cheveux'), 'dormant');
 t('Y.Z. — « Demandes spontanées, toutes formes » reste une mesure, sans verdict', etatParCouple.get('Y.Z.|Demandes spontanées, toutes formes'), 'mesure');
 /* Le seul objectif du jeu dont le seuil se lit à l'envers : acquis quand le
@@ -479,7 +479,98 @@ t('un accord élevé, au-dessus du seuil vert', accords.some((a) => a >= 80), tr
 t('un accord intermédiaire', accords.some((a) => a >= 55 && a < 80), true);
 t('un accord bas, sous le seuil ambre', accords.some((a) => a < 55), true);
 
-/* ==================== 7. Le fichier versionné n'a pas divergé ==================== */
+/* ==================== 7. Repères de phase ====================
+   Manager trace désormais une verticale datée à chaque changement de phase
+   (`reperesDePhase`, ajouté par 7e8235a) — mais seulement si `phaseHistory`
+   porte des dates. `reperesDePhase` appartient au dépôt Manager, hors de
+   portée d'un import ici : il est recopié, avec le même avertissement que
+   les seuils de classement en tête de fichier. */
+function reperesDePhase(points, historique) {
+  return (historique || [])
+    .filter((ph) => ph && ph.date)
+    .map((ph) => {
+      const index = (points || []).findIndex((p) => new Date(p.date) >= new Date(ph.date));
+      return index < 0 ? null : { id: ph.id, name: ph.name, index };
+    })
+    .filter(Boolean);
+}
+
+/* Ligne de base : 3 à 5 cotations avant le premier repère daté, sur tout
+   objectif qui en a reçu assez pour en porter une (voir nBaseEffectif —
+   un objectif trop peu coté n'a pas à en avoir). */
+let baselinesValides = true;
+let baselineRencontree = false;
+tablette1.students.forEach((p) => {
+  p.objectives.forEach((o) => {
+    const datees = o.phaseHistory.filter((ph) => ph.date);
+    if (!datees.length) return;
+    const points = objectivePoints(o, p.id, seancesAsc, tablette1.guidances);
+    const avant = points.filter((pt) => new Date(pt.date) < new Date(datees[0].date)).length;
+    if (avant > 0) { baselineRencontree = true; if (avant < 3 || avant > 5) baselinesValides = false; }
+  });
+});
+t('une ligne de base a été rencontrée', baselineRencontree, true);
+t('chaque ligne de base rencontrée compte 3 à 5 cotations', baselinesValides, true);
+
+/* La première entrée n'est jamais datée (c'est la phase d'origine, elle ne
+   marque aucun changement) ; toute entrée suivante l'est, et dans l'ordre. */
+let premiereJamaisDatee = true;
+let datesCroissantes = true;
+tablette1.students.forEach((p) => {
+  p.objectives.forEach((o) => {
+    if (o.phaseHistory[0].date !== null) premiereJamaisDatee = false;
+    for (let i = 1; i < o.phaseHistory.length; i++) {
+      const prec = o.phaseHistory[i - 1].date;
+      const cour = o.phaseHistory[i].date;
+      if (prec && cour && new Date(cour) < new Date(prec)) datesCroissantes = false;
+    }
+  });
+});
+t('la première entrée de chaque historique n’est jamais datée', premiereJamaisDatee, true);
+t('les entrées datées se succèdent dans l’ordre chronologique', datesCroissantes, true);
+
+/* Au moins un repère de procédure existe, et il n'écrase pas la phase de
+   fond : currentPhase (voir src/App.jsx) ignore les entrées `repere: true`. */
+function phaseCourante(histo) {
+  for (let i = histo.length - 1; i >= 0; i--) if (!histo[i].repere) return histo[i];
+  return histo[histo.length - 1];
+}
+const tousLesObjectifs = tablette1.students.flatMap((p) => p.objectives);
+t('au moins un objectif porte un repère de procédure', tousLesObjectifs.some((o) => o.phaseHistory.some((ph) => ph.repere)), true);
+t(
+  'la phase courante d’un objectif n’est jamais un repère de procédure',
+  tousLesObjectifs.every((o) => !phaseCourante(o.phaseHistory).repere),
+  true
+);
+t('au moins un objectif a rejoint le Maintien avant la fin de la période', tousLesObjectifs.some((o) => o.phaseHistory.some((ph) => ph.name === 'Maintien')), true);
+
+/* Manager retrouve bien un repère par changement daté, au bon point. */
+let managerVoitUnRepere = false;
+tablette1.students.forEach((p) => {
+  p.objectives.forEach((o) => {
+    if (!o.phaseHistory.some((ph) => ph.date)) return;
+    const points = objectivePoints(o, p.id, seancesAsc, tablette1.guidances);
+    if (reperesDePhase(points, o.phaseHistory).length > 0) managerVoitUnRepere = true;
+  });
+});
+t('Manager retrouve au moins un repère daté sur une courbe', managerVoitUnRepere, true);
+
+/* L'instantané d'une séance ne peut pas connaître un changement à venir :
+   aucune entrée de son phaseHistory ne doit être postérieure à sa date. */
+let snapshotsSansAnticipation = true;
+let snapshotsSansRepereEnPhase = true;
+tablette1.sessions.forEach((s) => {
+  Object.values(s.objectiveSnapshot).forEach((snap) => {
+    (snap.phaseHistory || []).forEach((ph) => {
+      if (ph.date && new Date(ph.date) > new Date(s.date)) snapshotsSansAnticipation = false;
+    });
+    if (phaseCourante(snap.phaseHistory).repere) snapshotsSansRepereEnPhase = false;
+  });
+});
+t('aucun instantané de séance ne porte un changement de phase à venir', snapshotsSansAnticipation, true);
+t('aucun instantané n’affiche un repère de procédure comme phase courante', snapshotsSansRepereEnPhase, true);
+
+/* ==================== 8. Le fichier versionné n'a pas divergé ==================== */
 
 /* Un `demo/*.json` retouché à la main, ou un script modifié sans
    régénération, se voit ici et nulle part ailleurs. La comparaison se fait à
