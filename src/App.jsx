@@ -12397,7 +12397,16 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, atelie
      et consulter obligeait à passer par le formulaire. */
   const graphRefs = useRef({});
   const [cible, setCible] = useState(null);
+  /* Déplier une personne ramène le haut de sa carte dans la vue — voir
+     l'effet sur `openId` plus bas. `ignorerProchainDefilement` évite deux cas
+     où ce défilement se retournerait : le premier rendu (la page doit
+     s'ouvrir en haut, pas sauter vers `students[0]`) et un dépliage venu de
+     `voirGraphique`, qui pose son propre défilement centré vers une courbe
+     précise juste en dessous — les deux se battraient sinon. */
+  const carteRefs = useRef({});
+  const ignorerProchainDefilement = useRef(true);
   const voirGraphique = (sid, oid) => {
+    ignorerProchainDefilement.current = true;
     setOpenId(sid);
     setCible({ personne: sid, objectif: oid });
   };
@@ -12410,6 +12419,20 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, atelie
     if (node) node.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setCible(null);
   }, [cible]);
+
+  /* Avant ça, ouvrir une carte ne défilait jamais : elle se dépliait souvent
+     sous la ligne de flottaison, et elle monte tous ses objectifs d'un
+     coup — sans défilement, on tombait au milieu d'une pile de courbes
+     plutôt qu'en face du premier objectif. */
+  useEffect(() => {
+    if (ignorerProchainDefilement.current) {
+      ignorerProchainDefilement.current = false;
+      return;
+    }
+    if (!openId) return;
+    const node = carteRefs.current[openId];
+    if (node) node.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [openId]);
 
   if (students.length === 0) {
     return (
@@ -12453,42 +12476,44 @@ function SuiviScreen({ students, sessions, guidances, releves, axesSuivi, atelie
         {students.map((s) => {
           const open = openId === s.id;
           return (
-            <Card key={s.id}>
-              <button className="w-full flex items-center justify-between" onClick={() => setOpenId(open ? null : s.id)}>
-                <span className="flex items-center gap-3">
-                  <PastillePersonne initials={s.initials} />
-                </span>
-                <ChevronRight size={18} style={{ color: INK_SOFT, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
-              </button>
+            <div key={s.id} ref={(n) => { carteRefs.current[s.id] = n; }}>
+              <Card>
+                <button className="w-full flex items-center justify-between" onClick={() => setOpenId(open ? null : s.id)}>
+                  <span className="flex items-center gap-3">
+                    <PastillePersonne initials={s.initials} />
+                  </span>
+                  <ChevronRight size={18} style={{ color: INK_SOFT, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
+                </button>
 
-              {open && (
-                <div className="mt-4 space-y-5">
-                  {s.objectives.length === 0 && (
-                    <Empty>
-                      Aucun objectif défini.
-                      {onAjouterObjectif && (
-                        <div className="mt-3">
-                          <Btn variant="ghost" onClick={() => onAjouterObjectif(s.id)} className="text-sm">
-                            <Plus size={16} /> Ajouter un objectif
-                          </Btn>
-                        </div>
-                      )}
-                    </Empty>
-                  )}
-                  {s.objectives.map((o) => (
-                    <div key={o.id} ref={(n) => { graphRefs.current[`${s.id}:${o.id}`] = n; }}>
-                      <ObjectiveChart
-                        obj={o} studentId={s.id} sessions={ordered} guidances={guidances}
-                        onReset={() => onResetTracking(s.id, o.id)}
-                        onChangePhase={(nom) => onChangePhase(s.id, o.id, nom)}
-                        onRepere={(nom) => onRepere(s.id, o.id, nom)}
-                        onOuvrirObjectif={() => onOuvrirObjectif(s.id, o.id)}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
+                {open && (
+                  <div className="mt-4 space-y-5">
+                    {s.objectives.length === 0 && (
+                      <Empty>
+                        Aucun objectif défini.
+                        {onAjouterObjectif && (
+                          <div className="mt-3">
+                            <Btn variant="ghost" onClick={() => onAjouterObjectif(s.id)} className="text-sm">
+                              <Plus size={16} /> Ajouter un objectif
+                            </Btn>
+                          </div>
+                        )}
+                      </Empty>
+                    )}
+                    {s.objectives.map((o) => (
+                      <div key={o.id} ref={(n) => { graphRefs.current[`${s.id}:${o.id}`] = n; }}>
+                        <ObjectiveChart
+                          obj={o} studentId={s.id} sessions={ordered} guidances={guidances}
+                          onReset={() => onResetTracking(s.id, o.id)}
+                          onChangePhase={(nom) => onChangePhase(s.id, o.id, nom)}
+                          onRepere={(nom) => onRepere(s.id, o.id, nom)}
+                          onOuvrirObjectif={() => onOuvrirObjectif(s.id, o.id)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </div>
           );
         })}
       </div>
@@ -12736,8 +12761,21 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
                 formatter={(v) => [`${v}${percent ? ' %' : ` ${last ? last.unit : ''}`}`, 'Résultat']}
                 labelFormatter={(l) => `Séance du ${l}`}
               />
+              {/* Sans label ni `ifOverflow`, ce trait ne disait ni ce qu'il
+                  était ni à quelle valeur il se tenait, et sa valeur chiffrée
+                  n'était lisible que dans le badge texte à côté — un
+                  éducateur qui ne regarde que la courbe voyait un trait sans
+                  savoir à quel niveau il est. `libelleSeuil` porte aussi le
+                  sens de l'objectif (« à 80 % » ou « à 2 occ. ou moins ») :
+                  sans lui, un objectif à faire monter et un objectif à faire
+                  baisser tracent le même trait. `extendDomain` : le domaine
+                  par défaut de Recharts (`discard`) faisait disparaître la
+                  ligne sans le dire dès que le seuil sortait des valeurs
+                  observées — le cas normal d'un objectif « au plus N » bien
+                  tenu, où aucun point ne s'approche du seuil. */}
               {mastery && (
-                <ReferenceLine y={mastery.threshold} stroke={CAT_TEAL} strokeDasharray="4 4" strokeWidth={1.5} />
+                <ReferenceLine y={mastery.threshold} stroke={CAT_TEAL} strokeDasharray="4 4" strokeWidth={1.5} ifOverflow="extendDomain"
+                  label={{ value: `cible ${libelleSeuil(obj)}`, position: 'insideBottomRight', fontSize: 10, fill: CAT_TEAL }} />
               )}
               {/* Changement de phase : tirets longs. Repère de procédure :
                   pointillé fin. Même encre pour les deux — pas de couleur
