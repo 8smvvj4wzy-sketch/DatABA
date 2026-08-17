@@ -183,11 +183,20 @@ t(
     .some((d) => d.slice(0, 10) >= calendrier.conges.debut && d.slice(0, 10) <= calendrier.conges.fin),
   false
 );
+/* `suivi` porte deux natures de relevé, séparées par le seul champ `kind` :
+   un relevé d'état, qui vaut jusqu'au suivant et porte donc un axe, et un appui
+   de compteur d'occurrence, qui est ponctuel et n'en porte aucun. Les
+   confondre est le piège que `suiviDePersonne` / `compteursDePersonne`
+   écartent côté Manager — ici, chaque assertion doit dire de laquelle des deux
+   elle parle. */
+const relevesEtat = tablette1.suivi.filter((r) => r.kind !== 'compteur');
+const appuisCompteur = tablette1.suivi.filter((r) => r.kind === 'compteur');
 t(
   'les relevés de suivi continu portent un axe déclaré',
-  tablette1.suivi.every((r) => tablette1.axesSuivi.some((a) => a.id === r.suiviId)),
+  relevesEtat.every((r) => tablette1.axesSuivi.some((a) => a.id === r.suiviId)),
   true
 );
+t('un appui de compteur ne porte jamais d’axe', appuisCompteur.every((r) => r.suiviId === undefined), true);
 
 /* ==================== 3. États d'objectif ====================
    Réplique du classement d'`analyserObjectif` (Manager). La série jugée
@@ -336,11 +345,54 @@ t('des journées clôturées', [...parPersonneJour.values()].some((e) => e.clotu
 t('des journées laissées ouvertes, dont le dernier segment reste sans durée', [...parPersonneJour.values()].some((e) => e.releves && !e.cloture), true);
 const clesAxe = new Set(tablette1.axesSuivi.find((a) => a.id === 'principal').criteres.map((c) => c.k));
 t('des relevés portent un critère retiré de la configuration', tablette1.suivi.some((r) => r.suiviId === 'principal' && !r.fin && !clesAxe.has(r.critere)), true);
-t('deux axes de suivi sont relevés', new Set(tablette1.suivi.map((r) => r.suiviId)).size, 2);
+t('deux axes de suivi sont relevés', new Set(relevesEtat.map((r) => r.suiviId)).size, 2);
 /* Sans atelier ni intervenant sur le relevé, Explorer ne sait pas croiser une
    durée de suivi par atelier ou par intervenant : les deux mesures restent
    vides quel que soit le volume de relevés. */
-t('des relevés rattachés à une séance, pour croiser le suivi par atelier', tablette1.suivi.some((r) => r.atelierId && r.intervenantId), true);
+t('des relevés rattachés à une séance, pour croiser le suivi par atelier', relevesEtat.some((r) => r.atelierId && r.intervenantId), true);
+
+/* ==================== Compteurs d'occurrence ====================
+   Le compteur « Sollicitations » était déclaré sur les dix personnes et ne
+   recevait aucun appui : toute la chaîne compteurs de Manager restait morte
+   pendant une démonstration. Ce bloc vérifie que le jeu l'exerce vraiment. */
+t('les dix personnes déclarent un compteur', tablette1.students.every((s) => (s.compteurs || []).length === 1), true);
+t('des appuis de compteur existent', appuisCompteur.length > 0, true);
+t(
+  'chaque appui vise un compteur déclaré sur sa personne',
+  appuisCompteur.every((r) => {
+    const st = tablette1.students.find((x) => x.id === r.studentId);
+    return st && (st.compteurs || []).some((c) => c.id === r.compteurId);
+  }),
+  true
+);
+t('un appui ne porte ni critère ni clôture', appuisCompteur.every((r) => r.critere === undefined && r.fin === undefined), true);
+/* Un appui = un enregistrement, jamais un total : deux appuis de la même
+   personne le même jour sont deux lignes. */
+const joursAvecPlusieursAppuis = new Set();
+const parPersonneJourCompteur = new Map();
+appuisCompteur.forEach((r) => {
+  const cle = `${r.studentId}|${r.timestamp.slice(0, 10)}`;
+  parPersonneJourCompteur.set(cle, (parPersonneJourCompteur.get(cle) || 0) + 1);
+  if (parPersonneJourCompteur.get(cle) > 1) joursAvecPlusieursAppuis.add(cle);
+});
+t('des journées portent plusieurs appuis, un par ligne', joursAvecPlusieursAppuis.size > 0, true);
+t('des journées sans aucun appui', parPersonneJourCompteur.size < tablette1.students.length * calendrier.jours.length, true);
+/* Les deux gestes de DatABA : la pastille sur le moment, la saisie après coup.
+   Manager les distingue depuis qu'il expose `origine` comme axe de croisement. */
+t('les deux gestes de saisie sont représentés', new Set(appuisCompteur.map((r) => r.source)).size, 2);
+/* Sans atelier ni intervenant, la mesure « occurrences comptées » d'Explorer
+   existe mais ne se croise sur aucun de ces deux axes. */
+t('des appuis rattachés à une séance', appuisCompteur.some((r) => r.atelierId && r.intervenantId), true);
+t('et des appuis hors séance', appuisCompteur.some((r) => !r.atelierId), true);
+/* Un compteur déclaré et jamais utilisé n'existerait nulle part ailleurs dans
+   le jeu : Manager doit le rendre comme une série vide, pas comme une erreur. */
+const personnesAvecAppuis = new Set(appuisCompteur.map((r) => r.studentId));
+t('une personne garde un compteur déclaré mais jamais utilisé',
+  tablette1.students.filter((s) => !personnesAvecAppuis.has(s.id)).length, 1);
+/* Des trajectoires distinctes, sans quoi le graphique d'un compteur n'a rien à
+   montrer qu'un autre ne montre déjà. */
+const volumes = tablette1.students.map((s) => appuisCompteur.filter((r) => r.studentId === s.id).length).filter(Boolean);
+t('les volumes diffèrent d’une personne à l’autre', new Set(volumes).size > 3, true);
 
 /* La période par défaut de tous les écrans de Manager est de trente jours.
    Un jeu dense sur trois mois mais creux sur le dernier ne montre rien à

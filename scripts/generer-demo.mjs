@@ -1251,6 +1251,37 @@ const CRITERES_ENGAGEMENT = ['engage', 'engage', 'partiel', 'opposition'];
    CRENEAUX_ATELIER. Voir la boucle de construireSuivi pour la raison. */
 const HEURES_RELEVE = [[8, 40], [9, 40], [11, 55], [14, 10]];
 
+/* Appuis de compteur d'occurrence : nombre par jour au début et à la fin des
+   trois mois, interpolé linéairement entre les deux.
+
+   Le compteur « Sollicitations » était déclaré sur chacune des dix personnes
+   et n'a jamais reçu le moindre appui : zéro relevé `kind: 'compteur'` sur les
+   2 298 que produisait le jeu. Toute la chaîne compteurs de Manager —
+   `compteursDePersonne`, `chronologieCompteurs`, la promotion d'un compteur en
+   objectif, la mesure « occurrences comptées » d'Explorer — restait donc morte
+   pendant une démonstration, et n'avait jamais été vérifiée de bout en bout sur
+   des données réalistes.
+
+   Les trajectoires suivent celles déjà assignées à chaque personne, pour qu'un
+   cadre ait quelque chose à lire plutôt qu'un bruit uniforme : une série qui
+   s'estompe (l'autonomisation qu'on cherche), une qui monte, un démarrage
+   tardif, des plateaux. J.L. garde son profil lacunaire et n'appuie jamais :
+   c'est le cas d'un compteur déclaré mais inutilisé, que Manager doit rendre
+   comme une série vide et non comme une erreur — il n'existerait nulle part
+   ailleurs dans le jeu. */
+const APPUIS_COMPTEUR = {
+  'A.B.': [5, 1],
+  'C.D.': [3, 3],
+  'E.F.': [2, 4],
+  'G.H.': [0, 4],
+  'J.L.': [0, 0],
+  'K.M.': [3, 2],
+  'N.P.': [6, 2],
+  'R.S.': [2, 6],
+  'T.V.': [4, 4],
+  'Y.Z.': [5, 5],
+};
+
 function construireSuivi(rng, personnes, calendrier, seances) {
   const releves = [];
   const crisesDepuisSuivi = [];
@@ -1334,6 +1365,58 @@ function construireSuivi(rng, personnes, calendrier, seances) {
           });
         }
       });
+
+      /* Appuis de compteur d'occurrence. Un enregistrement par appui, jamais un
+         total : côté DatABA chaque pression sur la pastille écrit sa propre
+         ligne, et rien ne « vaut jusqu'au suivant » comme pour un relevé
+         d'état. D'où l'absence de `suiviId`, de `critere` et de `fin`, et la
+         présence de `kind: 'compteur'` — c'est ce champ, et lui seul, qui fait
+         que Manager les range dans `compteursDePersonne` plutôt que dans
+         `suiviDePersonne`. Les y laisser entrer produirait des segments d'une
+         durée jamais observée sur un axe fantôme. */
+      const [appuisDebut, appuisFin] = APPUIS_COMPTEUR[personne.initials] || [0, 0];
+      const compteur = (personne.compteurs || [])[0];
+      if (compteur && (appuisDebut || appuisFin)) {
+        const avancee = calendrier.jours.length > 1 ? indexJour / (calendrier.jours.length - 1) : 0;
+        const cible = appuisDebut + (appuisFin - appuisDebut) * avancee;
+        /* Un jour sur cinq sans aucun appui : une journée vide n'est pas un
+           trou dans les données, c'est une journée où personne n'a sollicité —
+           et c'est ce qui distingue une série de compteur d'une série de
+           cotations, qui n'existe que les jours de séance. */
+        const nb = rng() < 0.2 ? 0 : Math.max(0, Math.round(cible) + entier(rng, -1, 1));
+        /* Les appuis visent l'intérieur des créneaux de séance de la personne,
+           comme les relevés d'état : sans `atelierId` ni `intervenantId`, un
+           appui ne se croise ni par atelier ni par intervenant, et la mesure
+           « occurrences comptées » d'Explorer existe mais reste vide sur ces
+           deux axes. Un appui sur six tombe quand même hors séance — une
+           sollicitation n'attend pas l'atelier, et Manager doit savoir rendre
+           le cas. */
+        const siennes = seancesDuJour.filter((x) => x.studentIds.includes(personne.id));
+        for (let k = 0; k < nb; k++) {
+          const dans = siennes.length && rng() >= 1 / 6 ? parmi(rng, siennes) : null;
+          const ts = dans
+            ? new Date(dans.startedAt + Math.floor(rng() * Math.max(1, dans.endedAt - dans.startedAt)))
+            : horodatage(jour, entier(rng, 9, 15), entier(rng, 0, 59));
+          const seance = seancesDuJour.find((x) => ts.getTime() >= x.startedAt && ts.getTime() <= x.endedAt && x.studentIds.includes(personne.id));
+          releves.push({
+            id: `${P}-c-${jour.replace(/-/g, '')}-${personne.id.slice(-4)}-${k}`,
+            studentId: personne.id,
+            compteurId: compteur.id,
+            timestamp: ts.toISOString(),
+            kind: 'compteur',
+            /* Un appui sur cinq est saisi après coup plutôt que sur le moment :
+               les deux gestes existent côté DatABA (`noterCompteur` et
+               `ajouterCompteurReleve`), et Manager les distingue depuis qu'il
+               expose `origine` comme axe de croisement. */
+            source: k % 5 === 4 ? 'manuel' : 'pastille',
+            intervenantId: seance ? seance.intervenantId : null,
+            sessionId: seance ? seance.id : null,
+            atelierId: seance ? seance.atelierId : null,
+            appareilOrigine: null,
+            sentAt: null,
+          });
+        }
+      }
     });
   });
 

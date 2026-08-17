@@ -52,7 +52,9 @@ plusieurs verticales sur une même courbe.
 
 Trois mois de séances du lundi au vendredi sur quatre ateliers récurrents,
 trois intervenants, **une semaine de congés sans aucune trace**, des crises et
-des observations ABC, et un suivi continu sur deux axes.
+des observations ABC, un suivi continu sur deux axes, et un **compteur
+d'occurrence** « Sollicitations » par personne — un enregistrement par appui,
+jamais un total.
 
 Chaque personne suit une trajectoire assignée, pour qu'un cadre ait quelque
 chose à lire dans chaque vue :
@@ -69,6 +71,14 @@ chose à lire dans chaque vue :
 | R.S. | crises fréquentes et intenses |
 | T.V. | suivi continu dense sur deux axes |
 | Y.Z. | suivi de fréquence, sans critère à trancher |
+
+Les compteurs d'occurrence suivent les mêmes trajectoires : les sollicitations
+de A.B. et de N.P. s'estompent au fil du trimestre, celles de R.S. montent,
+G.H. n'en produit qu'à partir du milieu de la période, et **J.L. garde un
+compteur déclaré mais jamais utilisé** — le cas d'une série vide, que Manager
+doit rendre comme telle et non comme une erreur. Deux appuis sur trois tombent
+pendant une séance, ce qui les rend croisables par atelier et par intervenant ;
+le reste tombe hors séance, parce qu'une sollicitation n'attend pas l'atelier.
 
 Les données sont fictives. Aucune ne provient d'une personne réelle.
 
@@ -116,7 +126,10 @@ Ce que chaque destination a de quoi montrer :
   regroupement par jour passe en mode paginé. Des séances en mode Équilibre,
   des séances libres sans atelier, des notes par personne, des probes avec
   créneau matin et après-midi.
-- **Personnes accompagnées** — les cinq sous-vues sont peuplées. Le bilan des
+- **Personnes accompagnées** — les cinq sous-vues sont peuplées. La sous-vue
+  Suivi continu montre les deux axes **et** le compteur d'occurrence, qui se
+  promeut en objectif (« au plus N appuis sur N jours ») : sur A.B., la série
+  passe sous son seuil et l'objectif finit acquis. Le bilan des
   objectifs, avec ses **repères verticaux datés** — un changement de phase, un
   changement de procédure, parfois les deux sur la même courbe — le radar
   (chaque personne a au moins trois objectifs cotés sur les trente derniers
@@ -127,15 +140,14 @@ Ce que chaque destination a de quoi montrer :
   déclenche. Des crises à plusieurs étiquettes, les trois intensités,
   quelques crises sans intensité notée, les cinq fonctions, une répartition
   sur les cinq jours ouvrés.
-- **Explorer** — les douze mesures rendent toutes un chiffre. Deux réserves
-  qui ne sont pas des trous dans les données mais des choix de Manager, et qui
-  se font remarquer si on ne les annonce pas : le taux d'autonomie ne porte
-  que sur les modes dont le score est un pourcentage, donc l'occurrence en est
-  exclue ; et « objectifs acquis » ne compte que les objectifs à points en
-  pourcentage, si bien qu'un comportement problème passé sous son seuil n'y
-  figure pas alors que le tableau de bord l'affiche bien acquis. Les durées de
-  suivi se croisent par atelier et par intervenant, parce que les relevés sont
-  calés sur les créneaux de séance.
+- **Explorer** — les quinze mesures rendent toutes un chiffre. Une réserve qui
+  n'est pas un trou dans les données mais un choix de Manager, et qui se fait
+  remarquer si on ne l'annonce pas : le taux d'autonomie ne porte que sur les
+  modes dont le score est un pourcentage, donc l'occurrence en est exclue —
+  l'intervalle, lui, y entre bien. Les durées de suivi se croisent par atelier
+  et par intervenant, parce que les relevés sont calés sur les créneaux de
+  séance ; les occurrences comptées aussi, et en plus par « Geste de relevé »
+  (pastille, clôture de journée, saisie manuelle).
 - **Rapport** — de quoi composer un bilan pour n'importe laquelle des dix
   personnes, avec ou sans graphiques, avec ou sans bilan de crises.
 - **Gestion** — deux sources listées, des séances anciennes de trois mois pour
