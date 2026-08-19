@@ -807,6 +807,25 @@ donnée d'usager et sert à équiper un nouvel appareil sans tout ressaisir.
 Il se restaure avec le même bouton **Restaurer** : l'application reconnaît le
 format et **complète** l'existant au lieu de le remplacer.
 
+### Vérifier que la tablette enregistre bien
+
+Panneau **Données**, carte **« Enregistrement sur cette tablette »** : elle dit
+où les données sont écrites, quand la dernière écriture a réussi, ce qu'elle
+pesait, et si le navigateur s'engage à ne pas les effacer sous pression disque.
+
+Chaque cotation est écrite dès qu'elle change, puis **relue** pour vérifier
+qu'elle est bien là. Si une écriture échoue — mémoire pleine, appareil réglé
+pour effacer les données de site — un **bandeau rouge apparaît en haut de tous
+les écrans** et ne se ferme pas : le seul geste utile est d'exporter la
+sauvegarde immédiatement. Sans ce bandeau, une journée de cotation pouvait
+disparaître sans que rien ne l'annonce.
+
+> Si l'application s'ouvre sur **« Données illisibles »**, rien n'a été écrit
+> et rien ne le sera tant que ce message reste affiché : les données sont
+> peut-être intactes, et rouvrir suffit si la panne était passagère. La cause
+> la plus fréquente est un code changé depuis le dernier enregistrement —
+> c'est l'ancien qui les déchiffre.
+
 ### Quand sauvegarder
 
 - Après chaque période de collecte importante ;

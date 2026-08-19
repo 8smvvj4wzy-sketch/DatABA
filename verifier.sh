@@ -11,6 +11,9 @@
 #   2 quater. renommages laissés incomplets (vocabulaire résiduel)
 #   2 quinquies. identifiants importés en double
 #   2 sexies. un mode de cotation ajouté à TYPES mais pas suivi partout
+#   2 septies. champ d'instance d'objectif perdu à l'édition
+#   2 octies. écriture de données hors de la couche de stockage
+#   2 nonies. localStorage touché sans passer par le préfixe aba:
 #   3. suite de tests Node autonome
 #   4. hors ligne — build réel, précache injecté complet, aucune dépendance
 #      réseau au chargement (ignoré si node_modules est absent)
@@ -23,6 +26,19 @@ ECHECS=0
 NOM="$(basename "$PWD")"
 
 echo "════════ Vérification : $NOM ════════"
+
+# `tsc` n'est pas une dépendance du projet : sur un poste il vient d'une
+# installation globale, sur un runner il n'existe pas du tout et la section 1
+# échouerait sans aucun rapport avec le code. On le résout une fois, en
+# acceptant aussi celui que la CI installe dans node_modules.
+if command -v tsc >/dev/null 2>&1; then
+  TSC="tsc"
+elif [ -x ./node_modules/.bin/tsc ]; then
+  TSC="./node_modules/.bin/tsc"
+else
+  echo "  ✗ tsc introuvable (npm install -g typescript, ou npm install --no-save typescript)"
+  exit 1
+fi
 
 # ── 1. Syntaxe et références ───────────────────────────────────────────
 echo
@@ -48,7 +64,7 @@ for f in src/*.jsx src/*.js; do
   [ -e "$f" ] || continue
   cp "$f" "$TMP/$(basename "$f")"
 done
-if tsc --project "$TMP/tsconfig.json" 2>&1 | grep -v "Cannot find module" | grep -v "^$" | grep .; then
+if "$TSC" --project "$TMP/tsconfig.json" 2>&1 | grep -v "Cannot find module" | grep -v "^$" | grep .; then
   echo "  ✗ erreurs de syntaxe"
   ECHECS=$((ECHECS + 1))
 else
@@ -68,7 +84,7 @@ cat > "$TMP/tsconfig-refs.json" <<'EOF'
   }
 }
 EOF
-INCONNUS=$(tsc --project "$TMP/tsconfig-refs.json" 2>&1 | grep -E "Cannot find name" | head -20)
+INCONNUS=$("$TSC" --project "$TMP/tsconfig-refs.json" 2>&1 | grep -E "Cannot find name" | head -20)
 if [ -n "$INCONNUS" ]; then
   echo "  ✗ références inconnues :"
   echo "$INCONNUS" | sed 's/^/      /'
@@ -308,6 +324,59 @@ else
   else
     echo "  ✓ tous les champs d'instance survivent à l'édition"
   fi
+fi
+
+# ── 2 octies. Écriture de données hors de la couche de stockage ────────
+# Les deux applications DatABA partagent le même localStorage sous la même
+# adresse github.io, et son quota (~5 Mo par origine) est commun aux deux :
+# un `setItem` posé hors de la couche saute IndexedDB, la relecture et la
+# file d'écriture, et un dépassement de quota y redevient silencieux — c'est
+# exactement ce qui faisait rouvrir une tablette vide après une journée de
+# cotation.
+#
+# Deux appels sont légitimes, et deux seulement :
+#   - `ecrireBrut`, le repli de la couche, qui relit ce qu'il vient d'écrire ;
+#   - le thème, que le script bloquant d'index.html doit lire AVANT le premier
+#     rendu, donc de façon synchrone : IndexedDB ne peut pas le servir.
+# `removeItem` reste libre : il ne peut rien faire perdre d'autre que le
+# doublon laissé par l'ancien emplacement.
+#
+# Contrôle validé par test négatif : rendre `ecrireBrut` muet sur sa relecture
+# fait bien échouer tests/test_stockage.mjs, et déplacer un `setItem` hors de
+# la couche fait bien échouer la ligne ci-dessous.
+echo
+echo "── 2 octies. Écriture de données hors de la couche de stockage ──"
+# `grep -o` isole chaque appel : une ligne portant un appel légitime et un
+# appel fautif serait blanchie en entier par un filtre par ligne.
+ECRITURE_DIRECTE=$(grep -on "localStorage\.setItem([^)]*" src/App.jsx \
+  | grep -v "setItem(cle, charge" \
+  | grep -v "setItem('aba:theme'")
+if [ -n "$ECRITURE_DIRECTE" ]; then
+  echo "  ✗ des données sont écrites sans passer par la couche de stockage :"
+  echo "$ECRITURE_DIRECTE" | sed 's/^/      /' | head -10
+  ECHECS=$((ECHECS + 1))
+else
+  echo "  ✓ toute écriture passe par la couche de stockage"
+fi
+
+# ── 2 nonies. localStorage sans le préfixe aba: ────────────────────────
+# Même origine partagée, autre bout du problème : une clé posée sans préfixe,
+# ou un `localStorage.clear()` global, emporte les données consolidées de
+# Manager (`aba-cadre:`). C'est déjà arrivé dans l'autre sens. Toute clé
+# légitime est un littéral 'aba:…', la variable `cle` de la couche, ou le `k`
+# d'une boucle déjà filtrée sur le préfixe (clearAll).
+echo
+echo "── 2 nonies. localStorage sans le préfixe aba: ──"
+SANS_PREFIXE=$(grep -on "localStorage\.\(setItem\|getItem\|removeItem\|clear\)([^)]*" src/App.jsx \
+  | grep -v "('aba:" \
+  | grep -v "(cle" \
+  | grep -v "removeItem(k")
+if [ -n "$SANS_PREFIXE" ]; then
+  echo "  ✗ localStorage touché sans passer par le préfixe aba: :"
+  echo "$SANS_PREFIXE" | sed 's/^/      /' | head -10
+  ECHECS=$((ECHECS + 1))
+else
+  echo "  ✓ tout accès localStorage passe par le préfixe"
 fi
 
 # ── 3. Tests ───────────────────────────────────────────────────────────

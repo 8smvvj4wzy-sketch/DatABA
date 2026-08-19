@@ -38,14 +38,20 @@ sans que je le demande.
 ./verifier.sh
 ```
 
-Cinq contrôles : syntaxe (tsc), références inconnues, doublons de premier
-niveau et blocs de rendu dupliqués, ordre des hooks React, hors ligne (build
+Syntaxe (tsc), références inconnues, doublons de premier niveau et blocs de
+rendu dupliqués, ordre des hooks React, écriture de données hors de la couche
+de stockage, préfixe `aba:` sur tout accès `localStorage`, hors ligne (build
 réel, précache injecté complet). Puis les suites de `tests/`. **Ne rien
 livrer tant qu'un contrôle est rouge.**
 
 Le vérificateur est un artefact vivant : quand une nouvelle classe de bug
 apparaît, on lui ajoute un contrôle, et on le valide par un test négatif —
 introduire la faute, confirmer la détection, restaurer.
+
+Il tourne aussi en CI (`.github/workflows/deploy.yml`) : le job `verifier`
+précède le build, et le déploiement en dépend. Un contrôle rouge n'atteint
+plus les tablettes. Le lancer localement reste plus rapide que d'attendre le
+runner.
 
 ## Après chaque mise en ligne
 
@@ -62,7 +68,49 @@ le piège ci-dessous.
   adresse `github.io` et partagent le même `localStorage`. Un
   `localStorage.clear()` global dans Manager a déjà effacé les données de
   production de DatABA. Toute suppression est bornée à son préfixe : `aba:`
-  ici, `aba-cadre:` dans Manager. Jamais de clear global.
+  ici, `aba-cadre:` dans Manager. Jamais de clear global. Contrôle
+  « 2 nonies » de `verifier.sh`. La base IndexedDB `aba` n'appartient qu'à
+  DatABA — jamais de suppression sur une autre, `aba-cadre` étant celle de
+  Manager.
+- **Une cotation qui s'affiche n'est pas une cotation enregistrée.** Le quota
+  de `localStorage` est d'environ 5 Mo par origine, compté en UTF-16, sur du
+  base64 (≈ 1,33× le JSON) — et cette origine est PARTAGÉE avec Manager, qui
+  compte dans le même plafond. `setItem` lève alors `QuotaExceededError` :
+  l'ancienne couche le rendait en `false`, et cinq des six effets de
+  sauvegarde ignoraient ce `false`. La séance s'affichait, la journée se
+  déroulait, la tablette rouvrait sans rien. D'où trois règles, les mêmes que
+  côté Manager :
+  1. **IndexedDB d'abord** (`ouvrirBase`, `lireIDB`, `ecrireIDB`), base `aba`,
+     table `bloc`, une entrée par clé applicative. `localStorage` n'est plus
+     qu'un repli et un chemin de migration : le doublon y est retiré dès la
+     première écriture IndexedDB réussie — deux copies, c'est une copie
+     périmée qui ressuscite le jour où la bonne disparaît.
+  2. **Toute écriture est relue avant d'être annoncée réussie**, et son
+     résultat remonte à l'écran (`BandeauStockage`, `CarteStockage` du panneau
+     Données). Un `setItem` qui ne lève pas ne prouve rien. Côté IndexedDB, la
+     réussite se lit sur `tx.oncomplete`, jamais sur `req.onsuccess` : un
+     dépassement de quota laisse la requête réussir puis avorte la
+     transaction.
+  3. **Rien ne s'écrit hors de `store`.** Contrôle « 2 octies » de
+     `verifier.sh` ; seuls `ecrireBrut` et le thème (lu par le script bloquant
+     d'`index.html` avant le premier rendu, donc synchrone) y échappent.
+  Les écritures sont sérialisées (`enFile`) : sans file, de deux
+  enregistrements rapprochés le plus lent validait après le plus récent et
+  remettait l'état précédent. Et `store.set` rend maintenant un **résultat**,
+  pas un booléen — un objet est toujours vrai, tout appelant qui le teste doit
+  lire `.ok`.
+- **Une lecture ratée n'est pas une tablette vide.** `loadData` avalait toute
+  erreur de lecture dans des `catch (e) {}`, posait un état vide, puis
+  `setLoaded(true)` déclenchait les effets de sauvegarde qui écrasaient des
+  données encore intactes. `store.lire` rend maintenant `{ valeur, etat }`
+  avec `etat` à `'vide'` (rien de stocké), `'illisible'` (une valeur existe,
+  elle n'a pas pu être lue : déchiffrement, JSON, stockage en panne) ou
+  `'ok'`. `loadData` lit **tout avant d'appliquer quoi que ce soit** : sur un
+  seul `'illisible'`, rien n'est posé dans l'état, `loaded` reste faux, les
+  six effets de sauvegarde sont gardés par `blocIllisible`, et l'écran
+  bloquant `EcranBlocIllisible` s'affiche. `tests/test_stockage.mjs` couvre
+  les trois états, le quota, le repli, la migration, la suppression, la
+  sérialisation et la borne de l'effacement.
 - **Composants partagés plutôt qu'implémentations parallèles.** Deux blocs de
   rendu qui se ressemblent finissent par diverger — c'est arrivé sur la vue
   Renforcement de Manager.
