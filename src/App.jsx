@@ -761,90 +761,306 @@ function LockScreen({ security, onUnlock, onSetup, onFailedAttempt }) {
 }
 
 /* ==================== Stockage ====================
-   Dans Claude, window.storage est disponible. Une fois l'application hébergée
-   ailleurs (PWA, APK, iOS), il n'existe plus : on bascule sur localStorage.
-   Les données restent dans tous les cas sur l'appareil. */
-const store = {
-  /* Lecture et écriture brutes, sans chiffrement : réservées aux réglages de
-     sécurité eux-mêmes, qui doivent être lisibles avant la saisie du code. */
-  async getRaw(key) {
-    if (typeof window !== 'undefined' && window.storage) {
-      try {
-        const r = await window.storage.get(key, false);
-        return r && r.value ? r.value : null;
-      } catch (e) {
-        return null;
-      }
-    }
+   `localStorage` seul ne suffit pas : son quota est d'environ 5 Mo par
+   origine, compté en UTF-16, et une valeur chiffrée est du base64 (≈ 1,33× le
+   JSON). Une tablette d'une année scolaire, avec ses séances mois par mois et
+   ses relevés de suivi continu, l'atteint — et l'origine est PARTAGÉE avec
+   DatABA Manager, qui compte dans le même plafond. `setItem` lève alors
+   QuotaExceededError, que l'ancienne couche avalait en rendant `false` — un
+   `false` que cinq des six effets de sauvegarde ignoraient. La séance
+   s'affichait, la journée se déroulait normalement, et la tablette rouvrait
+   sans rien. C'est le défaut qui a déjà coûté un import entier côté Manager,
+   avec le même symptôme.
+
+   Trois règles, reprises de la couche de Manager (voir son CLAUDE.md) :
+   1. IndexedDB d'abord — pas de plafond de 5 Mo, une part du disque.
+      `localStorage` n'est plus qu'un repli et un chemin de migration : le
+      doublon y est retiré dès la première écriture IndexedDB réussie, deux
+      copies étant une copie périmée qui ressuscite le jour où la bonne
+      disparaît.
+   2. Toute écriture est relue avant d'être annoncée réussie, et son résultat
+      remonte à l'écran (`BandeauStockage`, `CarteStockage`). Un `setItem` qui
+      ne lève pas ne prouve rien : une session éphémère l'accepte puis ne rend
+      rien. Côté IndexedDB, la réussite se lit sur `tx.oncomplete`, jamais sur
+      `req.onsuccess` : un dépassement de quota laisse la requête réussir puis
+      avorte la transaction.
+   3. Les écritures sont sérialisées. Sans file, de deux enregistrements
+      rapprochés le plus lent — chiffrement plus long, mois plus gros —
+      validait après le plus récent et remettait l'état précédent.
+
+   La branche `window.storage` de l'environnement Claude a été retirée : elle
+   n'existe sur aucun appareil de service, et elle court-circuitait
+   silencieusement les trois règles ci-dessus. */
+const PREFIXE = 'aba:';
+const IDB_BASE = 'aba'; // jamais 'aba-cadre', qui n'appartient qu'à Manager
+const IDB_TABLE = 'bloc';
+
+let basePromesse = null;
+function ouvrirBase() {
+  if (basePromesse) return basePromesse;
+  basePromesse = new Promise((resolve) => {
     try {
-      return window.localStorage.getItem(key);
+      if (!window.indexedDB) { resolve(null); return; }
+      const req = window.indexedDB.open(IDB_BASE, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_TABLE)) db.createObjectStore(IDB_TABLE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+      req.onblocked = () => resolve(null);
+    } catch (e) { resolve(null); /* navigation privée sur certains navigateurs */ }
+  });
+  return basePromesse;
+}
+/* `null` = cette clé n'est pas stockée, `undefined` = IndexedDB indisponible.
+   Les deux se distinguent : le premier est une tablette neuve, le second
+   impose le repli sur localStorage. */
+async function lireIDB(cle) {
+  const db = await ouvrirBase();
+  if (!db) return undefined;
+  return new Promise((resolve, reject) => {
+    try {
+      const tx = db.transaction(IDB_TABLE, 'readonly');
+      const req = tx.objectStore(IDB_TABLE).get(cle);
+      req.onsuccess = () => resolve(req.result === undefined ? null : req.result);
+      req.onerror = () => reject(req.error || new Error('lecture IndexedDB'));
+      tx.onabort = () => reject(tx.error || new Error('lecture IndexedDB interrompue'));
+    } catch (e) { reject(e); }
+  });
+}
+/* La réussite se lit sur `oncomplete` de la transaction, pas sur le
+   `onsuccess` de la requête : un dépassement de quota laisse la requête
+   réussir puis avorte la transaction. Attendre la requête seule rapporterait
+   une écriture qui n'a jamais été validée. */
+async function ecrireIDB(cle, valeur) {
+  const db = await ouvrirBase();
+  if (!db) throw new Error('IndexedDB indisponible');
+  return new Promise((resolve, reject) => {
+    try {
+      const tx = db.transaction(IDB_TABLE, 'readwrite');
+      tx.objectStore(IDB_TABLE).put(valeur, cle);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('écriture IndexedDB'));
+      tx.onabort = () => reject(tx.error || new Error('écriture IndexedDB interrompue'));
+    } catch (e) { reject(e); }
+  });
+}
+async function supprimerIDB(cle) {
+  const db = await ouvrirBase();
+  if (!db) return;
+  await new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_TABLE, 'readwrite');
+      tx.objectStore(IDB_TABLE).delete(cle);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch (e) { resolve(); }
+  });
+}
+async function viderIDB() {
+  const db = await ouvrirBase();
+  if (!db) return;
+  await new Promise((resolve) => {
+    try {
+      const tx = db.transaction(IDB_TABLE, 'readwrite');
+      tx.objectStore(IDB_TABLE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch (e) { resolve(); }
+  });
+}
+function estQuota(e) {
+  if (!e) return false;
+  return e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+    || e.code === 22 || e.code === 1014;
+}
+/* Demandée une fois au démarrage. Un refus n'est pas une panne : le
+   navigateur garde les données mais se réserve de les évincer sous pression
+   disque. C'est dit dans le panneau Données plutôt que deviné. */
+async function demanderStockagePersistant() {
+  try {
+    if (!navigator.storage || !navigator.storage.persist) return null;
+    if (navigator.storage.persisted && await navigator.storage.persisted()) return true;
+    return await navigator.storage.persist();
+  } catch (e) { return null; }
+}
+
+/* Écriture brute d'une valeur déjà prête : IndexedDB, relecture, et sur
+   succès retrait du doublon localStorage. Le repli garde son plafond, donc
+   sa relecture. */
+async function ecrireBrut(cle, charge) {
+  try {
+    await ecrireIDB(cle, charge);
+    if (await lireIDB(cle) === charge) {
+      try { window.localStorage.removeItem(cle); } catch (e) { /* rien à retirer */ }
+      return { ok: true, ou: 'indexeddb', cle, taille: charge.length, quand: Date.now() };
+    }
+  } catch (e) { /* repli sur localStorage, avec son plafond */ }
+  try {
+    window.localStorage.setItem(cle, charge);
+    if (window.localStorage.getItem(cle) === charge) {
+      return { ok: true, ou: 'localstorage', cle, taille: charge.length, quand: Date.now() };
+    }
+    return { ok: false, raison: 'relecture', cle, taille: charge.length, quand: Date.now() };
+  } catch (e) {
+    return { ok: false, raison: estQuota(e) ? 'quota' : 'stockage', cle, taille: charge.length, quand: Date.now() };
+  }
+}
+
+/* Le résultat de chaque écriture est signalé à l'application, qui l'affiche.
+   Un échec ne se déduit plus d'un booléen que l'appelant peut ignorer. Le
+   résultat est aussi rendu à l'appelant, qui peut en dépendre — c'est le cas
+   de `aba:suivi`, dont l'ancienne clé n'est vidée qu'une fois la nouvelle
+   confirmée. */
+let signalerEcriture = () => {};
+function rapporter(resultat) {
+  try { signalerEcriture(resultat); } catch (e) { /* l'affichage ne bloque pas l'écriture */ }
+  return resultat;
+}
+let chaineEcriture = Promise.resolve();
+function enFile(tache) {
+  const suite = chaineEcriture.then(tache, tache);
+  chaineEcriture = suite.catch(() => {});
+  return suite;
+}
+
+const store = {
+  /* Branche l'affichage de l'état d'écriture. */
+  surEcriture(fn) { signalerEcriture = fn || (() => {}); },
+
+  /* Lecture brute, sans déchiffrement : réservée aux réglages de sécurité
+     eux-mêmes, qui doivent être lisibles avant la saisie du code. */
+  async getRaw(cle) {
+    let valeur;
+    try {
+      valeur = await lireIDB(cle);
+    } catch (e) {
+      valeur = undefined;
+    }
+    if (valeur != null) return valeur;
+    /* Repli et migration : la première écriture déplacera cette clé dans
+       IndexedDB. Chercher plus loin ne peut pas rendre une version périmée,
+       puisqu'il n'y a jamais deux copies. */
+    try {
+      return window.localStorage.getItem(cle);
     } catch (e) {
       return null;
     }
   },
-  async setRaw(key, value) {
-    if (typeof window !== 'undefined' && window.storage) {
+
+  /* Lecture d'une valeur de données, avec son état :
+     - 'ok'        : lue et déchiffrée ;
+     - 'vide'      : rien de stocké sous cette clé ;
+     - 'illisible' : une valeur existe, elle n'a pas pu être lue.
+     Le troisième cas ne rendait autrefois qu'un `null` indiscernable du
+     deuxième, et les effets de sauvegarde réécrivaient aussitôt l'état vide
+     par-dessus une valeur encore intacte : une lecture ratée détruisait les
+     données. L'appelant doit suspendre toute écriture sur 'illisible'. */
+  async lire(cle) {
+    let brut;
+    let ou = null;
+    let panne = null;
+    try {
+      brut = await lireIDB(cle);
+      if (brut != null) ou = 'indexeddb';
+    } catch (e) {
+      panne = 'indexeddb';
+    }
+    if (brut == null) {
       try {
-        await window.storage.set(key, value, false);
-        return true;
+        brut = window.localStorage.getItem(cle);
+        if (brut != null) ou = 'localstorage';
       } catch (e) {
-        return false;
+        panne = panne || 'localstorage';
       }
     }
+    if (brut == null) {
+      /* Dire « vide » alors qu'IndexedDB n'a pas répondu ferait écraser une
+         valeur peut-être intacte : la panne n'est retenue que si rien n'a été
+         trouvé ensuite. */
+      if (panne) return { valeur: null, etat: 'illisible', cle, ou: panne, raison: 'lecture' };
+      return { valeur: null, etat: 'vide', cle, ou: null };
+    }
+    if (!dataKey) return { valeur: brut, etat: 'ok', cle, ou, taille: brut.length };
     try {
-      window.localStorage.setItem(key, value);
-      return true;
+      return { valeur: await decryptValue(brut, dataKey), etat: 'ok', cle, ou, taille: brut.length };
     } catch (e) {
-      return false;
+      return { valeur: null, etat: 'illisible', cle, ou, raison: 'dechiffrement', taille: brut.length };
     }
   },
-  /* Lecture et écriture des données : chiffrées dès qu'une clé est disponible.
-     Un enregistrement antérieur laissé en clair reste lu correctement, puis
+
+  /* Valeur seule, pour les appelants qui n'ont rien à décider sur un échec de
+     lecture. `loadData` passe par `lire`. */
+  async get(cle) {
+    const r = await store.lire(cle);
+    return r.etat === 'ok' ? r.valeur : null;
+  },
+
+  async setRaw(cle, valeur) {
+    return enFile(async () => rapporter(await ecrireBrut(cle, valeur)));
+  },
+
+  /* Écriture d'une donnée : chiffrée dès qu'une clé est disponible. Un
+     enregistrement antérieur laissé en clair reste lu correctement, puis
      réécrit chiffré à la première modification. */
-  async get(key) {
-    const raw = await store.getRaw(key);
-    if (raw == null || !dataKey) return raw;
-    try {
-      return await decryptValue(raw, dataKey);
-    } catch (e) {
-      return null; // clé incorrecte ou enregistrement abîmé
-    }
+  async set(cle, valeur) {
+    return enFile(async () => {
+      let charge;
+      try {
+        charge = dataKey ? await encryptValue(valeur, dataKey) : valeur;
+      } catch (e) {
+        return rapporter({ ok: false, raison: 'chiffrement', cle, quand: Date.now() });
+      }
+      return rapporter(await ecrireBrut(cle, charge));
+    });
   },
-  async set(key, value) {
-    if (!dataKey) return store.setRaw(key, value);
-    try {
-      return store.setRaw(key, await encryptValue(value, dataKey));
-    } catch (e) {
-      return false;
-    }
+
+  /* Vraie suppression, dans les deux magasins. Une chaîne vide écrite à la
+     place laissait une clé lue comme une valeur présente mais vide. */
+  async supprimer(cle) {
+    return enFile(async () => {
+      await supprimerIDB(cle);
+      try { window.localStorage.removeItem(cle); } catch (e) { /* rien à retirer */ }
+      return { ok: true, ou: 'suppression', cle, quand: Date.now() };
+    });
   },
-  /* Efface UNIQUEMENT les clés de cette application.
+
+  /* Efface UNIQUEMENT les données de cette application.
      Les deux applications DatABA sont publiées sous la même adresse
      (nom.github.io) et partagent donc le même espace de stockage : un
-     effacement global emporterait aussi les données de l'autre. */
+     effacement global emporterait aussi les données de l'autre. La base
+     IndexedDB `aba` n'appartient qu'à DatABA — jamais de suppression sur une
+     autre base, `aba-cadre` étant celle de Manager. */
   async clearAll() {
-    if (typeof window !== 'undefined' && window.storage) {
-      try {
-        const list = await window.storage.list('aba:', false);
-        if (list && list.keys) await Promise.all(list.keys.map((k) => window.storage.delete(k, false)));
-        return true;
-      } catch (e) {
-        return false;
-      }
-    }
     try {
       const aSupprimer = [];
       for (let i = 0; i < window.localStorage.length; i++) {
         const k = window.localStorage.key(i);
-        if (k && k.startsWith('aba:')) aSupprimer.push(k);
+        if (k && k.startsWith(PREFIXE)) aSupprimer.push(k);
       }
       aSupprimer.forEach((k) => window.localStorage.removeItem(k));
-      return true;
-    } catch (e) {
-      return false;
-    }
+    } catch (e) { /* stockage indisponible */ }
+    await viderIDB();
+    return true;
   },
 };
+
+/* Lecture d'une valeur JSON de données, avec son état. Un JSON qui ne se
+   reparse pas n'est pas une valeur absente : c'est une valeur illisible, et
+   la remplacer par un état vide détruirait ce qui reste. `loadData` s'appuie
+   là-dessus pour suspendre toute écriture. */
+async function lireJSON(cle) {
+  const r = await store.lire(cle);
+  if (r.etat !== 'ok') return r;
+  try {
+    return { valeur: JSON.parse(r.valeur), etat: 'ok', cle, ou: r.ou, taille: r.taille };
+  } catch (e) {
+    return { valeur: null, etat: 'illisible', cle, ou: r.ou, raison: 'json', taille: r.taille };
+  }
+}
 
 /* État lu pour la carte « Hors ligne » du panneau Données (CarteHorsLigne).
    Rien n'affichait ce que le service worker avait réellement mis en cache :
@@ -4757,6 +4973,13 @@ function AbaApp() {
   const [pileEcrans, setPileEcrans] = useState([]);
   const [tiroir, setTiroir] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  /* Résultat de la dernière écriture, valeur stockée illisible, et engagement
+     du navigateur à ne pas évincer les données. Les trois se voient à
+     l'écran : une écriture perdue en silence est le défaut qui a coûté le
+     plus cher aux deux applications. */
+  const [etatStockage, setEtatStockage] = useState(null);
+  const [blocIllisible, setBlocIllisible] = useState(null);
+  const [persistant, setPersistant] = useState(null);
   const [security, setSecurity] = useState({ pinHash: null, pinSalt: null });
   const [securityLoaded, setSecurityLoaded] = useState(false);
   const [locked, setLocked] = useState(true);
@@ -5013,6 +5236,14 @@ function AbaApp() {
     if (!champActif) setSaisieEnCours(false);
   }, [tab, ecran]);
 
+  /* Branche l'affichage de l'état d'écriture, et demande une fois au
+     navigateur de ne pas évincer les données de cette origine. */
+  useEffect(() => {
+    store.surEcriture(setEtatStockage);
+    demanderStockagePersistant().then(setPersistant);
+    return () => store.surEcriture(null);
+  }, []);
+
   /* --- chargement ---
      Les réglages de sécurité se lisent en clair, avant tout déverrouillage.
      Les données, elles, ne sont chargées qu'une fois la clé dérivée du code. */
@@ -5045,78 +5276,93 @@ function AbaApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [securityLoaded, security.disabled]);
 
+  /* Le chargement lit TOUT avant d'appliquer quoi que ce soit. Dès qu'une clé
+     revient illisible, rien n'est posé dans l'état et `loaded` reste faux :
+     les effets de sauvegarde ne partent pas, et l'écran bloquant s'affiche.
+     L'ordre inverse — appliquer au fil de l'eau — est exactement ce qui
+     faisait qu'une lecture ratée écrasait des données encore intactes. */
   async function loadData() {
-    const config = await store.get('aba:config');
-    let retention = 0;
-    let nbPersonnes = 0;
-    if (config) {
-      try {
-        const d = JSON.parse(config);
-        nbPersonnes = (d.students || []).length;
-        setStudents(migrerStudentsClasse(migrerStudentsSuivi(d.students || [])));
-        setAteliers(d.ateliers || []);
-        setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
-        setIntervenants(d.intervenants || []);
-        // Repli sur l'ancien nom de clé (`groupes`) pour une tablette dont le
-        // stockage n'a pas encore traversé le renommage Groupe → Classe.
-        setClasses(d.classes || d.groupes || []);
-        setAppareil(d.appareil || '');
-        setClasseAppareil(d.classeAppareil || d.groupeAppareil || '');
-        retention = d.retentionMonths || 0;
-        setRetentionMonths(retention);
-        if (Array.isArray(d.guidances) && d.guidances.length) {
-          // Complète les guidances préenregistrées ajoutées depuis, sans toucher aux personnalisées
-          const stored = d.guidances;
-          const merged =
-            (d.guidanceVersion || 1) < GUIDANCE_VERSION
-              ? [...stored, ...DEFAULT_GUIDANCE.filter((g) => !stored.some((x) => x.code === g.code))]
-              : stored;
-          setGuidances(merged);
-        }
-        /* Ces trois listes étaient sauvegardées (persistAll et l'effet de
-           sauvegarde de la configuration écrivent déjà ces champs) mais
-           jamais relues ici : l'effet réécrivait aba:config avec les valeurs
-           par défaut à chaque chargement, effaçant silencieusement les
-           réponses ABC, les modèles d'objectifs et les axes de suivi continu
-           personnalisés. */
-        setAbcOptions({ ...DEFAULT_ABC, ...(d.abcOptions || {}) });
-        if (Array.isArray(d.objectiveTemplates)) setObjectiveTemplates(d.objectiveTemplates);
-        setAxesSuivi(migrerAxesSuivi(d.axesSuivi));
-      } catch (e) {}
+    const illisibles = [];
+    const lire = async (cle) => {
+      const r = await lireJSON(cle);
+      if (r.etat === 'illisible') illisibles.push(r);
+      return r;
+    };
+
+    const rConfig = await lire('aba:config');
+    const d = rConfig.etat === 'ok' && rConfig.valeur && typeof rConfig.valeur === 'object' ? rConfig.valeur : null;
+
+    /* Ancien format : un seul bloc de séances. On le relit, puis il sera
+       réparti par mois à la première sauvegarde. */
+    let brutSessions = [];
+    const rAncien = await lire('aba:sessions');
+    if (rAncien.etat === 'ok') {
+      brutSessions = rAncien.valeur || [];
+    } else if (rAncien.etat === 'vide') {
+      const rIdx = await lire(SESSIONS_INDEX);
+      const mois = rIdx.etat === 'ok' ? (rIdx.valeur || []) : [];
+      for (const m of mois) {
+        const rMois = await lire(`aba:sessions:${m}`);
+        if (rMois.etat === 'ok') brutSessions = brutSessions.concat(rMois.valeur || []);
+      }
+      brutSessions.sort((a, b) => new Date(b.date) - new Date(a.date));
     }
 
-    let loadedSessions = [];
-    let loadedCrises = [];
-    /* Ancien format : un seul bloc. On le relit, puis il sera réparti par mois
-       à la première sauvegarde. */
-    const ancien = await store.get('aba:sessions');
-    if (ancien) {
-      try { loadedSessions = JSON.parse(ancien) || []; } catch (e) {}
-    } else {
-      const idx = await store.get(SESSIONS_INDEX);
-      let mois = [];
-      if (idx) { try { mois = JSON.parse(idx) || []; } catch (e) {} }
-      for (const m of mois) {
-        const bloc = await store.get(`aba:sessions:${m}`);
-        if (!bloc) continue;
-        try { loadedSessions = loadedSessions.concat(JSON.parse(bloc) || []); } catch (e) {}
-      }
-      loadedSessions.sort((a, b) => new Date(b.date) - new Date(a.date));
-    }
-    const cri = await store.get('aba:crises');
-    if (cri) { try { loadedCrises = JSON.parse(cri) || []; } catch (e) {} }
+    const rCrises = await lire('aba:crises');
     /* Nouvelle clé aba:suivi ; repli sur l'ancienne aba:stabilite tant qu'une
        tablette n'a pas encore réécrit la sienne (voir clesDonnees et
        persistAll : l'ancienne clé n'est vidée qu'une fois la nouvelle
        confirmée). */
-    let loadedReleves = [];
-    const suv = await store.get('aba:suivi');
-    if (suv) {
-      try { loadedReleves = JSON.parse(suv) || []; } catch (e) {}
-    } else {
-      const sta = await store.get('aba:stabilite');
-      if (sta) { try { loadedReleves = JSON.parse(sta) || []; } catch (e) {} }
+    const rSuivi = await lire('aba:suivi');
+    const rStab = rSuivi.etat === 'vide' ? await lire('aba:stabilite') : null;
+    const rActive = await lire('aba:active');
+    const rPoste = await lire('aba:poste');
+
+    if (illisibles.length) {
+      setBlocIllisible({ ...illisibles[0], cles: illisibles.map((r) => r.cle) });
+      return;
     }
+
+    let retention = 0;
+    let nbPersonnes = 0;
+    if (d) {
+      nbPersonnes = (d.students || []).length;
+      setStudents(migrerStudentsClasse(migrerStudentsSuivi(d.students || [])));
+      setAteliers(d.ateliers || []);
+      setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
+      setIntervenants(d.intervenants || []);
+      // Repli sur l'ancien nom de clé (`groupes`) pour une tablette dont le
+      // stockage n'a pas encore traversé le renommage Groupe → Classe.
+      setClasses(d.classes || d.groupes || []);
+      setAppareil(d.appareil || '');
+      setClasseAppareil(d.classeAppareil || d.groupeAppareil || '');
+      retention = d.retentionMonths || 0;
+      setRetentionMonths(retention);
+      if (Array.isArray(d.guidances) && d.guidances.length) {
+        // Complète les guidances préenregistrées ajoutées depuis, sans toucher aux personnalisées
+        const stored = d.guidances;
+        const merged =
+          (d.guidanceVersion || 1) < GUIDANCE_VERSION
+            ? [...stored, ...DEFAULT_GUIDANCE.filter((g) => !stored.some((x) => x.code === g.code))]
+            : stored;
+        setGuidances(merged);
+      }
+      /* Ces trois listes étaient sauvegardées (persistAll et l'effet de
+         sauvegarde de la configuration écrivent déjà ces champs) mais
+         jamais relues ici : l'effet réécrivait aba:config avec les valeurs
+         par défaut à chaque chargement, effaçant silencieusement les
+         réponses ABC, les modèles d'objectifs et les axes de suivi continu
+         personnalisés. */
+      setAbcOptions({ ...DEFAULT_ABC, ...(d.abcOptions || {}) });
+      if (Array.isArray(d.objectiveTemplates)) setObjectiveTemplates(d.objectiveTemplates);
+      setAxesSuivi(migrerAxesSuivi(d.axesSuivi));
+    }
+
+    let loadedSessions = brutSessions;
+    let loadedCrises = rCrises.etat === 'ok' ? (rCrises.valeur || []) : [];
+    let loadedReleves = rSuivi.etat === 'ok'
+      ? (rSuivi.valeur || [])
+      : (rStab && rStab.etat === 'ok' ? (rStab.valeur || []) : []);
     loadedReleves = migrerReleves(loadedReleves);
 
     // Purge automatique au-delà de la durée de conservation retenue
@@ -5138,11 +5384,8 @@ function AbaApp() {
     setCrises(migrerEnvoisCrises(loadedCrises, loadedSessions));
     setReleves(loadedReleves);
 
-    const act = await store.get('aba:active');
-    if (act) { try { setActiveSession(JSON.parse(act)); } catch (e) {} }
-
-    const pos = await store.get('aba:poste');
-    if (pos) { try { setPoste(JSON.parse(pos)); } catch (e) {} }
+    if (rActive.etat === 'ok' && rActive.valeur) setActiveSession(rActive.valeur);
+    if (rPoste.etat === 'ok' && rPoste.valeur) setPoste(rPoste.valeur);
 
     /* Tablette neuve : rien à coter, on ouvre directement sur la configuration
        des personnes accompagnées. Dès qu'une personne existe, l'application
@@ -5244,8 +5487,11 @@ function AbaApp() {
     moisEcrits.current = {};
     await persistSessions(sessions);
     await store.set('aba:crises', JSON.stringify(crises));
-    if (await store.set('aba:suivi', JSON.stringify(releves))) {
-      await store.setRaw('aba:stabilite', '');
+    /* `store.set` rend désormais le résultat de l'écriture, pas un booléen :
+       un objet est toujours vrai, et le tester tel quel viderait l'ancienne
+       clé même sur une écriture ratée. */
+    if ((await store.set('aba:suivi', JSON.stringify(releves))).ok) {
+      await store.supprimer('aba:stabilite');
     }
     await store.set('aba:active', JSON.stringify(activeSession));
     await store.set('aba:poste', JSON.stringify(poste));
@@ -5313,11 +5559,14 @@ function AbaApp() {
     };
   }, [security.pinHash]);
 
-  /* --- sauvegardes --- */
+  /* --- sauvegardes ---
+     Chaque effet est suspendu tant qu'une valeur stockée est illisible : sans
+     cette garde, l'état vide d'un chargement raté partirait à l'écriture et
+     remplacerait des données encore intactes. */
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || blocIllisible) return;
     store.set('aba:config', JSON.stringify({ students, ateliers, emploiDuTemps, intervenants, classes, guidances, guidanceVersion: GUIDANCE_VERSION, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, classeAppareil }));
-  }, [students, ateliers, emploiDuTemps, intervenants, classes, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, classeAppareil, loaded]);
+  }, [students, ateliers, emploiDuTemps, intervenants, classes, guidances, retentionMonths, objectiveTemplates, abcOptions, axesSuivi, appareil, classeAppareil, loaded, blocIllisible]);
   /* Empreinte du dernier enregistrement de chaque mois, pour n'écrire que ce
      qui a réellement changé. */
   const moisEcrits = useRef({});
@@ -5334,44 +5583,45 @@ function AbaApp() {
     // Mois devenus vides : on retire leur clé
     for (const m of Object.keys(moisEcrits.current)) {
       if (groupes[m]) continue;
-      await store.setRaw(`aba:sessions:${m}`, '');
+      await store.supprimer(`aba:sessions:${m}`);
       delete moisEcrits.current[m];
     }
     await store.set(SESSIONS_INDEX, JSON.stringify(mois));
     // L'ancien bloc unique n'a plus lieu d'être
     const ancien = await store.getRaw('aba:sessions');
-    if (ancien) await store.setRaw('aba:sessions', '');
+    if (ancien) await store.supprimer('aba:sessions');
   }
 
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || blocIllisible) return;
     persistSessions(sessions);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, loaded]);
+  }, [sessions, loaded, blocIllisible]);
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || blocIllisible) return;
     store.set('aba:crises', JSON.stringify(crises));
-  }, [crises, loaded]);
+  }, [crises, loaded, blocIllisible]);
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || blocIllisible) return;
     /* L'ancienne clé n'est vidée qu'une fois la nouvelle confirmée : jamais
-       l'inverse, pour ne pas se retrouver sans aucune copie lisible. */
+       l'inverse, pour ne pas se retrouver sans aucune copie lisible. Le
+       résultat porte maintenant `ok` — un objet nu serait toujours vrai. */
     (async () => {
       const ecrit = await store.set('aba:suivi', JSON.stringify(releves));
-      if (ecrit) {
+      if (ecrit.ok) {
         const ancien = await store.getRaw('aba:stabilite');
-        if (ancien) await store.setRaw('aba:stabilite', '');
+        if (ancien) await store.supprimer('aba:stabilite');
       }
     })();
-  }, [releves, loaded]);
+  }, [releves, loaded, blocIllisible]);
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || blocIllisible) return;
     store.set('aba:active', JSON.stringify(activeSession));
-  }, [activeSession, loaded]);
+  }, [activeSession, loaded, blocIllisible]);
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || blocIllisible) return;
     store.set('aba:poste', JSON.stringify(poste));
-  }, [poste, loaded]);
+  }, [poste, loaded, blocIllisible]);
 
   function notify(msg) {
     const jeton = ++toastToken.current;
@@ -6392,6 +6642,7 @@ function AbaApp() {
             onExportConfig={exportConfig} onExportBackup={exportBackup} onImportBackup={importBackup}
             onExportProfils={() => exportProfils('classe')} onExportProfilsComplet={() => exportProfils('complet')}
             etatHorsLigne={etatHorsLigne} onRafraichirHorsLigne={rafraichirEtatHorsLigne}
+            etatStockage={etatStockage} persistant={persistant}
           />
         );
       case 'guidances':
@@ -6542,6 +6793,11 @@ function AbaApp() {
     );
   }
 
+  /* Avant l'écran de chargement : `loaded` reste faux quand une valeur est
+     illisible, et « Chargement… » indéfiniment ne dirait rien de ce qui se
+     passe ni du fait qu'aucune écriture ne part. */
+  if (blocIllisible) return <EcranBlocIllisible etat={blocIllisible} securite={security} />;
+
   if (!loaded) {
     return (
       <div ref={rootRef} className="min-h-screen flex items-center justify-center" style={{ background: PAPER, color: INK_SOFT, fontFamily: F_BODY }}>
@@ -6570,6 +6826,10 @@ function AbaApp() {
           transition: dragging ? 'none' : 'transform .2s ease-out',
         }}
       >
+        {/* Hors du bloc animé et hors de `volet` : il doit se voir sur tous les
+            écrans, y compris en plein écran de cotation, et ne pas repartir en
+            animation à chaque changement d'onglet. */}
+        <BandeauStockage etat={etatStockage} />
         <div
           key={cleCourante}
           style={{
@@ -7799,6 +8059,172 @@ function PanneauMotsDePasse({ security, onChangePin, onDisableProtection }) {
 /* Les deux exports existaient déjà, mais sous deux boutons aux libellés
    proches. Ils sont présentés ici comme un seul choix explicite : avec ou sans
    données personnelles. */
+/* ==================== Stockage : ce qui se voit ====================
+   Quatre textes pour quatre causes distinctes. Les confondre en une « erreur
+   d'enregistrement » ne dit pas quoi faire : un quota se règle en exportant
+   puis en réduisant la durée de conservation, un stockage refusé se règle
+   dans les réglages du navigateur. */
+const RAISONS_STOCKAGE = {
+  quota: {
+    titre: "Le stockage de cette tablette est plein",
+    detail: "Ce qui vient d'être coté dépasse ce que la tablette accepte de conserver. Exportez la sauvegarde maintenant, puis réduisez la durée de conservation depuis le panneau Données.",
+  },
+  relecture: {
+    titre: "Cette tablette n'a rien conservé",
+    detail: "L'écriture a été acceptée puis relue vide. C'est le comportement d'une fenêtre de navigation privée, ou d'un appareil réglé pour effacer les données de site. Exportez la sauvegarde avant de fermer.",
+  },
+  stockage: {
+    titre: "Le stockage de cette tablette est refusé",
+    detail: "Ni IndexedDB ni le stockage local n'acceptent d'écrire. Vérifiez que les données de site ne sont pas bloquées pour cette adresse. Exportez la sauvegarde avant de fermer.",
+  },
+  chiffrement: {
+    titre: "Le chiffrement des données a échoué",
+    detail: "Les données n'ont pas pu être préparées pour l'enregistrement. Exportez la sauvegarde avant de fermer.",
+  },
+};
+
+/* Bandeau permanent tant que la dernière écriture a échoué. Il ne se ferme
+   pas : le seul geste utile est d'exporter, et une croix transformerait un
+   avertissement en dérangement à faire taire. Il se voit pendant la séance,
+   pas le lendemain — c'est tout l'objet. */
+function BandeauStockage({ etat }) {
+  if (!etat || etat.ok) return null;
+  const r = RAISONS_STOCKAGE[etat.raison] || RAISONS_STOCKAGE.stockage;
+  return (
+    <div className="rounded-xl border px-4 py-3 mb-3"
+      role="alert"
+      style={{ borderColor: CRISIS, backgroundColor: CRISIS, color: texteLisibleSur(CRISIS) }}>
+      <div className="flex items-start gap-2">
+        <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+        <div>
+          <div className="text-sm font-semibold" style={{ fontFamily: F_DISPLAY }}>
+            {r.titre} — rien n'est enregistré
+          </div>
+          <p className="text-xs mt-1">
+            {r.detail} Tout ce qui est à l'écran disparaîtra à la fermeture de l'application.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Écran bloquant : des données sont stockées mais illisibles. Trois causes,
+   et surtout : aucune écriture entre-temps. Une lecture ratée qu'on laisse
+   passer, c'est l'état vide de l'écran qui part sur des données intactes. */
+function EcranBlocIllisible({ etat, securite }) {
+  const dechiffrement = etat.raison === 'dechiffrement';
+  const lecture = etat.raison === 'lecture';
+  return (
+    <div className="min-h-screen flex items-center justify-center px-6" style={{ background: PAPER, fontFamily: F_BODY }}>
+      <div className="w-full max-w-md">
+        <h1 className="text-xl font-semibold text-center mb-1" style={{ fontFamily: F_DISPLAY, color: INK }}>
+          Données illisibles
+        </h1>
+        <p className="text-sm text-center mb-5" style={{ color: INK_SOFT }}>
+          {dechiffrement
+            ? "Des données sont bien enregistrées sur cette tablette, mais elles ne se déchiffrent pas avec ce code."
+            : lecture
+              ? "Le stockage de cette tablette n'a pas répondu à la lecture."
+              : "Des données sont enregistrées sur cette tablette, mais leur contenu ne se relit pas."}
+        </p>
+        <Card className="mb-3">
+          <p className="text-sm" style={{ color: INK_SOFT }}>
+            <strong style={{ color: INK }}>Rien n'a été écrit.</strong> L'enregistrement est suspendu
+            tant que ces données ne sont pas lues : si le problème est passager — un stockage
+            momentanément indisponible — elles sont toujours là et rouvrir suffit.
+            {dechiffrement && securite && !securite.disabled
+              ? " Si le code de cette tablette a été changé depuis, c'est l'ancien qui les déchiffre."
+              : ''}
+          </p>
+        </Card>
+        <p className="text-xs mb-3" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
+          {(etat.cles || [etat.cle]).filter(Boolean).join(', ')}
+        </p>
+        <Btn onClick={() => window.location.reload()} className="w-full mb-2">Réessayer</Btn>
+        <Btn variant="ghost"
+          onClick={() => {
+            if (!window.confirm("Effacer les données illisibles et repartir de zéro ?\n\nElles ne seront pas récupérables sur cette tablette. Une réimportation d'une sauvegarde du dossier partagé reste possible.\n\nSuppression définitive.")) return;
+            store.clearAll().then(() => window.location.reload());
+          }}
+          className="w-full text-sm" style={{ color: CRISIS }}>
+          Effacer et repartir de zéro
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+function tailleLisible(n) {
+  if (n == null) return '—';
+  if (n < 1024) return `${n} caractères`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} Ko`;
+  return `${(n / (1024 * 1024)).toFixed(1)} Mo`;
+}
+
+/* État de l'enregistrement, en clair et à demeure : où l'on écrit, ce que
+   pesait la dernière écriture, quand elle a réussi, et si le navigateur
+   s'engage à ne pas évincer les données. Rien de tout cela n'était visible
+   nulle part — une tablette pouvait n'avoir plus rien écrit depuis des jours
+   sans qu'aucun écran ne le dise. */
+function CarteStockage({ etat, persistant }) {
+  const ou = etat && etat.ok
+    ? (etat.ou === 'indexeddb' ? 'IndexedDB (sans plafond de 5 Mo)' : 'stockage local du navigateur (plafonné à ~5 Mo)')
+    : null;
+  const r = etat && !etat.ok ? (RAISONS_STOCKAGE[etat.raison] || RAISONS_STOCKAGE.stockage) : null;
+  return (
+    <Card className="mb-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Layers size={16} style={{ color: INK_SOFT }} />
+        <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Enregistrement sur cette tablette</span>
+      </div>
+      {r ? (
+        <p className="text-xs mb-3 rounded-lg px-2.5 py-2"
+          style={{ color: texteLisibleSur(CRISIS), backgroundColor: CRISIS }}>
+          <strong>{r.titre}.</strong> {r.detail}
+        </p>
+      ) : (
+        <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+          Chaque cotation est écrite dès qu'elle change, puis relue pour vérifier qu'elle est bien
+          là. Une écriture qui échoue n'est plus passée sous silence.
+        </p>
+      )}
+      <dl className="text-xs" style={{ color: INK_SOFT }}>
+        <div className="flex justify-between gap-3 py-1" style={{ borderTop: `1px solid ${BORDER}` }}>
+          <dt>Dernière écriture</dt>
+          <dd style={{ color: INK }}>
+            {!etat ? "aucune depuis l'ouverture"
+              : etat.ok ? `réussie à ${new Date(etat.quand).toLocaleTimeString('fr-FR')}`
+                : `échouée à ${new Date(etat.quand).toLocaleTimeString('fr-FR')}`}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-3 py-1" style={{ borderTop: `1px solid ${BORDER}` }}>
+          <dt>Emplacement</dt>
+          <dd className="text-right" style={{ color: INK }}>{ou || "aucun — rien n'est conservé"}</dd>
+        </div>
+        <div className="flex justify-between gap-3 py-1" style={{ borderTop: `1px solid ${BORDER}` }}>
+          <dt>Taille du dernier bloc</dt>
+          <dd style={{ color: INK }}>{tailleLisible(etat && etat.taille)}</dd>
+        </div>
+        <div className="flex justify-between gap-3 py-1" style={{ borderTop: `1px solid ${BORDER}` }}>
+          <dt>Conservation garantie</dt>
+          <dd className="text-right" style={{ color: INK }}>
+            {persistant === true ? 'oui, accordée par le navigateur'
+              : persistant === false ? 'non — le navigateur peut effacer sous pression disque'
+                : 'inconnue sur ce navigateur'}
+          </dd>
+        </div>
+      </dl>
+      {persistant === false && (
+        <p className="text-xs mt-2" style={{ color: INK_SOFT }}>
+          Une tablette réglée pour effacer les données de site à la fermeture les effacera malgré cet
+          enregistrement. Un export régulier reste la seule sauvegarde qui ne dépend pas du navigateur.
+        </p>
+      )}
+    </Card>
+  );
+}
+
 /* Carte « Hors ligne » : dit si l'application est prête à s'ouvrir sans
    réseau, ce qu'aucun écran ne disait avant cette version. Mêmes tokens que
    le reste du panneau Données — pas de bandeau d'alerte : sur une tablette
@@ -7847,7 +8273,7 @@ function CarteHorsLigne({ etat, onRafraichir }) {
   );
 }
 
-function PanneauDonnees({ appareil, onSetAppareil, classes, classeAppareil, onSetClasseAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup, onExportProfils, onExportProfilsComplet, etatHorsLigne, onRafraichirHorsLigne }) {
+function PanneauDonnees({ appareil, onSetAppareil, classes, classeAppareil, onSetClasseAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup, onExportProfils, onExportProfilsComplet, etatHorsLigne, onRafraichirHorsLigne, etatStockage, persistant }) {
   const fileRef = useRef(null);
   const [nom, setNom] = useState(appareil || '');
   useEffect(() => { setNom(appareil || ''); }, [appareil]);
@@ -8038,6 +8464,8 @@ function PanneauDonnees({ appareil, onSetAppareil, classes, classeAppareil, onSe
           );
         })()}
       </Card>
+
+      <CarteStockage etat={etatStockage} persistant={persistant} />
 
       <CarteHorsLigne etat={etatHorsLigne} onRafraichir={onRafraichirHorsLigne} />
     </div>

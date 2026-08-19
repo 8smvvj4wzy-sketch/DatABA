@@ -327,7 +327,12 @@ t('des mesures auxiliaires validées, et d’autres jamais mesurées', [
   entrees.some((e) => e.mesures.compteur.valideA || e.mesures.chrono.valideA),
   entrees.some((e) => !e.mesures.compteur.valideA && !e.mesures.chrono.valideA),
 ], [true, true]);
-t('des étapes d’Équilibre écartées du calcul', entrees.some((e) => (e.trials || []).some((tr) => tr.steps && Object.values(tr.steps).some((x) => x.outcome === 'manque'))), true);
+/* `trials` ne porte pas la même chose selon le mode : en Équilibre, des objets
+   `{ steps }` ; en Essais, des codes de cotation et des `null` pour les essais
+   prévus mais non cotés (`Array(trialCount).fill(null)`). Balayer toutes les
+   entrées sans distinction faisait donc lire `.steps` sur `null` et cette suite
+   plantait avant d'annoncer quoi que ce soit. */
+t('des étapes d’Équilibre écartées du calcul', entrees.some((e) => (e.trials || []).some((tr) => tr && tr.steps && Object.values(tr.steps).some((x) => x.outcome === 'manque'))), true);
 
 /* Suivi continu : la frise se lit en segments, et un segment n'est borné que
    par le relevé suivant ou par une clôture. Sans journée laissée ouverte, le
