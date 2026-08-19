@@ -117,6 +117,9 @@ Utilisée pour les guidances, les types de cotation, les fonctions de crise et l
 
 **Character:** Une seule famille par rôle, sans appariement décoratif — conforme au mode Operate. Le mono marque les libellés courts et les données chiffrées (chronomètre, pourcentages), jamais le texte courant.
 
+Polices embarquées (`src/polices/`, `@font-face` dans `src/index.css`) plutôt
+que chargées depuis Google Fonts : nécessaire au hors-ligne, voir CLAUDE.md.
+
 ### Hierarchy
 - **Titre d'écran** (600, text-2xl) : `SectionTitle`, un par écran.
 - **Titre de bloc** (600, text-xl) : en-têtes de carte, titres de modale.

@@ -953,6 +953,13 @@ L'application attend le réseau 2,5 secondes au maximum avant d'ouvrir sa copie
 locale. Si l'attente se prolonge, signalez-le à la personne qui gère
 l'application.
 
+**L'application ne s'ouvre pas sans réseau.**
+Une seule ouverture en ligne suffit à la rendre utilisable ensuite sans
+réseau — y compris ses polices, qui ne sont plus chargées depuis internet.
+Après une mise à jour, une ouverture en ligne est de nouveau nécessaire, une
+seule, avant que le hors-ligne fonctionne à nouveau. Le panneau **Données**
+(menu ☰) dit si la tablette est prête : carte « Hors ligne ».
+
 **« Code incorrect » alors que le code est bon.**
 Vérifiez la longueur attendue (4 ou 6 chiffres). Si l'écran demande de valider
 manuellement, saisissez votre code entier puis appuyez sur **Valider**.

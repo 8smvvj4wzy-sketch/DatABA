@@ -8,6 +8,7 @@ import {
   Volume2, VolumeX, TrendingUp, Upload, Download, Award, UserCog, Sun, Pencil,
   ListOrdered, Copy, StickyNote, Star, SlidersHorizontal, EyeOff, Eye, Target, PauseCircle, Lock, GripVertical, CalendarClock, CalendarDays, Maximize2, Minimize2, Flag, BookmarkPlus, ClipboardList, Link2,
   Menu, ChevronLeft, ChevronDown, Activity, Database, HelpCircle, Moon, Info, School, CheckCircle2,
+  WifiOff,
 } from 'lucide-react';
 
 /* ==================== Design tokens ====================
@@ -85,18 +86,12 @@ const F_BODY = "'IBM Plex Sans', system-ui, sans-serif";
 const F_MONO = "'IBM Plex Mono', ui-monospace, monospace";
 
 function useFonts() {
+  /* Injectait autrefois un <link> vers fonts.googleapis.com — en double
+     avec celui d'index.html, retiré pour la même raison : les polices sont
+     désormais embarquées (src/polices/, @font-face dans src/index.css),
+     aucune requête réseau à l'exécution. Le nom garde « useFonts » pour ce
+     qu'il fait encore : les animations partagées ci-dessous. */
   useEffect(() => {
-    if (!document.getElementById('aba-fonts')) {
-      const link = document.createElement('link');
-      link.id = 'aba-fonts';
-      link.rel = 'stylesheet';
-      link.href =
-        'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap';
-      // Chargement non bloquant : l'affichage ne dépend jamais du réseau
-      link.media = 'print';
-      link.onload = () => { link.media = 'all'; link.onload = null; };
-      document.head.appendChild(link);
-    }
     if (!document.getElementById('aba-anim')) {
       const style = document.createElement('style');
       style.id = 'aba-anim';
@@ -850,6 +845,27 @@ const store = {
     }
   },
 };
+
+/* État lu pour la carte « Hors ligne » du panneau Données (CarteHorsLigne).
+   Rien n'affichait ce que le service worker avait réellement mis en cache :
+   un poste pouvait fonctionner en ligne des semaines sans qu'aucun signal ne
+   dise que le hors-ligne, lui, était cassé (voir CLAUDE.md, piège « Le
+   hors-ligne ne se découvre pas à l'exécution »). Interroge public/sw.js par
+   MessageChannel plutôt que de deviner depuis la page : la liste des
+   fichiers attendus n'existe plus que côté service worker, injectée au
+   build. */
+async function etatHorsLigneDe() {
+  if (!('serviceWorker' in navigator)) return { actif: false, raison: 'non-supporte' };
+  if (!navigator.serviceWorker.controller) return { actif: false, raison: 'aucun-controleur' };
+  const reponse = await new Promise((resolve) => {
+    const canal = new MessageChannel();
+    const delai = setTimeout(() => resolve(null), 2000);
+    canal.port1.onmessage = (e) => { clearTimeout(delai); resolve(e.data); };
+    navigator.serviceWorker.controller.postMessage({ type: 'etat' }, [canal.port2]);
+  });
+  if (!reponse) return { actif: true, raison: 'sans-reponse' };
+  return { actif: true, version: reponse.version, attendus: reponse.attendus, presents: reponse.presents };
+}
 
 /* ==================== Alerte d'intervalle (son + vibration) ==================== */
 let audioCtx = null;
@@ -4700,6 +4716,10 @@ function PassphraseModal({ mode, error, onSubmit, onClose }) {
 /* ==================== Application ==================== */
 function AbaApp() {
   useFonts();
+  // État lu par CarteHorsLigne (panneau Données) : voir etatHorsLigneDe.
+  const [etatHorsLigne, setEtatHorsLigne] = useState(null);
+  function rafraichirEtatHorsLigne() { etatHorsLigneDe().then(setEtatHorsLigne); }
+  useEffect(() => { rafraichirEtatHorsLigne(); }, []);
   /* Thème clair/sombre. Posé une première fois par le script bloquant de
      index.html (attribut data-theme sur <html>, avant le premier rendu) ;
      l'état ici ne fait que le lire et le faire suivre au bouton du tiroir.
@@ -6371,6 +6391,7 @@ function AbaApp() {
             retentionMonths={retentionMonths} onSetRetention={setRetentionMonths}
             onExportConfig={exportConfig} onExportBackup={exportBackup} onImportBackup={importBackup}
             onExportProfils={() => exportProfils('classe')} onExportProfilsComplet={() => exportProfils('complet')}
+            etatHorsLigne={etatHorsLigne} onRafraichirHorsLigne={rafraichirEtatHorsLigne}
           />
         );
       case 'guidances':
@@ -7778,7 +7799,55 @@ function PanneauMotsDePasse({ security, onChangePin, onDisableProtection }) {
 /* Les deux exports existaient déjà, mais sous deux boutons aux libellés
    proches. Ils sont présentés ici comme un seul choix explicite : avec ou sans
    données personnelles. */
-function PanneauDonnees({ appareil, onSetAppareil, classes, classeAppareil, onSetClasseAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup, onExportProfils, onExportProfilsComplet }) {
+/* Carte « Hors ligne » : dit si l'application est prête à s'ouvrir sans
+   réseau, ce qu'aucun écran ne disait avant cette version. Mêmes tokens que
+   le reste du panneau Données — pas de bandeau d'alerte : sur une tablette
+   qui passe l'essentiel de son temps hors réseau, c'est l'état normal, pas
+   un incident à signaler comme une écriture qui échoue. */
+function CarteHorsLigne({ etat, onRafraichir }) {
+  const pret = !!(etat && etat.actif && etat.attendus != null && etat.presents === etat.attendus);
+  const raison = !etat ? null
+    : etat.raison === 'non-supporte' ? "ce navigateur ne prend pas en charge les applications hors connexion"
+      : etat.raison === 'aucun-controleur' ? "pas encore actif sur cette page — un rechargement suffit, une fois la première ouverture terminée"
+        : etat.raison === 'sans-reponse' ? "actif, mais n'a pas répondu à temps à l'interrogation"
+          : null;
+  return (
+    <Card className="mb-4">
+      <div className="flex items-center gap-2 mb-2">
+        <WifiOff size={16} style={{ color: INK_SOFT }} />
+        <span className="font-semibold" style={{ fontFamily: F_DISPLAY }}>Hors ligne</span>
+      </div>
+      <p className="text-xs mb-3" style={{ color: INK_SOFT }}>
+        Une ouverture en ligne suffit à rendre l'application utilisable ensuite sans réseau : les
+        fichiers de cette version sont alors mis de côté sur cette tablette. Une nouvelle mise en
+        ligne de l'application redemande une ouverture en ligne — une seule — avant que le
+        hors-ligne fonctionne à nouveau, cette fois avec la nouvelle version.
+      </p>
+      {etat && raison && (
+        <p className="text-xs mb-3 rounded-lg px-2.5 py-2" style={{ color: texteLisibleSur(CRISIS), backgroundColor: CRISIS }}>
+          <strong>{etat.actif ? 'État incertain.' : 'Non disponible.'}</strong> {raison}
+        </p>
+      )}
+      <dl className="text-xs" style={{ color: INK_SOFT }}>
+        <div className="flex justify-between gap-3 py-1" style={{ borderTop: `1px solid ${BORDER}` }}>
+          <dt>Prêt sans réseau</dt>
+          <dd className="text-right" style={{ color: INK }}>
+            {!etat ? 'vérification en cours…'
+              : !etat.actif || etat.raison === 'sans-reponse' ? 'inconnu'
+                : pret ? 'oui' : `non — ${etat.presents ?? 0} sur ${etat.attendus ?? '?'} fichiers en cache`}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-3 py-1" style={{ borderTop: `1px solid ${BORDER}` }}>
+          <dt>Version en cache</dt>
+          <dd style={{ color: INK }}>{etat && etat.version ? etat.version : '—'}</dd>
+        </div>
+      </dl>
+      <Btn variant="ghost" onClick={onRafraichir} className="mt-2 text-xs">Revérifier</Btn>
+    </Card>
+  );
+}
+
+function PanneauDonnees({ appareil, onSetAppareil, classes, classeAppareil, onSetClasseAppareil, intervenants, poste, onChoisirPoste, retentionMonths, onSetRetention, onExportConfig, onExportBackup, onImportBackup, onExportProfils, onExportProfilsComplet, etatHorsLigne, onRafraichirHorsLigne }) {
   const fileRef = useRef(null);
   const [nom, setNom] = useState(appareil || '');
   useEffect(() => { setNom(appareil || ''); }, [appareil]);
@@ -7969,6 +8038,8 @@ function PanneauDonnees({ appareil, onSetAppareil, classes, classeAppareil, onSe
           );
         })()}
       </Card>
+
+      <CarteHorsLigne etat={etatHorsLigne} onRafraichir={onRafraichirHorsLigne} />
     </div>
   );
 }
