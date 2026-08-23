@@ -116,6 +116,24 @@ le piège ci-dessous.
   Renforcement de Manager.
 - **Le champ `source`.** Ici il désigne l'origine d'un relevé ; dans Manager il
   désigne la tablette d'origine. Il est renommé `origine` à l'import.
+- **Un chaînage et un Équilibre ne se lisent pas à leur score agrégé.**
+  « 14 % » est la moyenne de quatorze étapes : le chiffre est juste et ne dit
+  ni laquelle est tenue, ni laquelle bloque. `objectiveSteps` descend à
+  l'étape, `EtapesObjectif` l'affiche sous la courbe. Quatre règles s'y jouent,
+  **les mêmes qu'`objectifsAEtapes` côté Manager** — les deux applications
+  doivent rendre le même verdict sur les mêmes cotations, sans quoi la tablette
+  contredit le bilan qu'elle a produit : une étape non cotée ne produit aucun
+  point (elle n'a pas été présentée, ce n'est pas un échec) ; une issue `exclu`
+  sort du dénominateur mais **reste** dans la répartition affichée ; une séance
+  vaut **un** point par étape même en Équilibre, où elle compte plusieurs
+  essais ; une étape retirée de `config.steps` garde ses cotations passées, en
+  fin de liste. L'état d'une étape passe par `masteryStatus` : pas de seconde
+  définition de l'acquisition. La série d'une étape porte la **vraie date** de
+  séance et non un index — un critère en jours passe par `toDayPoints`, qui
+  regroupe sur `p.date`. `tests/test_etapes.mjs` couvre le tout.
+  `seancesRetenues` est extraite d'`objectivePoints` pour que la courbe et le
+  détail portent sur exactement les mêmes séances (reprise de suivi, cible en
+  cours) ; les deux doivent continuer d'y passer.
 - **Test d'abord pour la logique de données.** Les fonctions de calcul sont
   couvertes par `tests/*.mjs` avant que la couche d'affichage existe. Les tests
   extraient les fonctions de `src/App.jsx` plutôt que d'en recopier une version

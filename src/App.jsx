@@ -3054,13 +3054,30 @@ function reperesDePhase(points, historique) {
    applications. Le compromis assumé : basculer un peu trop tôt sur deux
    lignes sur un grand écran plutôt que laisser deux noms se chevaucher sur un
    petit. */
+/* `largeurTrace` était figée à la référence pour toutes les tailles de
+   graphique. Sur la tablette, la courbe du suivi fait 170 px de haut et le
+   comportement ne change pas — mais Manager affiche la même fonction en plein
+   écran, où un nom de phase se retrouvait tronqué à 18 caractères alors que la
+   place ne manquait pas : « Renforcement différentiel d'un comportement
+   alternatif » y sortait en « Renforcement diff… ». La troncature est donc
+   devenue une PART de la largeur déclarée par l'appelant, et non plus une
+   constante : PART_MAX_REPERE × 360 / 5,6 = 18, exactement la limite d'avant.
+   Le défaut ne bouge pas d'un caractère ; seul un appelant qui annonce plus de
+   place en obtient davantage. Repris ici à l'identique de Manager pour que les
+   deux copies ne divergent pas — c'est la même règle, elle doit rendre le même
+   résultat sur les deux applications. */
 const LARGEUR_TRACE_REF = 360;
 const PX_PAR_CARACTERE = 5.6;
-function placerEtiquettesReperes(reperes, nbPoints) {
+const PART_MAX_REPERE = 0.28;
+const MIN_CAR_REPERE = 18;
+const MAX_CAR_REPERE = 46;
+function placerEtiquettesReperes(reperes, nbPoints, largeurTrace = LARGEUR_TRACE_REF) {
   const dernierParLigne = [null, null];
+  const maxCar = Math.min(MAX_CAR_REPERE, Math.max(MIN_CAR_REPERE,
+    Math.floor((largeurTrace * PART_MAX_REPERE) / PX_PAR_CARACTERE)));
   return reperes.map((r) => {
-    const texte = r.name.length > 18 ? `${r.name.slice(0, 17)}…` : r.name;
-    const demi = Math.min(0.45, (texte.length * PX_PAR_CARACTERE) / 2 / LARGEUR_TRACE_REF);
+    const texte = r.name.length > maxCar ? `${r.name.slice(0, maxCar - 1)}…` : r.name;
+    const demi = Math.min(0.45, (texte.length * PX_PAR_CARACTERE) / 2 / largeurTrace);
     const pos = nbPoints > 1 ? r.index / (nbPoints - 1) : 0.5;
     const ancre = pos - demi < 0 ? 'start' : pos + demi > 1 ? 'end' : 'middle';
     const debut = ancre === 'start' ? pos : ancre === 'end' ? pos - 2 * demi : pos - demi;
@@ -3107,15 +3124,29 @@ function currentTarget(obj) {
   return targets.find((t) => !done.includes(t.id)) || null;
 }
 
-/* Points de progression d'un objectif, éventuellement limités à une cible */
-function objectivePoints(obj, studentId, sessions, guidances, targetId) {
-  const points = [];
+/* Les séances retenues pour le suivi d'un objectif, avec leur cotation. Trois
+   filtres : la reprise de suivi (`trackingResetAt` remet la courbe à zéro sans
+   supprimer les séances), la présence d'une cotation, et la cible en cours
+   quand l'objectif en a. Extrait d'`objectivePoints` : le détail par étape doit
+   porter exactement sur les mêmes séances que la courbe posée au-dessus de lui,
+   sans quoi les deux racontent la même période différemment. */
+function seancesRetenues(obj, studentId, sessions, targetId) {
+  const gardees = [];
   sessions.forEach((sess) => {
     if (obj.trackingResetAt && new Date(sess.date) < new Date(obj.trackingResetAt)) return;
     const entry = ((sess.data || {})[studentId] || {})[obj.id];
     if (!entry) return;
     if (targetId && entry.targetId && entry.targetId !== targetId) return;
     if (targetId && !entry.targetId) return;
+    gardees.push({ sess, entry });
+  });
+  return gardees;
+}
+
+/* Points de progression d'un objectif, éventuellement limités à une cible */
+function objectivePoints(obj, studentId, sessions, guidances, targetId) {
+  const points = [];
+  seancesRetenues(obj, studentId, sessions, targetId).forEach(({ sess, entry }) => {
     const sc = objectiveScore(obj, entry, guidances);
     if (!sc) return;
     points.push({
@@ -3126,6 +3157,143 @@ function objectivePoints(obj, studentId, sessions, guidances, targetId) {
     });
   });
   return points;
+}
+
+/* ==================== Suivi par étape ====================
+   Un chaînage et un Équilibre se cotent étape par étape, mais le suivi n'en
+   montrait que le score agrégé : une courbe unique, « 14 % », sans dire quelle
+   étape est tenue et laquelle bloque. C'est l'information dont l'éducateur a
+   besoin pour préparer la séance suivante, et elle est déjà en base.
+
+   Le pendant exact de `objectifsAEtapes` côté Manager : mêmes règles, même
+   forme de sortie, pour que la tablette et le poste des cadres ne racontent
+   jamais deux histoires différentes des mêmes cotations. La différence tient à
+   la source — ici l'objectif VIVANT (`obj.config.steps`), là-bas le snapshot le
+   plus récent embarqué dans la séance.
+
+   Quatre règles, les mêmes des deux côtés :
+   - une étape non cotée ne produit aucun point (elle n'a pas été présentée, ce
+     n'est pas un échec) ;
+   - une issue exclue sort du dénominateur mais reste dans la répartition
+     affichée : « étape manquée » est une information de terrain ;
+   - une séance vaut UN point par étape, même en Équilibre où elle compte
+     plusieurs essais — sinon une séance à six essais pèserait six fois une
+     séance à un dans le critère d'acquisition ;
+   - une étape retirée de `config.steps` garde ses cotations passées, en fin de
+     liste : ce que la configuration ne déclare plus a bien été coté.
+
+   L'état d'une étape est celui de `masteryStatus`, la règle d'acquisition de
+   l'application, appliquée à la série de l'étape. Pas de seconde définition. */
+const STEP_TYPES = ['chaining', 'balance'];
+
+function objectiveSteps(obj, studentId, sessions, guidances, targetId) {
+  if (!STEP_TYPES.includes(obj.type)) return null;
+  const declarees = (obj.config && obj.config.steps) || [];
+  const gList = objectiveGuidances(obj, guidances);
+  const retenues = seancesRetenues(obj, studentId, sessions, targetId)
+    .slice()
+    .sort((a, b) => new Date(a.sess.date) - new Date(b.sess.date));
+
+  /* Une entrée par identifiant d'étape, y compris celles qui ne sont plus
+     déclarées : l'ordre final les remet à leur place, ou à la fin. */
+  const par = new Map();
+  /* La série d'une étape porte la vraie date de séance, pas un index : un
+     critère exprimé en jours (`unit: 'days'`) passe par `toDayPoints`, qui
+     regroupe sur `p.date`. Un index y aurait fait passer chaque cotation pour
+     un jour distinct. */
+  const noter = (id, nom, date, valeur, marque) => {
+    if (!par.has(id)) par.set(id, { id, nom, serie: [], repartition: {}, renforce: 0, demande: 0 });
+    const e = par.get(id);
+    if (nom) e.nom = nom;
+    if (valeur != null) {
+      e.serie.push({
+        date,
+        label: new Date(date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }),
+        value: valeur,
+      });
+    }
+    if (marque) e.repartition[marque] = (e.repartition[marque] || 0) + 1;
+    return e;
+  };
+
+  const seances = [];
+  let essaisCotes = 0, renforces = 0, demandes = 0;
+
+  retenues.forEach(({ sess, entry }) => {
+    const parEtape = {};
+    if (obj.type === 'chaining') {
+      declarees.forEach((st) => {
+        const code = (entry.steps || {})[st.id];
+        if (!code) return;
+        parEtape[st.id] = code;
+        noter(st.id, st.name, sess.date, isIndependentCode(gList, code) ? 100 : 0, code);
+      });
+      /* Une étape cotée dont la configuration ne parle plus : elle n'est pas
+         dans `declarees`, elle doit tout de même remonter. */
+      Object.keys(entry.steps || {}).forEach((id) => {
+        if (declarees.some((st) => st.id === id)) return;
+        const code = entry.steps[id];
+        if (!code) return;
+        parEtape[id] = code;
+        noter(id, null, sess.date, isIndependentCode(gList, code) ? 100 : 0, code);
+      });
+    } else {
+      const essais = balanceTrials(entry);
+      essaisCotes += essais.filter((tr) => Object.values(tr.steps || {}).some((e) => e && e.outcome)).length;
+      /* Les étapes vues dans cette cotation, déclarées ou non — même raison
+         que ci-dessus pour le chaînage. */
+      const ids = new Set(declarees.map((st) => st.id));
+      essais.forEach((tr) => Object.keys(tr.steps || {}).forEach((id) => ids.add(id)));
+      ids.forEach((id) => {
+        const st = declarees.find((x) => x.id === id);
+        let reussi = 0, notes = 0, derniere = null;
+        essais.forEach((tr) => {
+          const e = (tr.steps || {})[id];
+          if (!e) return;
+          const cible = noter(id, st ? st.name : null, sess.date, null, null);
+          if (e.demande) { demandes += 1; cible.demande += 1; }
+          if (e.renforce) { renforces += 1; cible.renforce += 1; }
+          if (!e.outcome) return;
+          derniere = e.outcome;
+          noter(id, null, sess.date, null, e.outcome);
+          const meta = outcomeMeta(obj, e.outcome);
+          if (meta && meta.exclu) return;
+          notes += 1;
+          if (meta && meta.reussite) reussi += 1;
+        });
+        if (derniere) parEtape[id] = derniere;
+        if (notes) noter(id, null, sess.date, Math.round((reussi / notes) * 100), null);
+      });
+    }
+    if (Object.keys(parEtape).length) {
+      seances.push({
+        id: sess.id, date: sess.date,
+        label: new Date(sess.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }),
+        parEtape,
+      });
+    }
+  });
+
+  const ordre = declarees.map((st) => st.id);
+  const orphelines = Array.from(par.keys()).filter((id) => !ordre.includes(id));
+  const steps = [...ordre, ...orphelines]
+    .map((id) => par.get(id))
+    .filter(Boolean)
+    .map((e, i) => {
+      const cotations = e.serie.length;
+      return {
+        ...e,
+        nom: e.nom || e.id,
+        rang: i + 1,
+        declaree: ordre.includes(e.id),
+        cotations,
+        pct: cotations ? Math.round(e.serie.reduce((a, p) => a + p.value, 0) / cotations) : null,
+        dernier: cotations ? e.serie[cotations - 1].value : null,
+        mastery: cotations ? masteryStatus(obj, e.serie) : null,
+      };
+    });
+
+  return { steps, seances, renforcement: { essais: essaisCotes, renforces, demandes } };
 }
 
 /* Après enregistrement d'une séance : marque les cibles atteintes et avance.
@@ -13174,6 +13342,155 @@ function ResumeObjectifs({ students, sessions, guidances, onVoirGraphique }) {
   );
 }
 
+/* Détail par étape sous la courbe d'un chaînage ou d'un Équilibre. La courbe
+   agrégée dit « 14 % » sans dire quelle étape est tenue et laquelle bloque ;
+   c'est pourtant ce qu'on regarde pour préparer la séance suivante.
+
+   Un seul bloc de rendu pour les deux modes : les données diffèrent (un code de
+   guidance par étape d'un côté, une issue par étape et par essai de l'autre,
+   plus les marqueurs « demande » et « renforcé »), la lecture est la même —
+   CLAUDE.md, « composants partagés plutôt qu'implémentations parallèles ».
+
+   Replié par défaut : sur tablette, la place sous la courbe est comptée, et
+   c'est un détail qu'on vient chercher, pas un affichage permanent. */
+function EtapesObjectif({ obj, studentId, sessions, guidances, targetId }) {
+  const [ouvert, setOuvert] = useState(false);
+  const analyse = objectiveSteps(obj, studentId, sessions, guidances, targetId);
+  if (!analyse || !analyse.steps.length) return null;
+
+  /* Les clés du jeu, dans l'ordre déclaré ; une clé rencontrée dans les
+     cotations sans y figurer (code retiré depuis) passe à la suite plutôt que
+     de disparaître — même règle que pour une étape retirée de la chaîne. */
+  const jeu = obj.type === 'chaining'
+    ? objectiveGuidances(obj, guidances).map((g) => ({ k: g.code, label: g.label || g.code, court: g.code, color: g.color }))
+    : balanceOutcomes(obj).map((o) => ({ k: o.k, label: o.label || o.k, court: o.short || o.k, color: o.color }));
+  const vues = new Set();
+  analyse.steps.forEach((s) => Object.keys(s.repartition).forEach((k) => vues.add(k)));
+  const cles = [...jeu, ...Array.from(vues).filter((k) => !jeu.some((j) => j.k === k))
+    .map((k, i) => ({ k, label: k, court: k, color: GUIDANCE_PALETTE[i % GUIDANCE_PALETTE.length] }))];
+  const meta = (k) => cles.find((c) => c.k === k) || { label: k, court: k, color: INK_SOFT };
+
+  const acquises = analyse.steps.filter((s) => s.mastery && s.mastery.mastered).length;
+  const cotees = analyse.steps.filter((s) => s.cotations > 0).length;
+
+  return (
+    <div className="mt-2">
+      <button onClick={() => setOuvert(!ouvert)} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
+        <ListOrdered size={12} />
+        {acquises}/{cotees} étape{cotees > 1 ? 's' : ''} acquise{acquises > 1 ? 's' : ''}
+        <ChevronRight size={12} style={{ transform: ouvert ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
+      </button>
+
+      {ouvert && (
+        <div className="mt-2 space-y-1.5">
+          {analyse.steps.map((s) => {
+            const total = Object.values(s.repartition).reduce((a, n) => a + n, 0);
+            return (
+              <div key={s.id} className="rounded-xl px-2.5 py-2" style={{ backgroundColor: PAPER }}>
+                <div className="flex items-start gap-2">
+                  <span className="text-xs w-5 shrink-0 pt-0.5" style={{ fontFamily: F_MONO, color: INK_SOFT }}>{s.rang}</span>
+                  <span className="text-sm flex-1 leading-snug break-words">
+                    {s.nom}
+                    {/* Une étape que la configuration ne déclare plus : ses
+                        cotations restent, le dire évite de la lire comme une
+                        étape courante de la chaîne. */}
+                    {!s.declaree && <span style={{ color: INK_SOFT }}> · retirée de la chaîne</span>}
+                  </span>
+                  {s.mastery && (
+                    <span className="text-xs shrink-0 rounded-lg px-2 py-0.5"
+                      style={{
+                        backgroundColor: s.mastery.mastered ? CAT_TEAL : 'transparent',
+                        color: s.mastery.mastered ? texteLisibleSur(CAT_TEAL) : INK_SOFT,
+                        fontFamily: F_DISPLAY,
+                      }}>
+                      {s.mastery.mastered
+                        ? 'Acquise'
+                        : `${s.mastery.streak}/${s.mastery.needed} ${s.mastery.unit === 'days' ? 'j' : 'séances'}`}
+                    </span>
+                  )}
+                  <span className="text-xs shrink-0 w-12 text-right" style={{ fontFamily: F_MONO, color: s.pct == null ? INK_SOFT : INK }}>
+                    {s.pct == null ? '—' : `${s.pct} %`}
+                  </span>
+                </div>
+                {total > 0 && (
+                  <div className="flex items-center gap-2 mt-1.5 pl-7">
+                    {/* La proportion se lit à la largeur. Un fond posé en style
+                        inline s'imprime grâce à la règle print-color-adjust de
+                        la feuille — voir le rapport de Manager. */}
+                    <span className="inline-flex h-2 rounded-full overflow-hidden flex-1" style={{ backgroundColor: CARD }}>
+                      {cles.filter((c) => s.repartition[c.k]).map((c) => (
+                        <span key={c.k} title={`${c.label} : ${s.repartition[c.k]}`}
+                          style={{ width: `${(s.repartition[c.k] / total) * 100}%`, backgroundColor: c.color }} />
+                      ))}
+                    </span>
+                    {obj.type === 'balance' && (s.renforce > 0 || s.demande > 0) && (
+                      <span className="text-xs shrink-0" style={{ color: INK_SOFT, fontFamily: F_MONO }}>
+                        {s.renforce} renf. · {s.demande} dem.
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {obj.type === 'balance' && analyse.renforcement.essais > 0 && (
+            <p className="text-xs" style={{ color: INK_SOFT }}>
+              {analyse.renforcement.renforces} renforcement{analyse.renforcement.renforces > 1 ? 's' : ''} et{' '}
+              {analyse.renforcement.demandes} demande{analyse.renforcement.demandes > 1 ? 's' : ''} sur{' '}
+              {analyse.renforcement.essais} essai{analyse.renforcement.essais > 1 ? 's' : ''} cotés — les marqueurs
+              posés en séance, comptés étape par étape ci-dessus.
+            </p>
+          )}
+
+          {/* Séance par séance. `data-no-swipe` : le balayage change d'écran,
+              sans cet attribut faire défiler la grille quitterait le suivi. */}
+          <div className="overflow-x-auto -mx-1 px-1" data-no-swipe>
+            <table className="text-xs" style={{ borderCollapse: 'separate', borderSpacing: '2px' }}>
+              <thead>
+                <tr>
+                  <th className="text-left font-normal sticky left-0" style={{ color: INK_SOFT, backgroundColor: CARD, minWidth: 130 }}>Étape</th>
+                  {analyse.seances.map((s) => (
+                    <th key={s.id} className="font-normal px-1" style={{ color: INK_SOFT, fontFamily: F_MONO }}>{s.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {analyse.steps.map((s) => (
+                  <tr key={s.id}>
+                    <td className="sticky left-0 pr-2" style={{ backgroundColor: CARD }}>
+                      <span style={{ color: INK_SOFT, fontFamily: F_MONO }}>{s.rang}</span> {s.nom}
+                    </td>
+                    {analyse.seances.map((se) => {
+                      const cle = se.parEtape[s.id];
+                      const m = cle ? meta(cle) : null;
+                      return (
+                        <td key={se.id} className="text-center">
+                          {m ? (
+                            <span className="inline-block rounded px-1.5 py-0.5" title={m.label}
+                              style={{ backgroundColor: m.color, color: texteLisibleSur(m.color), fontFamily: F_MONO }}>
+                              {m.court}
+                            </span>
+                          ) : (
+                            /* Non cotée, ce qui n'est pas un échec : un point,
+                               jamais une couleur qui la ferait lire comme une
+                               issue. */
+                            <span style={{ color: INK_SOFT }}>·</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChangePhase, onRepere, onOuvrirObjectif }) {
   const meta = typeMeta(obj.type);
   const Icon = meta.icon;
@@ -13308,6 +13625,14 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
           </ResponsiveContainer>
         </div>
       )}
+
+      {/* Détail par étape, pour les deux modes qui s'y décomposent. Sous la
+          courbe et non à sa place : le score agrégé garde son sens, il ne
+          suffisait simplement pas. Même cible que la courbe (`cible`), sans
+          quoi les deux porteraient sur des cotations différentes. */}
+      <EtapesObjectif obj={obj} studentId={studentId} sessions={sessions} guidances={guidances}
+        targetId={cible ? cible.id : null} />
+
       <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
         {onChangePhase && <BoutonPhase obj={obj} onChange={onChangePhase} onRepere={onRepere} />}
         {onOuvrirObjectif && (

@@ -40,7 +40,7 @@ function extraireLigne(nom) {
 }
 
 const NOMS = ['phaseHistory', 'currentPhase', 'reperesDePhase', 'placerEtiquettesReperes', 'appliquerPhaseChoisie'];
-const CONSTANTES = ['LARGEUR_TRACE_REF', 'PX_PAR_CARACTERE'];
+const CONSTANTES = ['LARGEUR_TRACE_REF', 'PX_PAR_CARACTERE', 'PART_MAX_REPERE', 'MIN_CAR_REPERE', 'MAX_CAR_REPERE'];
 function uid() { return Math.random().toString(36).slice(2, 9); }
 const code = `const DEFAULT_PHASES = ${extraireLigne('DEFAULT_PHASES')};\n`
   + CONSTANTES.map((c) => `const ${c} = ${extraireLigne(c)};`).join('\n') + '\n'
@@ -123,6 +123,20 @@ const troisProches = [
   { id: 'f3', name: 'Maintien', repere: false, index: 3 },
 ];
 t('un troisième chevauchement consécutif revient en ligne 0', placerEtiquettesReperes(troisProches, 10).map((p) => p.ligne), [0, 1, 0]);
+
+/* La troncature n'est plus une constante mais une part de la largeur de tracé
+   déclarée par l'appelant. Les cas ci-dessus, sans troisième argument, ont déjà
+   vérifié que le DÉFAUT n'a pas bougé d'un caractère — c'est ce qui autorise le
+   reste. Ceux-ci vérifient l'autre bout : là où la place existe (Manager
+   affiche la même fonction en plein écran), un nom de phase entier ne doit plus
+   être coupé. */
+t('sur un tracé large, un nom de 31 caractères passe entier',
+  placerEtiquettesReperes([{ id: 'g', name: 'Renforcement différé progressif', repere: false, index: 2 }], 5, 1180)[0].texte,
+  'Renforcement différé progressif');
+t('la troncature reste bornée même sur un tracé large',
+  placerEtiquettesReperes([{ id: 'h', name: 'x'.repeat(80), repere: false, index: 2 }], 5, 1180)[0].texte.length, 46);
+t('un tracé plus étroit que la référence ne tronque pas davantage',
+  placerEtiquettesReperes([{ id: 'i', name: 'Renforcement différé progressif', repere: false, index: 2 }], 5, 200)[0].texte.length, 18);
 
 /* ==================== appliquerPhaseChoisie ==================== */
 const originePasDatee = [{ id: 'p0', name: 'Ligne de base', date: null }];
