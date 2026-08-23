@@ -29,6 +29,44 @@ node scripts/generer-demo.mjs --fin 2026-08-12 --graine 42
 
 À paramètres égaux le fichier est identique, octet pour octet.
 
+## Montrer les ateliers de l'établissement plutôt que ceux du script
+
+Les ateliers, l'emploi du temps et le catalogue d'objectifs ci-dessous sont
+ceux du script. Devant une équipe qui a programmé les siens, ils ne parlent à
+personne. `--config` les remplace par ceux d'un établissement réel, lus dans
+une sauvegarde de la tablette :
+
+```bash
+node scripts/generer-demo.mjs --config sauvegarde-aba-2026-08-23.json --sortie ./local
+```
+
+Le fichier attendu est une **sauvegarde `aba-backup` v4 sans chiffrement**
+(onglet Export de DatABA). L'export de configuration (`aba-config`) ne
+convient pas : il retire `usualObjectives`, et c'est précisément là que se
+trouve le lien entre un atelier et les objectifs qu'on y travaille.
+
+Ce que le fichier apporte : les **noms** d'ateliers, l'emploi du temps, les
+objectifs de chaque atelier avec leur mode et leur configuration, et le jeu de
+guidances. Ce qui reste du script : les dix personnes fictives et leurs
+trajectoires, les intervenants, les unités, les axes de suivi continu. Aucune
+initiale, aucune séance, aucun relevé, aucune crise ne traverse — seuls des
+libellés de configuration.
+
+Trois limites, à connaître avant de s'appuyer dessus en réunion :
+
+- **Les heures sont déduites.** Un atelier de DatABA n'a pas de créneau
+  horaire, seulement un rang dans la journée : les ateliers sont étalés entre
+  8 h 30 et 16 h 30 dans l'ordre de l'emploi du temps. L'heure affichée n'est
+  pas l'heure réelle.
+- **Un objectif d'un mode que le générateur ne sait pas coter est écarté**, et
+  la commande le dit nommément. Elle signale aussi les couples
+  personne-objectif trop peu cotés pour montrer une acquisition — le cas d'un
+  objectif travaillé dans un seul atelier programmé une fois par semaine.
+- **Le fichier produit ne se versionne pas.** Il porte des libellés
+  d'établissement et ce dépôt est public : `.gitignore` couvre `local/` et les
+  sauvegardes déposées à la racine. Les deux fichiers de `demo/` restent, eux,
+  ceux du référentiel du script.
+
 ## Ce que contient le jeu
 
 Dix personnes accompagnées, désignées par leurs initiales, réparties en deux

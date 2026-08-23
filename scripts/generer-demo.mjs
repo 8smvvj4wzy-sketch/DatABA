@@ -2,6 +2,14 @@
 /* Générateur du jeu de démonstration : trois mois de cotation.
  *
  *   node scripts/generer-demo.mjs [--fin AAAA-MM-JJ] [--graine N] [--sortie demo/]
+ *                                 [--config sauvegarde.json]
+ *
+ * `--config` remplace le référentiel du script (ateliers, emploi du temps,
+ * catalogue d'objectifs, guidances) par celui d'un établissement réel, lu
+ * dans une sauvegarde `aba-backup` v4 — voir
+ * `scripts/referentiel-depuis-sauvegarde.mjs`. Les personnes restent
+ * fictives, et le fichier produit ne doit pas être versionné : il porte des
+ * libellés d'établissement, et ce dépôt est public.
  *
  * Produit une sauvegarde `aba-backup` v4 en clair, importable telle quelle
  * dans DatABA (restauration complète) comme dans DatABA Manager (fusion), et
@@ -30,9 +38,10 @@
  * vite comme une évaluation de professionnel, autant ne pas y mettre de nom.
  */
 
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { referentielDepuisSauvegarde } from './referentiel-depuis-sauvegarde.mjs';
 
 /* ==================== 1. Hasard reproductible ==================== */
 
@@ -68,9 +77,14 @@ function melanger(rng, liste) {
 /* Tous les identifiants sont préfixés : fusionnés dans un Manager qui contient
    déjà de vraies données, ils ne peuvent alors pas entrer en collision avec un
    `uid()` de tablette — et ils se repèrent à l'œil dans un export. */
-const P = 'demo';
+export const P = 'demo';
 const idPersonne = (ini) => `${P}-p-${ini.replace(/\./g, '').toLowerCase()}`;
 const idObjectif = (ini, cle) => `${P}-o-${ini.replace(/\./g, '').toLowerCase()}-${cle}`;
+/* La clé de catalogue se relit dans l'identifiant de l'objectif : c'est par
+   elle que la trajectoire assignée à une personne se retrouve au moment de
+   coter. D'où la contrainte, tenue par le référentiel importé comme par
+   celui d'origine : **une clé ne contient jamais de tiret**. */
+const cleDObjectif = (oid) => oid.split('-').pop();
 
 /* ==================== 2. Calendrier ==================== */
 
@@ -434,7 +448,9 @@ export const CATALOGUE = [
   },
 ];
 
-const parCle = new Map(CATALOGUE.map((o) => [o.cle, o]));
+/* Indexation du catalogue par clé. Construite à la demande depuis le
+   référentiel en vigueur — un référentiel importé apporte le sien. */
+const indexerCatalogue = (catalogue) => new Map(catalogue.map((o) => [o.cle, o]));
 
 /* ==================== 5. Trajectoires ==================== */
 
@@ -484,8 +500,8 @@ const FORMES = {
 
 /* Deux formes ne se calculent pas sur le niveau mais sur le calendrier : elles
    décident *si* l'objectif est coté, pas à quelle hauteur. */
-const FORME_DORMANTE = 'dormant';
-const FORME_JAMAIS = 'jamais';
+export const FORME_DORMANTE = 'dormant';
+export const FORME_JAMAIS = 'jamais';
 
 export const PERSONNES = [
   {
@@ -686,8 +702,9 @@ export const TYPES_PRIORITAIRES = ['trials', 'occurrence'];
 
 /* ==================== 6. Construction des personnes ==================== */
 
-function construirePersonnes() {
-  return PERSONNES.map((p) => {
+function construirePersonnes(ref) {
+  const parCle = indexerCatalogue(ref.catalogue);
+  return ref.personnes.map((p) => {
     const cles = Object.keys(p.objectifs);
     /* La contrainte sur les prioritaires se vérifie ici plutôt que dans le
        test : une table mal remplie doit faire échouer la génération, pas
@@ -727,7 +744,7 @@ function construirePersonnes() {
     return {
       id: idPersonne(p.ini),
       initials: p.ini,
-      classeId: CLASSES[p.classe].id,
+      classeId: ref.classes[p.classe].id,
       objectives,
       /* L'axe d'engagement n'est relevé que pour une partie des personnes :
          un suivi continu activé pour tout le monde ne ressemble à aucun
@@ -764,12 +781,12 @@ const LIBELLES_PROCEDURE = [
   'Estompage du signal',
 ];
 
-function construireTrajectoires(rng, personnes) {
+function construireTrajectoires(ref, rng, personnes) {
   const trajectoires = new Map();
   personnes.forEach((personne) => {
-    const profil = PERSONNES.find((x) => x.ini === personne.initials);
+    const profil = ref.personnes.find((x) => x.ini === personne.initials);
     personne.objectives.forEach((obj) => {
-      const cle = obj.id.split('-').pop();
+      const cle = cleDObjectif(obj.id);
       const forme = profil.objectifs[cle];
       const cleTraj = `${personne.id}|${obj.id}`;
       if (forme === FORME_JAMAIS) { trajectoires.set(cleTraj, null); return; }
@@ -800,7 +817,13 @@ function phaseCourante(histo) {
 /* Traduit un niveau (0 à 1) en cotation réelle du mode concerné. C'est le seul
    endroit qui connaît la forme d'une entrée : ajouter un mode de cotation à
    l'application se répercute ici et nulle part ailleurs. */
-function entreeDepuisNiveau(obj, niveau, rng, contexte) {
+function entreeDepuisNiveau(ref, obj, niveau, rng, contexte) {
+  /* Le code d'indépendance n'est pas toujours « I » : un établissement
+     renomme son jeu de guidances, et Manager le lit dans `guidances`
+     (piège `_guidances`). L'écrire en dur ici ferait diverger deux
+     pourcentages sans le dire. */
+  const IND = ref.codeIndependant;
+  const NON_IND = ref.codesNonIndependants;
   const c = obj.config || {};
   const mesures = mesuresPour(obj, niveau, rng, contexte);
   const base = { targetId: contexte.targetId || null, mesures };
@@ -809,7 +832,7 @@ function entreeDepuisNiveau(obj, niveau, rng, contexte) {
     const n = c.trialCount || 10;
     const reussis = Math.round(niveau * n);
     const codes = [];
-    for (let i = 0; i < n; i++) codes.push(i < reussis ? 'I' : parmi(rng, NON_INDEPENDANTS));
+    for (let i = 0; i < n; i++) codes.push(i < reussis ? IND : parmi(rng, NON_IND));
     return { ...base, trials: melanger(rng, codes), running: false, startedAt: null };
   }
 
@@ -856,7 +879,7 @@ function entreeDepuisNiveau(obj, niveau, rng, contexte) {
     const ordre = melanger(rng, etps.map((s) => s.id));
     const steps = {};
     ordre.forEach((sid, rang) => {
-      steps[sid] = rang < reussis ? 'I' : parmi(rng, NON_INDEPENDANTS);
+      steps[sid] = rang < reussis ? IND : parmi(rng, NON_IND);
     });
     return { ...base, steps };
   }
@@ -893,7 +916,7 @@ function entreeDepuisNiveau(obj, niveau, rng, contexte) {
        la variabilité d'un vrai probe. */
     const reussi = niveau >= 0.75 ? 1 : rng() < niveau ? 1 : 0;
     if (c.useGuidance) {
-      return { ...base, value: null, guidance: reussi ? 'I' : parmi(rng, NON_INDEPENDANTS), creneau: contexte.creneau };
+      return { ...base, value: null, guidance: reussi ? IND : parmi(rng, NON_IND), creneau: contexte.creneau };
     }
     return { ...base, value: reussi, guidance: null, creneau: contexte.creneau };
   }
@@ -930,12 +953,14 @@ function mesuresPour(obj, niveau, rng, contexte) {
 /* Qui participe à quel atelier, à quelle date. Le tirage est stable pour une
    graine donnée, mais varie d'un jour à l'autre : un groupe figé sur trois
    mois ne ressemble à rien et rendrait le croisement par atelier illisible. */
-function participants(rng, personnes, atelierId, indexJour) {
-  const dispo = personnes.filter((p) => {
-    if (atelierId === `${P}-a-cuisine`) return p.classeId === CLASSES[1].id || (indexJour + p.initials.charCodeAt(0)) % 3 === 0;
-    if (atelierId === `${P}-a-social`) return p.classeId === CLASSES[0].id || (indexJour + p.initials.charCodeAt(0)) % 3 === 1;
-    return true;
-  });
+function participants(ref, rng, personnes, atelierId, indexJour) {
+  /* Qu'un atelier soit fréquenté surtout par une unité dépend de
+     l'établissement : l'affinité est déclarée dans le référentiel plutôt
+     qu'écrite ici. Un atelier sans affinité accueille tout le monde. */
+  const aff = (ref.affinites || {})[atelierId];
+  const dispo = aff
+    ? personnes.filter((p) => p.classeId === ref.classes[aff.classe].id || (indexJour + p.initials.charCodeAt(0)) % 3 === aff.reste)
+    : personnes;
   const melange = melanger(rng, dispo);
   return melange.slice(0, entier(rng, 3, 4));
 }
@@ -947,9 +972,15 @@ function participants(rng, personnes, atelierId, indexJour) {
    trois mois, chacun reçoit ainsi un nombre de cotations comparable,
    condition pour que les courbes et les critères d'acquisition soient
    lisibles. */
-function objectifsDeLaSeance(personne, compteurs, nb) {
-  const prioritaires = personne.objectives.filter((o) => o.favorite).map((o) => o.id);
-  const autres = personne.objectives.filter((o) => !o.favorite).map((o) => o.id);
+function objectifsDeLaSeance(personne, compteurs, nb, autorise) {
+  /* `autorise` restreint le tirage aux objectifs que CET atelier travaille.
+     Le référentiel par défaut ne déclare pas ce rattachement et ne filtre
+     donc rien ; un référentiel importé le tient de `usualObjectives`. Le
+     filtre s'applique avant la rotation, jamais après : filtrer le résultat
+     rendrait des séances vides là où l'atelier a bien des objectifs. */
+  const eligibles = autorise ? personne.objectives.filter(autorise) : personne.objectives;
+  const prioritaires = eligibles.filter((o) => o.favorite).map((o) => o.id);
+  const autres = eligibles.filter((o) => !o.favorite).map((o) => o.id);
   const nAutres = Math.max(0, nb - prioritaires.length);
   const depart = compteurs.get(personne.id) || 0;
   if (autres.length) compteurs.set(personne.id, (depart + nAutres) % autres.length);
@@ -958,7 +989,7 @@ function objectifsDeLaSeance(personne, compteurs, nb) {
   return retenus;
 }
 
-function construireSeances(rng, personnes, calendrier, trajectoires) {
+function construireSeances(ref, rng, personnes, calendrier, trajectoires) {
   const seances = [];
   const compteurs = new Map();
   /* Un compteur de cotations par couple personne-objectif : les formes de
@@ -971,19 +1002,20 @@ function construireSeances(rng, personnes, calendrier, trajectoires) {
   const finDormance = ajouterJours(calendrier.fin, -30);
 
   calendrier.jours.forEach((jour, indexJour) => {
-    const ateliersDuJour = EMPLOI_DU_TEMPS[jourSemaine(jour)] || [];
+    const ateliersDuJour = ref.emploiDuTemps[jourSemaine(jour)] || [];
     ateliersDuJour.forEach((atelierId, rangAtelier) => {
-      const presents = participants(rng, personnes, atelierId, indexJour);
+      const presents = participants(ref, rng, personnes, atelierId, indexJour);
+      const travailles = ref.objectifsParAtelier ? ref.objectifsParAtelier[atelierId] : null;
       if (!presents.length) return;
       const selection = {};
       presents.forEach((p) => {
-        const profil = PERSONNES.find((x) => x.ini === p.initials);
+        const profil = ref.personnes.find((x) => x.ini === p.initials);
         /* Un démarrage tardif ne coche aucune séance avant son arrivée : la
            personne existe, elle n'est simplement pas encore suivie. */
         if (profil.objectifs && Object.values(profil.objectifs).every((f) => f === 'tardif') && jour < debutTardif) return;
-        const oids = objectifsDeLaSeance(p, compteurs, 4);
+        const oids = objectifsDeLaSeance(p, compteurs, 4, travailles ? (o) => travailles.has(cleDObjectif(o.id)) : null);
         const retenus = oids.filter((oid) => {
-          const cle = oid.split('-').pop();
+          const cle = cleDObjectif(oid);
           const forme = profil.objectifs[cle];
           /* Un objectif dormant cesse d'être coté un mois avant la fin : c'est
              ce qui le fait passer au-delà des vingt et un jours de dormance
@@ -1013,8 +1045,8 @@ function construireSeances(rng, personnes, calendrier, trajectoires) {
      alors sur la mauvaise cotation. Le tri final de `seances` (plus bas) ne
      corrige que l'ordre d'affichage, pas celui, antérieur, de matérialisation. */
   plan.sort((a, b) => {
-    const ta = horodatage(a.jour, CRENEAUX_ATELIER[a.atelierId].h, CRENEAUX_ATELIER[a.atelierId].min).getTime();
-    const tb = horodatage(b.jour, CRENEAUX_ATELIER[b.atelierId].h, CRENEAUX_ATELIER[b.atelierId].min).getTime();
+    const ta = horodatage(a.jour, ref.creneaux[a.atelierId].h, ref.creneaux[a.atelierId].min).getTime();
+    const tb = horodatage(b.jour, ref.creneaux[b.atelierId].h, ref.creneaux[b.atelierId].min).getTime();
     return ta - tb;
   });
 
@@ -1044,7 +1076,7 @@ function construireSeances(rng, personnes, calendrier, trajectoires) {
   const rangs = new Map();
   const phaseHistories = new Map();
   plan.forEach((etape, indexSeance) => {
-    seances.push(materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs, calendrier, trajectoires, phaseHistories));
+    seances.push(materialiserSeance(ref, rng, personnes, etape, indexSeance, prevision, rangs, calendrier, trajectoires, phaseHistories));
   });
 
   /* La trajectoire finale de chaque objectif — celle que verrait un
@@ -1073,12 +1105,12 @@ const NOTES = [
   'Bonne coopération sur les consignes de sécurité.',
 ];
 
-function materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs, calendrier, trajectoires, phaseHistories) {
+function materialiserSeance(ref, rng, personnes, etape, indexSeance, prevision, rangs, calendrier, trajectoires, phaseHistories) {
   const { jour, atelierId, rangAtelier, selection } = etape;
-  const creneau = CRENEAUX_ATELIER[atelierId];
+  const creneau = ref.creneaux[atelierId];
   const debut = horodatage(jour, creneau.h, creneau.min);
   const fin = new Date(debut.getTime() + creneau.duree * 60000);
-  const intervenant = INTERVENANTS[(etape.indexJour + rangAtelier) % INTERVENANTS.length];
+  const intervenant = ref.intervenants[(etape.indexJour + rangAtelier) % ref.intervenants.length];
   const id = `${P}-s-${jour.replace(/-/g, '')}-${rangAtelier + 1}`;
 
   const objectiveSnapshot = {};
@@ -1088,14 +1120,14 @@ function materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs
 
   Object.entries(selection).forEach(([sid, oids]) => {
     const personne = personnes.find((p) => p.id === sid);
-    const profil = PERSONNES.find((x) => x.ini === personne.initials);
+    const profil = ref.personnes.find((x) => x.ini === personne.initials);
     presence[sid] = { from: debut.getTime(), to: null };
     if (rng() < 0.12) notes[sid] = parmi(rng, NOTES);
     data[sid] = {};
 
     oids.forEach((oid) => {
       const obj = personne.objectives.find((o) => o.id === oid);
-      const cle = oid.split('-').pop();
+      const cle = cleDObjectif(oid);
       const forme = profil.objectifs[cle];
       const cible = cibleCourante(obj, personne, jour, calendrier);
       const cleRang = `${sid}|${oid}`;
@@ -1163,7 +1195,7 @@ function materialiserSeance(rng, personnes, etape, indexSeance, prevision, rangs
       niveau = Math.min(1, Math.max(0, niveau));
 
       const horo = new Date(debut.getTime() + entier(rng, 2, creneau.duree - 2) * 60000).toISOString();
-      data[sid][oid] = entreeDepuisNiveau(obj, niveau, rng, {
+      data[sid][oid] = entreeDepuisNiveau(ref, obj, niveau, rng, {
         targetId: cible ? cible.id : null,
         /* Le créneau n'existe que pour un probe à deux prises par jour ;
            l'application le calcule sur l'heure locale, avant ou après 13 h. */
@@ -1282,7 +1314,7 @@ const APPUIS_COMPTEUR = {
   'Y.Z.': [5, 5],
 };
 
-function construireSuivi(rng, personnes, calendrier, seances) {
+function construireSuivi(ref, rng, personnes, calendrier, seances) {
   const releves = [];
   const crisesDepuisSuivi = [];
   const parJour = new Map();
@@ -1295,7 +1327,7 @@ function construireSuivi(rng, personnes, calendrier, seances) {
   calendrier.jours.forEach((jour, indexJour) => {
     const seancesDuJour = parJour.get(jour) || [];
     personnes.forEach((personne) => {
-      const profil = PERSONNES.find((x) => x.ini === personne.initials);
+      const profil = ref.personnes.find((x) => x.ini === personne.initials);
       const crisePlus = profil.ini === 'R.S.';
       personne.suivisActifs.forEach((axeId) => {
         const principal = axeId === 'principal';
@@ -1305,7 +1337,7 @@ function construireSuivi(rng, personnes, calendrier, seances) {
              Ce n'est pas cosmétique : un relevé pris hors séance ne porte ni
              atelier ni intervenant, et Explorer ne peut alors pas croiser une
              durée de suivi par atelier — la mesure existe mais reste vide. */
-          const [h, base] = nb >= 4 ? HEURES_RELEVE[k] : HEURES_RELEVE[k + 1];
+          const [h, base] = nb >= 4 ? ref.heuresReleve[k] : ref.heuresReleve[k + 1];
           const min = base + entier(rng, 0, 8);
           const ts = horodatage(jour, h + Math.floor(min / 60), min % 60);
           /* Le relevé est rattaché à la séance en cours s'il y en a une :
@@ -1555,8 +1587,45 @@ function construireCrises(rng, crisesDepuisSuivi, seances, calendrier) {
 
 /* ==================== 11. Assemblage ==================== */
 
-function construireAteliers(personnes, seances) {
-  return ATELIERS.map((a) => {
+/* Tout ce qui décrit l'établissement — ateliers, emploi du temps, créneaux,
+   catalogue d'objectifs, guidances, unités, intervenants, axes — tient dans un
+   seul objet, passé en argument aux fonctions de génération plutôt que lu dans
+   la portée du module. C'est ce qui permet à `--config` de substituer le
+   référentiel réel d'un établissement sans dupliquer une ligne de génération.
+   Sans l'option, c'est celui-ci qui sert et le fichier produit ne bouge pas.
+
+   Il est déclaré ici, et pas en section 3 où il aurait sa place, parce qu'il
+   agrège des tables définies jusqu'à la section 9 : une déclaration plus haut
+   les lirait avant leur initialisation.
+
+   `affinites` dit quelles unités fréquentent un atelier plus qu'une autre :
+   `classe` est un index dans `classes`, `reste` celui de la rotation qui
+   ramène les autres un jour sur trois. Absent, l'atelier accueille tout le
+   monde. `objectifsParAtelier` restreint les objectifs cotés dans un atelier ;
+   il n'existe que pour un référentiel importé, qui le tient de
+   `usualObjectives`. */
+export const REFERENTIEL_DEFAUT = {
+  ateliers: ATELIERS,
+  emploiDuTemps: EMPLOI_DU_TEMPS,
+  creneaux: CRENEAUX_ATELIER,
+  affinites: {
+    [`${P}-a-social`]: { classe: 0, reste: 1 },
+    [`${P}-a-cuisine`]: { classe: 1, reste: 0 },
+  },
+  objectifsParAtelier: null,
+  catalogue: CATALOGUE,
+  personnes: PERSONNES,
+  guidances: GUIDANCES,
+  codeIndependant: 'I',
+  codesNonIndependants: NON_INDEPENDANTS,
+  classes: CLASSES,
+  intervenants: INTERVENANTS,
+  axes: AXES,
+  heuresReleve: HEURES_RELEVE,
+};
+
+function construireAteliers(ref, personnes, seances) {
+  return ref.ateliers.map((a) => {
     const usuels = new Set();
     const parJourSemaine = {};
     const objectifsUsuels = {};
@@ -1583,16 +1652,17 @@ function construireAteliers(personnes, seances) {
   });
 }
 
-export function genererDemo({ fin, graine = 42 } = {}) {
+export function genererDemo({ fin, graine = 42, referentiel } = {}) {
+  const ref = referentiel || REFERENTIEL_DEFAUT;
   const finJour = fin || jourDeDate(new Date());
   const rng = mulberry32(graine);
   const calendrier = construireCalendrier(finJour);
-  const personnes = construirePersonnes();
-  const trajectoires = construireTrajectoires(rng, personnes);
-  const seances = construireSeances(rng, personnes, calendrier, trajectoires);
-  const { releves, crisesDepuisSuivi } = construireSuivi(rng, personnes, calendrier, seances);
+  const personnes = construirePersonnes(ref);
+  const trajectoires = construireTrajectoires(ref, rng, personnes);
+  const seances = construireSeances(ref, rng, personnes, calendrier, trajectoires);
+  const { releves, crisesDepuisSuivi } = construireSuivi(ref, rng, personnes, calendrier, seances);
   const crises = construireCrises(rng, crisesDepuisSuivi, seances, calendrier);
-  const ateliers = construireAteliers(personnes, seances);
+  const ateliers = construireAteliers(ref, personnes, seances);
 
   const tablette1 = {
     format: 'aba-backup',
@@ -1605,19 +1675,19 @@ export function genererDemo({ fin, graine = 42 } = {}) {
     classeAppareil: '',
     students: personnes.map((p) => ({ ...p, groupeId: p.classeId })),
     ateliers,
-    emploiDuTemps: EMPLOI_DU_TEMPS,
-    intervenants: INTERVENANTS,
-    classes: CLASSES,
-    groupes: CLASSES,
-    guidances: GUIDANCES,
-    axesSuivi: AXES,
+    emploiDuTemps: ref.emploiDuTemps,
+    intervenants: ref.intervenants,
+    classes: ref.classes,
+    groupes: ref.classes,
+    guidances: ref.guidances,
+    axesSuivi: ref.axes,
     sessions: seances,
     crises,
     suivi: releves,
     stabilite: projeterStabilite(releves),
   };
 
-  const tablette2 = construireSecondeTablette(mulberry32(graine + 1), personnes, seances, finJour);
+  const tablette2 = construireSecondeTablette(ref, mulberry32(graine + 1), personnes, seances, finJour);
 
   return { tablette1, tablette2, calendrier, personnes };
 }
@@ -1630,9 +1700,9 @@ export function genererDemo({ fin, graine = 42 } = {}) {
    second fichier, réduit au strict nécessaire.
    Les personnes y portent les mêmes initiales mais d'autres identifiants —
    c'est exactement le cas réel, et Manager les rapproche par les initiales. */
-function construireSecondeTablette(rng, personnes, seances, finJour) {
+function construireSecondeTablette(ref, rng, personnes, seances, finJour) {
   const P2 = 'demo2';
-  const ateliers2 = ATELIERS.map((a) => ({
+  const ateliers2 = ref.ateliers.map((a) => ({
     id: a.id.replace(P, P2),
     name: a.name,
     usualStudentIds: [],
@@ -1711,7 +1781,7 @@ function construireSecondeTablette(rng, personnes, seances, finJour) {
         const nAChanger = Math.round(tauxDesaccord[index] * codes.length);
         const aChanger = melanger(rng, codes.map((_, i) => i)).slice(0, nAChanger);
         aChanger.forEach((i) => {
-          codes[i] = codes[i] === 'I' ? parmi(rng, NON_INDEPENDANTS) : 'I';
+          codes[i] = codes[i] === ref.codeIndependant ? parmi(rng, ref.codesNonIndependants) : ref.codeIndependant;
         });
         data[sid2][oid2] = {
           targetId: null,
@@ -1770,12 +1840,12 @@ function construireSecondeTablette(rng, personnes, seances, finJour) {
     classeAppareil: '',
     students: students2,
     ateliers: ateliers2,
-    emploiDuTemps: EMPLOI_DU_TEMPS,
+    emploiDuTemps: ref.emploiDuTemps,
     intervenants: intervenants2,
     classes: [],
     groupes: [],
-    guidances: GUIDANCES,
-    axesSuivi: AXES,
+    guidances: ref.guidances,
+    axesSuivi: ref.axes,
     sessions: sessions2.sort((a, b) => new Date(b.date) - new Date(a.date)),
     crises: [],
     suivi: [],
@@ -1792,6 +1862,7 @@ function lireArguments(argv) {
     if (a === '--fin') opts.fin = argv[++i];
     else if (a === '--graine') opts.graine = Number(argv[++i]);
     else if (a === '--sortie') opts.sortie = argv[++i];
+    else if (a === '--config') opts.config = argv[++i];
   }
   return opts;
 }
@@ -1804,7 +1875,30 @@ function principal(argv) {
   }
   const racine = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const sortie = resolve(racine, opts.sortie || 'demo');
-  const { tablette1, tablette2, calendrier } = genererDemo({ fin: opts.fin, graine: opts.graine });
+
+  /* Le référentiel réel d'un établissement remplace celui du script. Sans
+     `--config`, rien de tout cela ne s'exécute et le chemin par défaut reste
+     ce qu'il était, octet pour octet. */
+  let referentiel;
+  let resume;
+  if (opts.config) {
+    const chemin = resolve(process.cwd(), opts.config);
+    let brut;
+    try {
+      brut = JSON.parse(readFileSync(chemin, 'utf8'));
+    } catch (e) {
+      console.error(`Lecture impossible de ${chemin} : ${e.message}`);
+      process.exit(1);
+    }
+    try {
+      ({ referentiel, resume } = referentielDepuisSauvegarde(brut));
+    } catch (e) {
+      console.error(`Référentiel inutilisable — ${e.message}`);
+      process.exit(1);
+    }
+  }
+
+  const { tablette1, tablette2, calendrier } = genererDemo({ fin: opts.fin, graine: opts.graine, referentiel });
 
   mkdirSync(sortie, { recursive: true });
   const f1 = join(sortie, 'aba-demo-tablette-1.json');
@@ -1816,6 +1910,36 @@ function principal(argv) {
   writeFileSync(f1, `${JSON.stringify(tablette1)}\n`);
   writeFileSync(f2, `${JSON.stringify(tablette2)}\n`);
 
+  if (resume) {
+    console.log(`Référentiel  : ${opts.config}`);
+    console.log(`Ateliers     : ${resume.ateliers} déclarés, ${resume.programmes.length} programmés`);
+    resume.programmes.forEach((a) => console.log(`               ${a.heure}  ${a.nom} — ${a.objectifs} objectif(s)`));
+    console.log(`Objectifs    : ${resume.objectifs} repris`);
+    /* Ce qui n'a PAS été repris se dit aussi fort que ce qui l'a été : un
+       objectif silencieusement absent se découvre en réunion. */
+    resume.ecartes.forEach((e) => console.log(`  écarté     : ${e}`));
+    resume.avertissements.forEach((a) => console.log(`  attention  : ${a}`));
+    /* Un objectif trop peu coté ne démontre rien : Manager exige trois
+       cotations consécutives au seuil pour prononcer un acquis, et une
+       courbe de deux points ne se lit pas. Le cas se produit dès qu'un
+       objectif n'est travaillé que dans un atelier programmé une fois par
+       semaine — il vaut mieux le dire ici que le découvrir sur l'écran. */
+    const cotations = new Map();
+    tablette1.sessions.forEach((seance) => {
+      Object.entries(seance.data || {}).forEach(([sid, obs]) => {
+        Object.keys(obs).forEach((oid) => cotations.set(`${sid}|${oid}`, (cotations.get(`${sid}|${oid}`) || 0) + 1));
+      });
+    });
+    const maigres = [...cotations].filter(([, n]) => n < 4);
+    if (maigres.length) {
+      const noms = new Map(tablette1.students.flatMap((st) => st.objectives.map((o) => [o.id, o.name])));
+      const cites = [...new Set(maigres.map(([cle]) => noms.get(cle.split('|')[1])))].slice(0, 3);
+      console.log(`  attention  : ${maigres.length} couple(s) personne-objectif sous 4 cotations — trop peu pour montrer une acquisition (${cites.join(', ')}…)`);
+      console.log('               ces objectifs ne sont travaillés que dans un atelier peu programmé ; les rattacher à un second atelier les densifie.');
+    }
+    console.log('Les heures d’atelier sont déduites de l’ordre de l’emploi du temps — l’application n’en stocke aucune.');
+    console.log('');
+  }
   console.log(`Période      : ${calendrier.debut} → ${calendrier.fin} (congés du ${calendrier.conges.debut} au ${calendrier.conges.fin})`);
   console.log(`Personnes    : ${tablette1.students.length}`);
   console.log(`Séances      : ${tablette1.sessions.length}`);

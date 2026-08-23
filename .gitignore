@@ -1,3 +1,10 @@
 node_modules/
 dist/
 package-lock.json
+
+# Sortie de `--config` : un jeu de démonstration bâti sur le référentiel réel
+# d'un établissement. Ce dépôt est public — ni ces fichiers, ni la sauvegarde
+# dont ils sont tirés n'ont à y entrer.
+local/
+sauvegarde-aba*.json
+configuration-aba*.json
