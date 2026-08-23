@@ -2455,11 +2455,19 @@ function payloadProfils({ students, classes, axesSuivi, appareil, portee, mainte
    cette tablette, projetées via sessionPourPersonne — une ligne par personne
    concernée, jamais la séance entière : une séance mixte ne doit repartir que
    pour son propriétaire. Une personne sans classe reste sur place, propriété
-   non tranchée, on ne devine pas — même principe que personnesVisibles. */
-function sessionsHorsClasse(sessions, students, classeAppareil) {
+   non tranchée, on ne devine pas — même principe que personnesVisibles.
+
+   Ce qui est déjà parti est écarté par défaut : `transfereAt` est posé par
+   marquerTransferes une fois le fichier réellement partagé. Sans ce filtre,
+   le compteur de l'écran Export ne retombait jamais à zéro et rien ne
+   distinguait plus ce qui restait à renvoyer de ce qui avait déjà été
+   renvoyé. `tout` force la reprise complète — un fichier perdu en route se
+   renvoie sans avoir à retoucher la donnée. */
+function sessionsHorsClasse(sessions, students, classeAppareil, tout = false) {
   if (!classeAppareil) return [];
   const resultats = [];
   (sessions || []).forEach((se) => {
+    if (!tout && se.transfereAt) return;
     (se.studentIds || []).forEach((sid) => {
       const st = (students || []).find((s) => s.id === sid);
       if (st && st.classeId && st.classeId !== classeAppareil) resultats.push(sessionPourPersonne(se, sid));
@@ -2470,19 +2478,31 @@ function sessionsHorsClasse(sessions, students, classeAppareil) {
 
 /* crisis.studentId et releve.studentId sont déjà singuliers : un simple
    filtre suffit, pas de projection comme pour les séances. */
-function crisesHorsClasse(crises, students, classeAppareil) {
+function crisesHorsClasse(crises, students, classeAppareil, tout = false) {
   if (!classeAppareil) return [];
   return (crises || []).filter((c) => {
+    if (!tout && c.transfereAt) return false;
     const st = (students || []).find((s) => s.id === c.studentId);
     return !!(st && st.classeId && st.classeId !== classeAppareil);
   });
 }
-function relevesHorsClasse(releves, students, classeAppareil) {
+function relevesHorsClasse(releves, students, classeAppareil, tout = false) {
   if (!classeAppareil) return [];
   return (releves || []).filter((r) => {
+    if (!tout && r.transfereAt) return false;
     const st = (students || []).find((s) => s.id === r.studentId);
     return !!(st && st.classeId && st.classeId !== classeAppareil);
   });
+}
+
+/* Pose la marque de renvoi sur les enregistrements d'une liste. Distincte de
+   `sentAt`, qui ne parle que de l'envoi vers Manager : les deux trajets sont
+   indépendants, une séance peut être partie chez le cadre et pas encore chez
+   la tablette qui la détient. Appelée seulement après un partage réussi —
+   marquer avant, c'est perdre la donnée sur un partage annulé. */
+function marquerTransferes(liste, ids, quand) {
+  const cibles = new Set(ids || []);
+  return (liste || []).map((x) => (x && cibles.has(x.id) ? { ...x, transfereAt: quand } : x));
 }
 
 /* Fusion additive stricte des données de suivi reçues d'une autre tablette :
@@ -2493,7 +2513,12 @@ function relevesHorsClasse(releves, students, classeAppareil) {
 
    Une séance est rejetée EN BLOC dès qu'un seul de ses objectifs référencés
    (objectiveSnapshot) est inconnu de la personne concernée : jamais de fusion
-   partielle qui laisserait un objectiveSnapshot à moitié reconnu. */
+   partielle qui laisserait un objectiveSnapshot à moitié reconnu.
+
+   `transfereAt` est remis à null sur tout ce qui entre : la marque dit « parti
+   depuis CETTE tablette », elle ne traverse pas. La garder ferait taire le
+   renvoi le jour où la personne change de classe et où la donnée reçue ici
+   devient à son tour hors classe. */
 function fusionnerSuiviRecu({ sessionsLocales, crisesLocales, relevesLocales, studentsLocaux, recu }) {
   const studentIds = new Set((studentsLocaux || []).map((s) => s.id));
   const objectifsConnusDe = {};
@@ -2517,21 +2542,21 @@ function fusionnerSuiviRecu({ sessionsLocales, crisesLocales, relevesLocales, st
     idsSession.forEach((sid) => (objectifsConnusDe[sid] || new Set()).forEach((oid) => objectifsConnus.add(oid)));
     const objectifsRequis = Object.keys(se.objectiveSnapshot || {});
     if (!objectifsRequis.every((oid) => objectifsConnus.has(oid))) { idInconnu++; return; }
-    sessionsAcceptees.push(se);
+    sessionsAcceptees.push({ ...se, transfereAt: null });
   });
 
   const crisesAcceptees = [];
   ((recu && recu.crises) || []).forEach((c) => {
     if (idsCrisesLocales.has(c.id)) { dejaPresentes++; return; }
     if (!c.studentId || !studentIds.has(c.studentId)) { idInconnu++; return; }
-    crisesAcceptees.push(c);
+    crisesAcceptees.push({ ...c, transfereAt: null });
   });
 
   const relevesAcceptes = [];
   ((recu && recu.suivi) || []).forEach((r) => {
     if (idsRelevesLocaux.has(r.id)) { dejaPresentes++; return; }
     if (!r.studentId || !studentIds.has(r.studentId)) { idInconnu++; return; }
-    relevesAcceptes.push(r);
+    relevesAcceptes.push({ ...r, transfereAt: null });
   });
 
   return {
@@ -6261,18 +6286,37 @@ function AbaApp() {
      destinées à plusieurs tablettes : le tri se fait à la réception
      (fusionnerSuiviRecu), pas à l'envoi — pas besoin de savoir d'avance qui
      le recevra. */
-  function exportSuiviHorsClasse() {
+  function exportSuiviHorsClasse(tout = false) {
+    const seancesEnvoi = sessionsHorsClasse(sessions, students, classeAppareil, tout);
+    const crisesEnvoi = crisesHorsClasse(crises, students, classeAppareil, tout);
+    const relevesEnvoi = relevesHorsClasse(releves, students, classeAppareil, tout);
+    if (!seancesEnvoi.length && !crisesEnvoi.length && !relevesEnvoi.length) {
+      notify('Rien à renvoyer vers une autre tablette');
+      return;
+    }
     const payload = {
       format: 'aba-suivi-transfert',
       version: 1,
       exportedAt: new Date().toISOString(),
       appareil,
-      sessions: sessionsHorsClasse(sessions, students, classeAppareil),
-      crises: crisesHorsClasse(crises, students, classeAppareil),
-      suivi: relevesHorsClasse(releves, students, classeAppareil),
+      sessions: seancesEnvoi,
+      crises: crisesEnvoi,
+      suivi: relevesEnvoi,
     };
+    /* Une séance mixte sort en autant de projections que de personnes hors
+       classe, toutes sous le même id : dédoublonner avant de marquer. */
+    const idsSeances = [...new Set(seancesEnvoi.map((s) => s.id))];
+    const idsCrises = crisesEnvoi.map((c) => c.id);
+    const idsReleves = relevesEnvoi.map((r) => r.id);
     const nom = nomFichier('suivi-hors-classe', appareil, 'json');
-    setBackupPrompt({ mode: 'export', suiviPayload: payload, suiviNom: nom });
+    setBackupPrompt({
+      mode: 'export',
+      suiviPayload: payload,
+      suiviNom: nom,
+      /* Même règle d'archivage que l'export Manager : la marque n'est posée
+         que si le fichier est réellement parti — voir confirmExport. */
+      apresExport: () => marquerSuiviTransfere(idsSeances, idsCrises, idsReleves),
+    });
   }
 
   /* Applique une fusion additive stricte (fusionnerSuiviRecu) et résume ce
@@ -6333,8 +6377,10 @@ function AbaApp() {
     if (backupPrompt && backupPrompt.suiviPayload) {
       const enveloppe = await encryptJSON(backupPrompt.suiviPayload, passphrase);
       const blob = new Blob([JSON.stringify(enveloppe)], { type: 'application/json' });
-      await shareReport({ blob, name: backupPrompt.suiviNom, title: backupPrompt.suiviNom, notify });
+      const ok = await shareReport({ blob, name: backupPrompt.suiviNom, title: backupPrompt.suiviNom, notify });
+      const apresExport = backupPrompt.apresExport;
       setBackupPrompt(null);
+      if (ok && apresExport) apresExport();
       return;
     }
     const payload = { format: 'aba-backup', version: 4, exportedAt: new Date().toISOString(), appareil, classeAppareil, students, ateliers, emploiDuTemps, intervenants, classes, guidances, axesSuivi, sessions, crises, suivi: releves, stabilite: releverAliasStabilite(releves) };
@@ -6485,6 +6531,17 @@ function AbaApp() {
 
   const markRelevesSent = (ids, sent = true) =>
     setReleves((list) => list.map((r) => (ids.includes(r.id) ? { ...r, sentAt: sent ? new Date().toISOString() : null } : r)));
+
+  /* Renvoi vers la tablette propriétaire : marque à part de `sentAt`, qui ne
+     concerne que Manager. Les trois collections d'un coup, un seul horodatage
+     — c'est un seul fichier qui part. */
+  const marquerSuiviTransfere = (idsSeances, idsCrises, idsReleves) => {
+    const maintenant = new Date().toISOString();
+    setSessions((list) => marquerTransferes(list, idsSeances, maintenant));
+    setCrises((list) => marquerTransferes(list, idsCrises, maintenant));
+    setReleves((list) => marquerTransferes(list, idsReleves, maintenant));
+    notify('Suivi hors classe marqué comme transféré');
+  };
 
   const deleteAllSessions = () => {
     setSessions([]);
@@ -13772,13 +13829,24 @@ function ObjectiveChart({ obj, studentId, sessions, guidances, onReset, onChange
 function ExportScreen({ sessions, crises, students, ateliers, intervenants, classes, guidances, releves, axesSuivi, appareil, classeAppareil, notify, onEditCrisis, onEditSession, onDeleteSession, onDeleteAllSessions, onOuvrirJournee, onMarkSent, onMarkCrisesSent, onMarkRelevesSent, onExportManager, onExportSuiviHorsClasse, onOuvrirMenu }) {
   /* Compteur permanent, visible sans le chercher : le renvoi oublié est le
      seul défaut du dispositif de fusion inter-classes qui produise une
-     donnée fausse en silence. Ne retombe à zéro que quand tout est parti. */
+     donnée fausse en silence. Ne retombe à zéro que quand tout est parti —
+     ce qui suppose que l'export marque ce qu'il emporte (transfereAt), sans
+     quoi le compteur reste au même chiffre après un renvoi réussi et ne dit
+     plus rien. */
   const horsClasse = React.useMemo(() => ({
     sessions: sessionsHorsClasse(sessions, students, classeAppareil),
     crises: crisesHorsClasse(crises, students, classeAppareil),
     releves: relevesHorsClasse(releves, students, classeAppareil),
   }), [sessions, crises, releves, students, classeAppareil]);
   const nbHorsClasse = horsClasse.sessions.length + horsClasse.crises.length + horsClasse.releves.length;
+  /* Le déjà-transféré, compté séparément : il ne réclame rien, mais un fichier
+     perdu entre deux tablettes doit pouvoir se renvoyer sans toucher aux
+     marques. */
+  const nbHorsClasseTransfere = React.useMemo(() => (
+    sessionsHorsClasse(sessions, students, classeAppareil, true).length
+    + crisesHorsClasse(crises, students, classeAppareil, true).length
+    + relevesHorsClasse(releves, students, classeAppareil, true).length
+  ), [sessions, crises, releves, students, classeAppareil]) - nbHorsClasse;
   const unsentIds = React.useMemo(() => sessions.filter((s) => !s.sentAt).map((s) => s.id), [sessions]);
   const journees = React.useMemo(
     () => journeesSuivi(releves, students, axesSuivi, null),
@@ -14096,7 +14164,7 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, clas
 
       {nbHorsClasse > 0 && (
         <button
-          onClick={onExportSuiviHorsClasse}
+          onClick={() => onExportSuiviHorsClasse()}
           className="w-full rounded-2xl border-2 p-3.5 mb-4 text-left"
           style={{ borderColor: CRISIS, backgroundColor: CARD }}
         >
@@ -14110,6 +14178,20 @@ function ExportScreen({ sessions, crises, students, ateliers, intervenants, clas
           </div>
           <div className="text-xs" style={{ color: INK_SOFT }}>
             À transférer vers leur tablette — appuyer pour exporter, toujours chiffré.
+          </div>
+        </button>
+      )}
+
+      {nbHorsClasse === 0 && nbHorsClasseTransfere > 0 && (
+        <button
+          onClick={() => window.confirm(
+            `${nbHorsClasseTransfere} élément(s) déjà marqué(s) transférés — les renvoyer quand même ?\n\nÀ réserver à un fichier perdu avant d'arriver sur l'autre tablette.`
+          ) && onExportSuiviHorsClasse(true)}
+          className="w-full rounded-2xl border p-3 mb-4 text-left"
+          style={{ borderColor: BORDER, backgroundColor: CARD }}
+        >
+          <div className="text-xs" style={{ color: INK_SOFT }}>
+            {nbHorsClasseTransfere} élément(s) d'autres classes déjà transféré(s) — renvoyer quand même
           </div>
         </button>
       )}
