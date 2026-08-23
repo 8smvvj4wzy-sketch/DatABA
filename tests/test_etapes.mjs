@@ -97,7 +97,11 @@ t('une étape jamais indépendante ne l’est pas', c1.steps[1].mastery.mastered
 t('la suite au seuil est comptée par étape', c1.steps.map((s) => s.mastery.streak), [2, 0, 1]);
 t('la répartition des codes est comptée par étape', c1.steps[1].repartition, { GP: 2 });
 t('deux séances dans la grille', c1.seances.length, 2);
-t('la grille porte le code de chaque étape', c1.seances[1].parEtape, { e1: 'I', e2: 'GP', e3: 'I' });
+/* La case de la grille porte l'issue ET les marqueurs de la séance. Sur un
+   chaînage, DatABA n'en pose pas : ils valent zéro. */
+t('la grille porte le code de chaque étape', Object.fromEntries(
+  Object.entries(c1.seances[1].parEtape).map(([k, v]) => [k, v.cle])), { e1: 'I', e2: 'GP', e3: 'I' });
+t('un chaînage porte des marqueurs à zéro', c1.seances[1].parEtape.e1, { cle: 'I', demande: 0, renforce: 0 });
 
 /* Une étape non cotée n'est pas un échec : elle n'a pas été présentée. */
 const c2 = objectiveSteps(CHAINE, 'p1', [
@@ -190,6 +194,24 @@ t('le renforcement est compté globalement', e4.renforcement.renforces, 2);
 t('les demandes aussi', e4.renforcement.demandes, 1);
 t('le renforcement est ventilé par étape', e4.steps.map((s) => s.renforce), [1, 1]);
 t('les demandes aussi', e4.steps.map((s) => s.demande), [0, 1]);
+/* Le total par étape ne dit pas QUAND. La case de la séance porte les
+   marqueurs de cette séance-là — c'est ce qui manquait pour lire une demande à
+   sa date et savoir quelle étape a été renforcée ce jour-là. */
+t('la case d’une séance porte ses propres marqueurs',
+  e4.seances[0].parEtape.b2, { cle: 'reussi', demande: 1, renforce: 1 });
+t('l’issue retenue pour la case est la dernière de la séance',
+  e4.seances[0].parEtape.b1, { cle: 'reussi', demande: 0, renforce: 1 });
+
+/* Deux essais renforcés sur la même étape dans la même séance : le compte de
+   la case le dit, il ne s'écrase pas. */
+const e4bis = objectiveSteps(EQ, 'p1', [
+  sEq('s1', '2026-06-01T09:00:00', [
+    { steps: { b1: { outcome: 'reussi', renforce: true } } },
+    { steps: { b1: { outcome: 'guide', renforce: true, demande: true } } },
+  ]),
+], GUIDANCES, null);
+t('deux renforcements sur la même étape et la même séance se comptent',
+  e4bis.seances[0].parEtape.b1, { cle: 'guide', demande: 1, renforce: 2 });
 /* Un marqueur posé sur une étape sans issue compte quand même : l'éducateur a
    bien renforcé, même s'il n'a pas coté le résultat. */
 const e5 = objectiveSteps(EQ, 'p1', [
@@ -197,6 +219,20 @@ const e5 = objectiveSteps(EQ, 'p1', [
 ], GUIDANCES, null);
 t('un renforcement sans issue est compté', e5.renforcement.renforces, 1);
 t('et l’étape sans issue n’a pas de point', e5.steps[1].cotations, 0);
+/* Un marqueur posé sans cotation était invisible dans la grille : la case
+   n'existait que si l'étape portait une issue. */
+t('un marqueur sans issue produit quand même une case',
+  e5.seances[0].parEtape.b2, { cle: null, demande: 0, renforce: 1 });
+
+/* Et une séance dont AUCUNE étape n'a d'issue, mais qui porte un marqueur,
+   entre dans la grille au lieu d'en être écartée. */
+const e5bis = objectiveSteps(EQ, 'p1', [
+  sEq('s1', '2026-06-01T09:00:00', [{ steps: { b1: { demande: true } } }]),
+], GUIDANCES, null);
+t('une séance sans aucune issue mais avec un marqueur reste dans la grille',
+  e5bis.seances.length, 1);
+t('et sa case porte le marqueur seul',
+  e5bis.seances[0].parEtape.b1, { cle: null, demande: 1, renforce: 0 });
 
 /* La forme ancienne, à un seul passage : `entry.steps` sans `trials`. */
 const e6 = objectiveSteps(EQ, 'p1', [
