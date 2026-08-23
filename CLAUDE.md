@@ -133,7 +133,31 @@ le piège ci-dessous.
   regroupe sur `p.date`. `tests/test_etapes.mjs` couvre le tout.
   `seancesRetenues` est extraite d'`objectivePoints` pour que la courbe et le
   détail portent sur exactement les mêmes séances (reprise de suivi, cible en
-  cours) ; les deux doivent continuer d'y passer.
+  cours) ; les deux doivent continuer d'y passer. La case de la grille étape ×
+  séance porte `{ cle, demande, renforce }` et non l'issue seule : les
+  marqueurs d'un Équilibre ne se lisaient qu'en total, sans dire à quelle
+  séance. Elle existe dès qu'il y a une issue **ou** un marqueur — un
+  renforcement posé sans cotation était invisible.
+- **`knownObjectiveIds` dit ce qui EXISTAIT, pas ce qui a été retenu.** C'est
+  lui qui permet à `configurerAtelier` de recocher au lancement les objectifs
+  créés *depuis* le réglage, et eux seuls. `setAtelierObjectifs` — l'écriture
+  depuis le panneau Ateliers — n'y versait que les objectifs **cochés** : un
+  objectif jamais coché n'y entrait donc jamais, passait pour un objectif tout
+  neuf et se recochait à chaque lancement. Huit objectifs réglés dans l'emploi
+  du temps ressortaient à cinquante sur l'écran de lancement, la sélection
+  paraissant ignorée alors qu'elle était bien enregistrée (le résumé de
+  l'atelier, lui, comptait juste). Les deux chemins d'écriture y versent
+  maintenant **tous** les objectifs des personnes concernées, comme le faisait
+  déjà « Mémoriser cette configuration », et `migrerAteliersConnus` rattrape en
+  lecture les ateliers déjà réglés. `tests/test_emploi_du_temps.mjs` couvre la
+  sélection tenue, la nouveauté qui doit survivre, le décochage, et la
+  migration.
+- **La ligne d'objectif d'un atelier est un composant partagé.**
+  `LigneObjectifAtelier` sert au panneau Ateliers et à l'écran de lancement.
+  Les deux la rendaient chacun de leur côté et avaient déjà divergé : le
+  panneau tronquait le nom et n'écrivait pas la mention « prioritaire », si
+  bien qu'on ne voyait pas, en réglant l'atelier, quels objectifs l'étaient.
+  Exactement le piège annoncé deux entrées plus haut.
 - **Test d'abord pour la logique de données.** Les fonctions de calcul sont
   couvertes par `tests/*.mjs` avant que la couche d'affichage existe. Les tests
   extraient les fonctions de `src/App.jsx` plutôt que d'en recopier une version

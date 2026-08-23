@@ -2652,6 +2652,34 @@ function migrerEmploiDuTemps(stocke) {
   return propre;
 }
 
+/* Rattrapage en lecture des ateliers déjà réglés depuis l'emploi du temps, sur
+   le même principe que migrerEmploiDuTemps et migrerStudentsSuivi.
+
+   `knownObjectiveIds` n'y portait que les objectifs cochés (voir
+   setAtelierObjectifs) : corriger l'écriture ne répare que la prochaine
+   édition, et jusque-là la sélection continuerait d'être défaite au lancement.
+   Pour chaque atelier portant DÉJÀ un `usualObjectives` — donc réglé —, on y
+   verse les objectifs qu'ont aujourd'hui les personnes qu'il liste : ils
+   existent, l'utilisateur a déjà tranché pour ces personnes, les traiter en
+   nouveautés est exactement le défaut. Un objectif créé après cette lecture
+   reste correctement signalé.
+
+   Un atelier sans rien de mémorisé n'est pas touché : lui poser un `known`
+   lui inventerait un réglage qui n'a jamais eu lieu. */
+function migrerAteliersConnus(ateliers, students) {
+  if (!Array.isArray(ateliers)) return [];
+  return ateliers.map((a) => {
+    if (!a || !a.usualObjectives || !Object.keys(a.usualObjectives).length) return a;
+    const vus = new Set(a.knownObjectiveIds || []);
+    Object.keys(a.usualObjectives).forEach((sid) => {
+      (a.usualObjectives[sid] || []).forEach((oid) => vus.add(oid));
+      const st = (students || []).find((s) => s.id === sid);
+      ((st && st.objectives) || []).forEach((o) => vus.add(o.id));
+    });
+    return { ...a, knownObjectiveIds: Array.from(vus) };
+  });
+}
+
 /* Ateliers d'un jour, dans l'ordre de l'emploi du temps — un atelier
    supprimé depuis disparaît silencieusement, comme usualObjectives le fait
    déjà pour les objectifs disparus. */
@@ -3220,12 +3248,22 @@ function objectiveSteps(obj, studentId, sessions, guidances, targetId) {
   let essaisCotes = 0, renforces = 0, demandes = 0;
 
   retenues.forEach(({ sess, entry }) => {
+    /* Une case de la grille étape × séance. Elle ne portait que l'issue — donc
+       les marqueurs « demande » et « renforcé » n'existaient qu'en total, et on
+       ne pouvait pas voir à quelle séance une demande avait eu lieu ni quelle
+       étape avait été renforcée ce jour-là. Elle porte les trois, et elle est
+       créée dès qu'il y a l'un OU l'autre : un renforcement posé sans cotation
+       était jusqu'ici invisible. */
     const parEtape = {};
+    const caseDe = (id) => {
+      if (!parEtape[id]) parEtape[id] = { cle: null, demande: 0, renforce: 0 };
+      return parEtape[id];
+    };
     if (obj.type === 'chaining') {
       declarees.forEach((st) => {
         const code = (entry.steps || {})[st.id];
         if (!code) return;
-        parEtape[st.id] = code;
+        caseDe(st.id).cle = code;
         noter(st.id, st.name, sess.date, isIndependentCode(gList, code) ? 100 : 0, code);
       });
       /* Une étape cotée dont la configuration ne parle plus : elle n'est pas
@@ -3234,7 +3272,7 @@ function objectiveSteps(obj, studentId, sessions, guidances, targetId) {
         if (declarees.some((st) => st.id === id)) return;
         const code = entry.steps[id];
         if (!code) return;
-        parEtape[id] = code;
+        caseDe(id).cle = code;
         noter(id, null, sess.date, isIndependentCode(gList, code) ? 100 : 0, code);
       });
     } else {
@@ -3251,8 +3289,8 @@ function objectiveSteps(obj, studentId, sessions, guidances, targetId) {
           const e = (tr.steps || {})[id];
           if (!e) return;
           const cible = noter(id, st ? st.name : null, sess.date, null, null);
-          if (e.demande) { demandes += 1; cible.demande += 1; }
-          if (e.renforce) { renforces += 1; cible.renforce += 1; }
+          if (e.demande) { demandes += 1; cible.demande += 1; caseDe(id).demande += 1; }
+          if (e.renforce) { renforces += 1; cible.renforce += 1; caseDe(id).renforce += 1; }
           if (!e.outcome) return;
           derniere = e.outcome;
           noter(id, null, sess.date, null, e.outcome);
@@ -3261,7 +3299,7 @@ function objectiveSteps(obj, studentId, sessions, guidances, targetId) {
           notes += 1;
           if (meta && meta.reussite) reussi += 1;
         });
-        if (derniere) parEtape[id] = derniere;
+        if (derniere) caseDe(id).cle = derniere;
         if (notes) noter(id, null, sess.date, Math.round((reussi / notes) * 100), null);
       });
     }
@@ -5496,7 +5534,7 @@ function AbaApp() {
     if (d) {
       nbPersonnes = (d.students || []).length;
       setStudents(migrerStudentsClasse(migrerStudentsSuivi(d.students || [])));
-      setAteliers(d.ateliers || []);
+      setAteliers(migrerAteliersConnus(d.ateliers, d.students));
       setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
       setIntervenants(d.intervenants || []);
       // Repli sur l'ancien nom de clé (`groupes`) pour une tablette dont le
@@ -5871,12 +5909,26 @@ function AbaApp() {
       }
       return { ...x, personnesParJour: variantes };
     }));
+  /* `knownObjectiveIds` répond à « qu'est-ce qui EXISTAIT quand on a réglé ? »,
+     jamais à « qu'est-ce qui a été retenu ? » — c'est lui qui permet à
+     configurerAtelier de recocher les objectifs créés depuis, et eux seuls.
+     Ce setter n'y versait que les objectifs cochés : un objectif jamais coché
+     n'y entrait donc jamais, passait au lancement pour un objectif tout neuf,
+     et se recochait à chaque fois. Huit objectifs réglés depuis l'emploi du
+     temps ressortaient à cinquante sur l'écran de lancement, la sélection
+     paraissant ignorée alors qu'elle était bien enregistrée. On y verse
+     maintenant tous les objectifs que la personne porte à cet instant — la
+     sémantique qu'applique déjà le bouton « Mémoriser cette configuration ». */
   const setAtelierObjectifs = (atelierId, studentId, objectiveIds) =>
     setAteliers((a) => a.map((x) => (x.id === atelierId
       ? {
           ...x,
           usualObjectives: { ...(x.usualObjectives || {}), [studentId]: objectiveIds },
-          knownObjectiveIds: Array.from(new Set([...(x.knownObjectiveIds || []), ...objectiveIds])),
+          knownObjectiveIds: Array.from(new Set([
+            ...(x.knownObjectiveIds || []),
+            ...objectiveIds,
+            ...(((students.find((s) => s.id === studentId) || {}).objectives) || []).map((o) => o.id),
+          ])),
         }
       : x)));
   const toggleAtelierFavori = (atelierId, objectiveId) =>
@@ -6304,7 +6356,7 @@ function AbaApp() {
     );
     if (!ok) return;
     setStudents(migrerStudentsClasse(migrerStudentsSuivi(d.students || [])));
-    setAteliers(d.ateliers || []);
+    setAteliers(migrerAteliersConnus(d.ateliers, d.students));
     setEmploiDuTemps(migrerEmploiDuTemps(d.emploiDuTemps));
     setIntervenants(d.intervenants || []);
     // Repli sur l'ancien nom de clé (`groupes`) pour une sauvegarde chiffrée
@@ -7587,6 +7639,47 @@ function ChangePinModal({ security, onSave, onClose }) {
    l'application (ReorderList). « Appliquer aux autres jours » ne programme ni
    ne déprogramme rien : il ne fait que reprendre cet ordre pour les ateliers
    déjà communs aux autres jours. */
+/* Une ligne d'objectif dans le réglage d'un atelier : cochable, avec l'étoile
+   « prioritaire pour cet atelier ».
+
+   Partagée entre le panneau Ateliers (réglage à froid, depuis l'emploi du
+   temps) et l'écran de lancement d'une séance. Les deux la rendaient chacun de
+   leur côté, à trois détails près — et c'est exactement là que la divergence
+   annoncée par le CLAUDE.md s'est produite : le panneau tronquait le nom, il
+   n'écrivait pas la mention « prioritaire » de l'objectif, et il proposait
+   l'étoile d'atelier même sur un objectif déjà prioritaire pour la personne,
+   où elle n'ajoute rien. Le rendu retenu est celui du lancement.
+
+   `onBasculerFavori` à null retire l'étoile : c'est le cas d'une séance libre,
+   sans atelier auquel rattacher une priorité. */
+function LigneObjectifAtelier({ objectif, coche, favoriAtelier, onBasculer, onBasculerFavori }) {
+  const meta = typeMeta(objectif.type);
+  const Icon = meta.icon;
+  return (
+    <div className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm"
+      style={{ borderColor: coche ? meta.color : BORDER, backgroundColor: coche ? meta.color + '14' : 'transparent' }}>
+      <button onClick={onBasculer} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+        <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
+        <span className="flex-1 min-w-0">
+          {objectif.name}
+          {objectif.favorite && (
+            <span className="text-xs ml-1.5" style={{ color: CAT_AMBER }}>prioritaire</span>
+          )}
+        </span>
+        {coche && <Check size={15} style={{ color: meta.color }} className="shrink-0" />}
+      </button>
+      {/* Prioritaire pour cet atelier seulement : sans objet sur un objectif
+          que la personne porte déjà comme prioritaire partout. */}
+      {onBasculerFavori && coche && !objectif.favorite && (
+        <button onClick={onBasculerFavori} className="shrink-0"
+          style={{ color: favoriAtelier ? CAT_AMBER : INK_SOFT }} title="Prioritaire pour cet atelier">
+          <Star size={15} fill={favoriAtelier ? CAT_AMBER : 'none'} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function PanneauEmploiDuTemps({
   ateliers, students, onAdd, onRename, onRemove, emploiDuTemps,
   onBasculerJour, onSetPersonnes, onSetPersonnesJour, onSetObjectifs, onToggleFavori,
@@ -7750,28 +7843,16 @@ function PanneauEmploiDuTemps({
                               <div className="text-sm" style={{ color: INK_SOFT }}>Aucun objectif défini pour cette personne.</div>
                             ) : (
                               <div className="space-y-1.5">
-                                {st.objectives.map((o) => {
-                                  const on = choisis.includes(o.id);
-                                  const meta = typeMeta(o.type);
-                                  const Icon = meta.icon;
-                                  const favAtelier = favs.includes(o.id);
-                                  return (
-                                    <div key={o.id} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm"
-                                      style={{ borderColor: on ? meta.color : BORDER, backgroundColor: on ? meta.color + '14' : 'transparent' }}>
-                                      <button onClick={() => toggleObjectif(a, sid, o)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
-                                        <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
-                                        <span className="flex-1 min-w-0 truncate">{o.name}</span>
-                                        {on && <Check size={15} style={{ color: meta.color }} className="shrink-0" />}
-                                      </button>
-                                      {on && (
-                                        <button onClick={() => onToggleFavori(a.id, o.id)} className="shrink-0"
-                                          style={{ color: favAtelier ? CAT_AMBER : INK_SOFT }} title="Prioritaire pour cet atelier">
-                                          <Star size={15} fill={favAtelier ? CAT_AMBER : 'none'} />
-                                        </button>
-                                      )}
-                                    </div>
-                                  );
-                                })}
+                                {st.objectives.map((o) => (
+                                  <LigneObjectifAtelier
+                                    key={o.id}
+                                    objectif={o}
+                                    coche={choisis.includes(o.id)}
+                                    favoriAtelier={favs.includes(o.id)}
+                                    onBasculer={() => toggleObjectif(a, sid, o)}
+                                    onBasculerFavori={() => onToggleFavori(a.id, o.id)}
+                                  />
+                                ))}
                               </div>
                             )}
                           </div>
@@ -10364,38 +10445,16 @@ function AtelierLancement({
               </div>
             ) : (
               <div className="space-y-1.5">
-                {visibleObjectives(st).map((o) => {
-                  const on = (selected[sid] || []).includes(o.id);
-                  const meta = typeMeta(o.type);
-                  const Icon = meta.icon;
-                  const favAtelier = atelierFavorites.includes(o.id);
-                  return (
-                    <div key={o.id} className="w-full rounded-xl px-3 py-2.5 flex items-center gap-2 border text-sm"
-                      style={{ borderColor: on ? meta.color : BORDER, backgroundColor: on ? meta.color + '14' : 'transparent' }}>
-                      <button onClick={() => toggleObjective(sid, o.id)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
-                        <Icon size={15} style={{ color: meta.color }} className="shrink-0" />
-                        <span className="flex-1 min-w-0">
-                          {o.name}
-                          {o.favorite && (
-                            <span className="text-xs ml-1.5" style={{ color: CAT_AMBER }}>prioritaire</span>
-                          )}
-                        </span>
-                        {on && <Check size={15} style={{ color: meta.color }} className="shrink-0" />}
-                      </button>
-                      {/* Prioritaire pour cet atelier seulement */}
-                      {atelier && on && !o.favorite && (
-                        <button
-                          onClick={() => toggleAtelierFavorite(o.id)}
-                          className="shrink-0"
-                          style={{ color: favAtelier ? CAT_AMBER : INK_SOFT }}
-                          title="Prioritaire pour cet atelier"
-                        >
-                          <Star size={15} fill={favAtelier ? CAT_AMBER : 'none'} />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
+                {visibleObjectives(st).map((o) => (
+                  <LigneObjectifAtelier
+                    key={o.id}
+                    objectif={o}
+                    coche={(selected[sid] || []).includes(o.id)}
+                    favoriAtelier={atelierFavorites.includes(o.id)}
+                    onBasculer={() => toggleObjective(sid, o.id)}
+                    onBasculerFavori={atelier ? () => toggleAtelierFavorite(o.id) : null}
+                  />
+                ))}
               </div>
             )}
           </Card>
@@ -13353,6 +13412,31 @@ function ResumeObjectifs({ students, sessions, guidances, onVoirGraphique }) {
 
    Replié par défaut : sur tablette, la place sous la courbe est comptée, et
    c'est un détail qu'on vient chercher, pas un affichage permanent. */
+/* Les deux marqueurs qu'un Équilibre pose à côté d'une issue : une demande de
+   la personne, un renforcement délivré. Ce sont des faits d'observation, pas
+   des issues — d'où l'encre douce et le monospace plutôt qu'une couleur du jeu,
+   qui les ferait lire comme un résultat de plus. Le compte n'apparaît qu'au
+   delà de un : une séance porte plusieurs essais, deux renforcements sur la
+   même étape le même jour ne sont pas un seul. */
+const MARQUES_ETAPE = [
+  { k: 'demande', court: 'D', label: 'Demande de la personne' },
+  { k: 'renforce', court: 'R', label: 'Renforcement délivré' },
+];
+function MarquesCase({ etape }) {
+  const posees = MARQUES_ETAPE.filter((m) => (etape || {})[m.k] > 0);
+  if (!posees.length) return null;
+  return (
+    <>
+      {posees.map((m) => (
+        <span key={m.k} className="ml-0.5" title={`${m.label}${etape[m.k] > 1 ? ` (${etape[m.k]})` : ''}`}
+          style={{ color: INK_SOFT, fontFamily: F_MONO }}>
+          {m.court}{etape[m.k] > 1 ? etape[m.k] : ''}
+        </span>
+      ))}
+    </>
+  );
+}
+
 function EtapesObjectif({ obj, studentId, sessions, guidances, targetId }) {
   const [ouvert, setOuvert] = useState(false);
   const analyse = objectiveSteps(obj, studentId, sessions, guidances, targetId);
@@ -13438,13 +13522,22 @@ function EtapesObjectif({ obj, studentId, sessions, guidances, targetId }) {
             <p className="text-xs" style={{ color: INK_SOFT }}>
               {analyse.renforcement.renforces} renforcement{analyse.renforcement.renforces > 1 ? 's' : ''} et{' '}
               {analyse.renforcement.demandes} demande{analyse.renforcement.demandes > 1 ? 's' : ''} sur{' '}
-              {analyse.renforcement.essais} essai{analyse.renforcement.essais > 1 ? 's' : ''} cotés — les marqueurs
-              posés en séance, comptés étape par étape ci-dessus.
+              {analyse.renforcement.essais} essai{analyse.renforcement.essais > 1 ? 's' : ''} cotés.
             </p>
           )}
 
           {/* Séance par séance. `data-no-swipe` : le balayage change d'écran,
               sans cet attribut faire défiler la grille quitterait le suivi. */}
+          {obj.type === 'balance' && (
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              {MARQUES_ETAPE.map((m) => (
+                <span key={m.k} className="text-xs flex items-center gap-1" style={{ color: INK_SOFT }}>
+                  <span aria-hidden="true" style={{ fontFamily: F_MONO }}>{m.court}</span>
+                  {m.label}
+                </span>
+              ))}
+            </div>
+          )}
           <div className="overflow-x-auto -mx-1 px-1" data-no-swipe>
             <table className="text-xs" style={{ borderCollapse: 'separate', borderSpacing: '2px' }}>
               <thead>
@@ -13462,21 +13555,25 @@ function EtapesObjectif({ obj, studentId, sessions, guidances, targetId }) {
                       <span style={{ color: INK_SOFT, fontFamily: F_MONO }}>{s.rang}</span> {s.nom}
                     </td>
                     {analyse.seances.map((se) => {
-                      const cle = se.parEtape[s.id];
+                      const casse = se.parEtape[s.id];
+                      const cle = casse && casse.cle;
                       const m = cle ? meta(cle) : null;
+                      const marquee = casse && (casse.demande > 0 || casse.renforce > 0);
                       return (
-                        <td key={se.id} className="text-center">
+                        <td key={se.id} className="text-center whitespace-nowrap">
                           {m ? (
                             <span className="inline-block rounded px-1.5 py-0.5" title={m.label}
                               style={{ backgroundColor: m.color, color: texteLisibleSur(m.color), fontFamily: F_MONO }}>
                               {m.court}
                             </span>
-                          ) : (
+                          ) : !marquee && (
                             /* Non cotée, ce qui n'est pas un échec : un point,
                                jamais une couleur qui la ferait lire comme une
-                               issue. */
+                               issue. Une case qui ne porte qu'un marqueur n'a
+                               pas de point : le marqueur suffit. */
                             <span style={{ color: INK_SOFT }}>·</span>
                           )}
+                          <MarquesCase etape={casse} />
                         </td>
                       );
                     })}

@@ -36,6 +36,7 @@ const NOMS = [
   'memeJour', 'JOURS', 'migrerEmploiDuTemps', 'ateliersDuJour',
   'fusionnerOrdreJour', 'appliquerOrdreAuxAutresJours', 'planifierJour',
   'personnesPrevues', 'personnesToutesPrevues', 'joursAjustes', 'resumeAtelier',
+  'configurerAtelier', 'migrerAteliersConnus',
 ];
 
 const code = `
@@ -47,6 +48,7 @@ const F = new Function(code)();
 const {
   migrerEmploiDuTemps, ateliersDuJour, fusionnerOrdreJour, appliquerOrdreAuxAutresJours, planifierJour,
   personnesPrevues, personnesToutesPrevues, joursAjustes, resumeAtelier,
+  configurerAtelier, migrerAteliersConnus,
 } = F;
 
 /* ==================== Fixtures ==================== */
@@ -264,6 +266,76 @@ t(
   resumeAtelier(sport, { 1: ['at1'] }, [{ id: 's1' }]).nbPersonnes,
   1
 );
+
+/* ==================== Sélection d'objectifs d'un atelier ====================
+   Huit objectifs cochés dans le panneau Ateliers, une cinquantaine cotés à
+   l'écran de lancement : la sélection était bien enregistrée, elle était défaite
+   au lancement. `configurerAtelier` recoche d'office ce qu'il juge NOUVEAU
+   depuis le réglage — absent de `usualObjectives` et absent de
+   `knownObjectiveIds`. `known` doit donc porter tous les objectifs qui
+   EXISTAIENT au moment du réglage. Le bouton « Mémoriser cette configuration »
+   le faisait ; l'écriture depuis l'emploi du temps n'y versait que les objectifs
+   cochés, si bien qu'un objectif jamais coché passait pour un objectif créé
+   depuis, et revenait à chaque lancement. */
+const dixObjectifs = Array.from({ length: 10 }, (_, i) => ({ id: `o${i + 1}`, name: `Objectif ${i + 1}`, type: 'trials', config: {} }));
+const personnesTest = [{ id: 'p1', initials: 'A.B.', objectives: dixObjectifs }];
+const huit = dixObjectifs.slice(0, 8).map((o) => o.id);
+
+const atelierRegle = {
+  id: 'at1', usualStudentIds: ['p1'],
+  usualObjectives: { p1: huit },
+  knownObjectiveIds: dixObjectifs.map((o) => o.id),
+};
+t('huit objectifs cochés sur dix : huit au lancement',
+  configurerAtelier(personnesTest, atelierRegle, null, 'atelier').selected.p1, huit);
+t('et rien à annoncer comme nouveauté',
+  configurerAtelier(personnesTest, atelierRegle, null, 'atelier').nouveautes, {});
+
+/* La fonctionnalité que le défaut parasitait doit survivre : un objectif créé
+   APRÈS le réglage — absent de `saved` comme de `known` — est bien recoché et
+   annoncé. */
+const onze = [...dixObjectifs, { id: 'o11', name: 'Objectif 11', type: 'trials', config: {} }];
+const avecNouveau = configurerAtelier([{ id: 'p1', initials: 'A.B.', objectives: onze }], atelierRegle, null, 'atelier');
+t('un objectif créé depuis le réglage est recoché', avecNouveau.selected.p1, [...huit, 'o11']);
+t('et il est annoncé comme nouveauté', avecNouveau.nouveautes, { p1: ['o11'] });
+
+/* Un objectif décoché après avoir été coché est dans `known` et hors de
+   `saved` : il ne revient pas. C'est ce qui distingue « décoché » de
+   « jamais coché » — et les deux doivent maintenant se comporter pareil. */
+t('un objectif décoché ne revient pas',
+  configurerAtelier(personnesTest, { ...atelierRegle, usualObjectives: { p1: huit.slice(0, 7) } }, null, 'atelier').selected.p1,
+  huit.slice(0, 7));
+
+/* Rien de mémorisé pour cette personne : le repli documenté reste « tout ». */
+t('sans rien de mémorisé, tous les objectifs partent',
+  configurerAtelier(personnesTest, { id: 'at1', usualStudentIds: ['p1'] }, null, 'atelier').selected.p1,
+  dixObjectifs.map((o) => o.id));
+
+/* ==================== migrerAteliersConnus ====================
+   Les ateliers déjà réglés depuis l'emploi du temps portent un `known` amputé :
+   corriger l'écriture ne les répare pas, il faut les rattraper en lecture. */
+const amputee = [{ id: 'at1', usualStudentIds: ['p1'], usualObjectives: { p1: huit }, knownObjectiveIds: huit }];
+const repare = migrerAteliersConnus(amputee, personnesTest);
+t('la migration complète les objectifs connus',
+  repare[0].knownObjectiveIds.slice().sort(), dixObjectifs.map((o) => o.id).sort());
+t('et la sélection redevient celle qui était réglée',
+  configurerAtelier(personnesTest, repare[0], null, 'atelier').selected.p1, huit);
+/* Un atelier sans rien de mémorisé n'a rien à rattraper : le toucher lui
+   inventerait un réglage qui n'a jamais existé. */
+t('un atelier sans usualObjectives n’est pas touché',
+  migrerAteliersConnus([{ id: 'at2', usualStudentIds: ['p1'] }], personnesTest)[0].knownObjectiveIds, undefined);
+/* Une personne disparue depuis garde ce qui avait été coché pour elle : ces
+   objectifs-là ont forcément existé au moment du réglage, c'est même la seule
+   chose qu'on sache encore d'eux. */
+t('les objectifs déjà choisis restent connus, même sans la personne',
+  migrerAteliersConnus([{ id: 'at3', usualStudentIds: ['zz'], usualObjectives: { zz: ['x'] } }], personnesTest)[0].knownObjectiveIds,
+  ['x']);
+/* Défense en lecture, comme migrerEmploiDuTemps : une forme inattendue ne
+   fait pas planter l'écran, elle retombe sur ce qu'on peut encore savoir. */
+t('une liste absente rend une liste vide', migrerAteliersConnus(null, personnesTest), []);
+t('sans les personnes, la migration retombe sur ce qui était coché',
+  migrerAteliersConnus(amputee, null)[0].knownObjectiveIds, huit);
+t('un atelier nul traverse sans planter', migrerAteliersConnus([null], personnesTest), [null]);
 
 console.log(`\n${ok} OK, ${ko} en échec`);
 process.exit(ko > 0 ? 1 : 0);
