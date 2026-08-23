@@ -63,7 +63,7 @@ const NOMS = [
   'objectiveGuidances', 'guidanceByCode', 'isIndependentCode',
   'balanceOutcomes', 'outcomeMeta', 'trialCode', 'trialMs', 'balanceTrials', 'balanceStats',
   'entryMatches', 'parseHM', 'segmentMinutes', 'segmentSeconds', 'intervalStepSec', 'intervalTotals',
-  'masteryDe', 'toDayPoints', 'masteryStatus', 'objectiveScore', 'objectivePoints',
+  'masteryDe', 'toDayPoints', 'masteryStatus', 'objectiveScore', 'seancesRetenues', 'objectivePoints',
   'releverAliasStabilite', 'reperesDePhase',
 ];
 const code = `const CRISIS = '#B3261E';
