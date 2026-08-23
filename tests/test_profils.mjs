@@ -47,6 +47,7 @@ const NOMS = [
   'classeDe', 'normaliserInitiales', 'resoudreClasseImportee', 'proposerRapprochementsPersonnes',
   'nomDisponible', 'configCanonique', 'signatureObjectif', 'objectifDejaCote', 'diffObjectifsPersonne',
   'sessionPourPersonne', 'filtrerToile', 'sessionsHorsClasse', 'crisesHorsClasse', 'relevesHorsClasse', 'fusionnerSuiviRecu',
+  'marquerTransferes',
 ];
 // proposerRapprochementsPersonnes appelle classeDe, qui replie sur
 // CLASSE_INCONNUE (constante sur une seule ligne, donc extraireLigne).
@@ -65,6 +66,7 @@ const {
   classeDe, normaliserInitiales, resoudreClasseImportee, proposerRapprochementsPersonnes,
   nomDisponible, configCanonique, signatureObjectif, objectifDejaCote, diffObjectifsPersonne,
   sessionPourPersonne, filtrerToile, sessionsHorsClasse, crisesHorsClasse, relevesHorsClasse, fusionnerSuiviRecu,
+  marquerTransferes,
 } = new Function(code)();
 
 /* ==================== profilsDeLaClasse ==================== */
@@ -293,6 +295,31 @@ t('crisesHorsClasse : sans classeAppareil, rien ne part', crisesHorsClasse(crise
 const relevesTest = [{ id: 'r1', studentId: 'a' }, { id: 'r2', studentId: 'b' }];
 t('relevesHorsClasse : seul le relevé de l\'autre classe part', relevesHorsClasse(relevesTest, studentsClassesTest, 'g1').map((r) => r.id), ['r2']);
 
+/* Une fois transfereAt posé, l'élément sort du lot « à transférer » — sans
+   ce filtre, le compteur de l'écran Export ne retombait jamais à zéro après
+   un renvoi réussi. `tout` le fait quand même ressortir : reprise après un
+   fichier perdu. */
+const seanceTransferee = { ...seanceTrois, transfereAt: '2026-08-20T10:00:00.000Z' };
+t('sessionsHorsClasse : une séance déjà transférée ne repart pas', sessionsHorsClasse([seanceTransferee], studentsClassesTest, 'g1'), []);
+t('sessionsHorsClasse : « tout » la fait quand même repartir', sessionsHorsClasse([seanceTransferee], studentsClassesTest, 'g1', true).length, 1);
+
+const crisesTransfert = [{ id: 'cr2', studentId: 'b', transfereAt: '2026-08-20T10:00:00.000Z' }];
+t('crisesHorsClasse : une crise déjà transférée ne repart pas', crisesHorsClasse(crisesTransfert, studentsClassesTest, 'g1'), []);
+t('crisesHorsClasse : « tout » la fait quand même repartir', crisesHorsClasse(crisesTransfert, studentsClassesTest, 'g1', true).map((c) => c.id), ['cr2']);
+
+const relevesTransfert = [{ id: 'r2', studentId: 'b', transfereAt: '2026-08-20T10:00:00.000Z' }];
+t('relevesHorsClasse : un relevé déjà transféré ne repart pas', relevesHorsClasse(relevesTransfert, studentsClassesTest, 'g1'), []);
+t('relevesHorsClasse : « tout » le fait quand même repartir', relevesHorsClasse(relevesTransfert, studentsClassesTest, 'g1', true).map((r) => r.id), ['r2']);
+
+/* ==================== marquerTransferes ==================== */
+
+const marques = marquerTransferes(
+  [{ id: 'x', v: 1 }, { id: 'y', v: 2 }], ['x'], '2026-08-23T09:00:00.000Z'
+);
+t('marquerTransferes : seul l\'id ciblé reçoit la marque', marques.map((m) => m.transfereAt), ['2026-08-23T09:00:00.000Z', undefined]);
+t('marquerTransferes : liste absente, pas de plantage', marquerTransferes(undefined, ['x'], 'q'), []);
+t('marquerTransferes : ids absents, pas de plantage', marquerTransferes([{ id: 'x' }], undefined, 'q')[0].transfereAt, undefined);
+
 /* ==================== fusionnerSuiviRecu ==================== */
 
 const studentsLocauxFusion = [{ id: 'x', initials: 'X', objectives: [{ id: 'ox1', name: 'Obj X' }] }];
@@ -328,6 +355,21 @@ t('fusionnerSuiviRecu : comptés comme id inconnu (1 crise + 1 relevé)', res3.i
 t('fusionnerSuiviRecu : rien reçu, pas de plantage', fusionnerSuiviRecu({
   sessionsLocales: [], crisesLocales: [], relevesLocales: [], studentsLocaux: studentsLocauxFusion, recu: {},
 }).sessions, []);
+
+/* La marque « transfereAt » de la tablette expéditrice ne doit jamais
+   traverser : elle dit « parti d'ici », pas « à ne plus jamais renvoyer ». La
+   personne peut changer de classe sur la tablette qui reçoit et rendre cette
+   même donnée hors classe à son tour. */
+const sessionDejaTransfereeAilleurs = { id: 'sf4', studentIds: ['x'], objectiveSnapshot: { ox1: {} }, transfereAt: '2026-08-01T00:00:00.000Z' };
+const crisTransfereeAilleurs = { id: 'cf3', studentId: 'x', transfereAt: '2026-08-01T00:00:00.000Z' };
+const releveTransfereAilleurs = { id: 'rf3', studentId: 'x', transfereAt: '2026-08-01T00:00:00.000Z' };
+const res4 = fusionnerSuiviRecu({
+  sessionsLocales: [], crisesLocales: [], relevesLocales: [], studentsLocaux: studentsLocauxFusion,
+  recu: { sessions: [sessionDejaTransfereeAilleurs], crises: [crisTransfereeAilleurs], suivi: [releveTransfereAilleurs] },
+});
+t('fusionnerSuiviRecu : transfereAt remis à null sur une séance reçue', res4.sessions[0].transfereAt, null);
+t('fusionnerSuiviRecu : transfereAt remis à null sur une crise reçue', res4.crises[0].transfereAt, null);
+t('fusionnerSuiviRecu : transfereAt remis à null sur un relevé reçu', res4.releves[0].transfereAt, null);
 
 console.log(`\n${ok} au vert, ${ko} en échec`);
 process.exit(ko > 0 ? 1 : 0);
