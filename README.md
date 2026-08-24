@@ -545,8 +545,11 @@ Les deux ouvrent la même grille :
   chaîne d'escalade indique par quoi commencent habituellement les crises,
   donc à quel moment intervenir ;
 - **C — Conséquence** : ce qui a suivi, réaction de l'environnement ;
-- **Fonction supposée** : attention, échappement, tangible, sensoriel ou
-  indéterminée ;
+- **Fonction supposée** : attention, échappement, tangible ou sensoriel. Deux
+  réponses sont proposées à part, sous ces quatre-là, parce qu'elles ne sont
+  pas des fonctions du comportement : **physiologique** — douleur, fatigue,
+  faim, maladie, un facteur qui explique la crise sans en être la fonction —
+  et **indéterminée**, l'absence d'hypothèse ;
 - **Intensité ressentie**, de 1 à 3 — légère, modérée, forte. C'est une
   appréciation de l'intervenant sur le moment, pas une mesure : trois niveaux
   suffisent, une échelle plus fine donnerait une fausse impression de

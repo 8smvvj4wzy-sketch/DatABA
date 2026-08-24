@@ -277,12 +277,19 @@ const CRISIS_INTENSITES = [
   { n: 3, label: 'Forte', aide: 'Difficilement contenue, retentissement marqué', color: CAT_CORAL },
 ];
 
+/* `repli: true` marque ce qui n'est pas une fonction opérante du comportement
+   et ne se propose donc pas au même rang que les quatre premières : un
+   facteur physiologique (douleur, fatigue, faim, maladie) explique une crise
+   sans en être la fonction, et « Indéterminée » est l'absence d'hypothèse.
+   La règle s'écrit ici et nulle part ailleurs — l'écran de saisie filtre sur
+   ce drapeau, pas sur des clés en dur. */
 const CRISIS_FUNCTIONS = [
   { k: 'attention', label: 'Attention', color: CAT_CYAN },
   { k: 'echappement', label: 'Échappement', color: CAT_AMBER },
   { k: 'tangible', label: 'Tangible', color: CAT_TEAL },
   { k: 'sensoriel', label: 'Sensoriel', color: CAT_VIOLET },
-  { k: 'indetermine', label: 'Indéterminée', color: CAT_SLATE },
+  { k: 'physiologique', label: 'Physiologique', color: CAT_INDIGO, repli: true },
+  { k: 'indetermine', label: 'Indéterminée', color: CAT_SLATE, repli: true },
 ];
 
 /* Trois lignes vides à la création — le placeholder porte le numéro, pas de
@@ -14667,12 +14674,13 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
 
         <div>
           <div className="text-sm font-medium mb-1.5" style={{ fontFamily: F_DISPLAY }}>Fonction supposée</div>
-          {/* Les 4 fonctions classiques du comportement d'abord ; « Indéterminée »
-              est le repli, pas une 5e fonction du même rang — elle reste à
-              un tap, juste visuellement à part pour ne pas faire 5 choix
+          {/* Les 4 fonctions opérantes du comportement d'abord ; la seconde
+              rangée porte ce qui n'est pas du même rang (`repli`) — un
+              facteur physiologique, ou l'absence d'hypothèse. Chacun reste à
+              un tap, juste visuellement à part pour ne pas aligner six choix
               équivalents au même point de décision. */}
           <div className="flex flex-wrap gap-2">
-            {CRISIS_FUNCTIONS.filter((fn) => fn.k !== 'indetermine').map((fn) => {
+            {CRISIS_FUNCTIONS.filter((fn) => !fn.repli).map((fn) => {
               const on = crisis.fonction === fn.k;
               return (
                 <button key={fn.k} onClick={() => set({ fonction: on ? null : fn.k })}
@@ -14683,16 +14691,18 @@ function CrisisOverlay({ crisis, setCrisis, students, ateliers, intervenants, ab
               );
             })}
           </div>
-          {CRISIS_FUNCTIONS.filter((fn) => fn.k === 'indetermine').map((fn) => {
-            const on = crisis.fonction === fn.k;
-            return (
-              <button key={fn.k} onClick={() => set({ fonction: on ? null : fn.k })}
-                className="mt-1.5 rounded-xl px-4 py-2 border border-dashed text-xs"
-                style={{ fontFamily: F_DISPLAY, borderColor: fn.color, backgroundColor: on ? fn.color : 'transparent', color: on ? texteLisibleSur(fn.color) : INK_SOFT }}>
-                {fn.label}
-              </button>
-            );
-          })}
+          <div className="mt-1.5 flex flex-wrap gap-2">
+            {CRISIS_FUNCTIONS.filter((fn) => fn.repli).map((fn) => {
+              const on = crisis.fonction === fn.k;
+              return (
+                <button key={fn.k} onClick={() => set({ fonction: on ? null : fn.k })}
+                  className="rounded-xl px-4 py-2 border border-dashed text-xs"
+                  style={{ fontFamily: F_DISPLAY, borderColor: fn.color, backgroundColor: on ? fn.color : 'transparent', color: on ? texteLisibleSur(fn.color) : INK_SOFT }}>
+                  {fn.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {!estObservation && (
