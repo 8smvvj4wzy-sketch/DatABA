@@ -1468,6 +1468,11 @@ const CONSEQUENCES = [
   "Retrait, mise à l'écart",
   'Maintien de consigne',
 ];
+/* Sous-ensemble délibéré de `CRISIS_FUNCTIONS` (src/App.jsx) : « physiologique »
+   en est absent à dessein. Compléter cette liste pour « rétablir la parité »
+   changerait la fonction tirée pour chacune des cent et quelques crises et
+   forcerait la régénération des deux JSON versionnés — un diff illisible pour
+   une valeur de plus dans une répartition qui en montre déjà cinq. */
 const FONCTIONS = ['attention', 'echappement', 'tangible', 'sensoriel', 'indetermine'];
 
 function construireCrises(rng, crisesDepuisSuivi, seances, calendrier) {
